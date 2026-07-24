@@ -16,6 +16,8 @@ import com.ethran.notable.utils.map
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import com.ethran.notable.utils.onSuccess
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,7 +25,8 @@ import javax.inject.Singleton
 @Singleton
 class NotebookSyncService @Inject constructor(
     private val appRepository: AppRepository,
-    private val reporter: SyncProgressReporter
+    private val reporter: SyncProgressReporter,
+    @param:ApplicationContext private val context: Context
 ) {
     private val log = SyncLogger
 
@@ -284,12 +287,23 @@ class NotebookSyncService @Inject constructor(
             appRepository.pageRepository.getWithDataById(page.id) ?: return AppResult.Error(
                 DomainError.DatabaseError("Page data not found for page ID: ${page.id}")
             )
-        val pageJson = NotebookSerializer.serializePage(
-            page, pageWithData.strokes, pageWithData.images
-        )
-        return client.putFile(
-            SyncPaths.pageFile(notebookId, page.id), pageJson.toByteArray(), "application/json"
-        ).flatMap {
+        // Serialize the page to a temp file (streaming, one stroke at a time) and stream that file
+        // to the PUT, rather than building a whole-page JSON string + toByteArray() in memory. This
+        // bounds upload memory to ~one stroke regardless of page size — a 12k-stroke page otherwise
+        // materialised its point data several times over and OOM'd. See
+        // docs/crash-handling-plan.md "Sync upload memory".
+        val tempFile = File.createTempFile("notable-page-", ".json", context.cacheDir)
+        val pageUploaded = try {
+            tempFile.outputStream().buffered().use { out ->
+                NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
+            }
+            client.putFile(
+                SyncPaths.pageFile(notebookId, page.id), tempFile, "application/json"
+            )
+        } finally {
+            tempFile.delete()
+        }
+        return pageUploaded.flatMap {
             val errors = ErrorAccumulator()
             for (image in pageWithData.images) {
                 if (!image.uri.isNullOrEmpty()) {
@@ -504,11 +518,14 @@ class NotebookSyncService @Inject constructor(
         val referencedImages = mutableSetOf<String>()
         val referencedBackgrounds = mutableSetOf<String>()
         for (pageId in notebook.pageIds) {
-            val data = appRepository.pageRepository.getWithDataById(pageId) ?: continue
-            data.images.forEach { image ->
-                if (!image.uri.isNullOrEmpty()) referencedImages.add(File(image.uri).name)
+            // GC only needs the page's media filenames — load the page metadata + image URIs, NOT
+            // getWithDataById (which loads and normalizes every stroke on the page). On a large
+            // notebook the old call re-materialised the whole notebook right after upload and
+            // re-triggered the Crash #1 OOM. See docs/crash-handling-plan.md "Sync over-upload".
+            val page = appRepository.pageRepository.getById(pageId) ?: continue
+            appRepository.imageRepository.getUrisForPage(pageId).forEach { uri ->
+                if (!uri.isNullOrEmpty()) referencedImages.add(File(uri).name)
             }
-            val page = data.page
             if (page.backgroundType != "native" && page.background != "blank") {
                 referencedBackgrounds.add(File(page.background).name)
             }
