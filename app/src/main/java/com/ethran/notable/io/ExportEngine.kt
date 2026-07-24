@@ -400,20 +400,25 @@ class ExportEngine @Inject constructor(
         val scaledHeight = (contentHeightPx * scaleFactor).toInt()
 
         if (GlobalAppSettings.current.paginatePdf) {
-            var currentTop = 0
+            // drawPage consumes `scroll` in *content* pixels (it offsets strokes/images before
+            // canvas.scale). So the vertical step and the loop bound must be in content pixels too.
+            // One A4 page shows A4_HEIGHT/scaleFactor content px; stepping by A4_HEIGHT (output px)
+            // instead advanced only ~scaleFactor of a page each time, so consecutive pages overlapped.
+            val pageContentHeightPx = A4_HEIGHT / scaleFactor
+            var currentTop = 0f
             var logicalPageNumber = pageNumber
-            while (currentTop < scaledHeight) {
+            while (currentTop < contentHeightPx) {
                 val pageInfo =
                     PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, logicalPageNumber).create()
                 val page = doc.startPage(pageInfo)
                 pageContentRenderer.drawPage(
                     canvas = page.canvas,
                     data = data,
-                    scroll = Offset(0f, currentTop.toFloat()),
+                    scroll = Offset(0f, currentTop),
                     scaleFactor = scaleFactor,
                 )
                 doc.finishPage(page)
-                currentTop += A4_HEIGHT
+                currentTop += pageContentHeightPx
                 logicalPageNumber++
             }
         } else {
