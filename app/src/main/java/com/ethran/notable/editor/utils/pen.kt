@@ -2,9 +2,31 @@ package com.ethran.notable.editor.utils
 
 
 import com.onyx.android.sdk.pen.style.StrokeStyle
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
+/**
+ * Tolerant serializer: an unknown/renamed pen name (from a hand-edited or foreign settings blob,
+ * or a build that had a pen we no longer ship — e.g. the field-reported "NEO_PENCIL") decodes to
+ * [Pen.BALLPEN] via [Pen.fromString] instead of throwing and taking the whole `AppSettings` decode
+ * down with it. The stored value is treated as an untrusted token resolved at the boundary.
+ * See docs/crash-handling-plan.md, Crash #2.
+ */
+object PenSerializer : KSerializer<Pen> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("com.ethran.notable.editor.utils.Pen", PrimitiveKind.STRING)
 
+    override fun serialize(encoder: Encoder, value: Pen) = encoder.encodeString(value.penName)
+
+    override fun deserialize(decoder: Decoder): Pen = Pen.fromString(decoder.decodeString())
+}
+
+@Serializable(with = PenSerializer::class)
 enum class Pen(val penName: String) {
     BALLPEN("BALLPEN"),
     // RED/GREEN/BLUE ballpens are legacy: since toolbar pens became ToolbarPen presets

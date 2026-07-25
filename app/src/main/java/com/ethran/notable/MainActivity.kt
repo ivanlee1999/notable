@@ -137,8 +137,11 @@ class MainActivity : ComponentActivity() {
                     withContext(Dispatchers.IO) {
                         // Init app settings, also do migration
                         val savedSettings =
-                            kvProxy.get().get(APP_SETTINGS_KEY, AppSettings.serializer())
-                                ?: AppSettings(version = 1)
+                            kvProxy.get().getOrDefault(
+                                APP_SETTINGS_KEY,
+                                AppSettings.serializer(),
+                                AppSettings(version = 1)
+                            )
 
                         GlobalAppSettings.update(savedSettings)
                         strokeMigrationHelper.get().reencodeStrokePointsToBinary()
