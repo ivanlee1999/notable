@@ -292,7 +292,12 @@ fun drawBg(
                 "squared" -> drawSquaredBg(canvas, scroll, scale)
                 "hexed" -> drawHexedBg(canvas, scroll, scale)
                 else -> {
-                    throw IllegalArgumentException("Unknown background type: $background")
+                    // Reaching the Native branch with an unknown value usually means the *type*
+                    // detection misclassified a non-native background (e.g. a .pdf) as Native, not
+                    // that the string is merely unknown — surface the type so it's obvious.
+                    throw IllegalArgumentException(
+                        "Unknown native background '$background' (type=$backgroundType)"
+                    )
                 }
             }
         }
