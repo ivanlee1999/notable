@@ -259,13 +259,19 @@ class SelectionState {
             val displacedImages = selectedImagesCopy.map {
                 offsetImage(it, offset = offset.toOffset())
             }
-            if (placementMode == PlacementMode.Move) page.removeImages(selectedImagesCopy.map { it.id })
 
-            page.addImage(displacedImages)
+            // Mirror the stroke path above: a Move updates the existing rows in place (same ids);
+            // a Paste adds new rows (paste already assigned fresh ids upstream). The old code did
+            // removeImages + addImage for Move, which delete-then-reinserted the same id via two
+            // unordered coroutines and raced to a UNIQUE(Image.id) crash (P3).
+            if (placementMode == PlacementMode.Move) {
+                page.updateImages(displacedImages)
+            } else {
+                page.addImage(displacedImages)
+            }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // TODO: find why sometimes we add two times same operation.
-                // A displacement happened or this is a paste commit - create history for this
+                // A displacement happened or this is a paste commit - create history for this.
                 // To undo changes we first remove image
                 operationList += Operation.DeleteImage(displacedImages.map { it.id })
                 // then add the original images, only if we intended to move it.

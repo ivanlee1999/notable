@@ -619,6 +619,13 @@ class PageDataManager @Inject constructor(
         }
     }
 
+    fun updateImagesInDb(images: List<Image>) {
+        dataScope.launch {
+            appRepository.imageRepository.update(images)
+            updateParentNotebookTimestamp()
+        }
+    }
+
     fun saveStrokesToDb(strokes: List<Stroke>) {
         dataScope.launch {
             try {

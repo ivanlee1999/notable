@@ -429,6 +429,19 @@ class PageView(
 //        persistBitmapDebounced()
     }
 
+    // Moves/updates existing images in place (same ids). Mirrors updateStrokes — used for a Move
+    // displacement so we never delete-then-reinsert the same id (which raced to a UNIQUE crash).
+    fun updateImages(imagesToUpdate: List<Image>) {
+        val imageUpdateById = imagesToUpdate.associateBy { it.id }
+        images = images.map { image -> imageUpdateById[image.id] ?: image }
+        imagesToUpdate.forEach {
+            val bottomPlusPadding = it.x + it.height + 50
+            if (bottomPlusPadding > height) height = bottomPlusPadding
+        }
+        pageDataManager.updateImagesInDb(imagesToUpdate)
+        pageDataManager.indexImages(coroutineScope, currentPageId)
+    }
+
     fun getImage(imageId: String): Image? = pageDataManager.getImage(imageId, currentPageId)
     fun getImages(imageIds: List<String>): List<Image?> =
         pageDataManager.getImages(imageIds, currentPageId)

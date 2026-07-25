@@ -55,6 +55,9 @@ interface ImageDao {
     @Update
     suspend fun update(image: Image)
 
+    @Update
+    suspend fun update(images: List<Image>)
+
     @Query("DELETE FROM Image WHERE id IN (:ids)")
     suspend fun deleteAll(ids: List<String>)
 
@@ -107,6 +110,10 @@ class ImageRepository @Inject constructor(
 
     suspend fun update(image: Image) {
         db.update(image)
+    }
+
+    suspend fun update(images: List<Image>) {
+        db.update(images)
     }
 
     suspend fun deleteAll(ids: List<String>) {
