@@ -6,14 +6,29 @@ import io.shipbook.shipbooksdk.ShipBook
 
 private val log = ShipBook.getLogger("debug")
 
+private const val APP_PACKAGE = "com.ethran.notable"
+
+/**
+ * Formats [stack] into a compact, app-focused call stack for remote (ShipBook) logs.
+ *
+ * Keeps only frames in [APP_PACKAGE] — coroutine dispatchers, `BaseContinuationImpl.resumeWith`,
+ * reflection, and other plumbing otherwise fill a fixed window and push the real caller out (see
+ * docs/crash-handling-plan.md, Phase 0). Excludes this file's own frames, then takes at most [n].
+ * If no app frame is present (e.g. a pure coroutine resume with nothing of ours on the stack), it
+ * falls back to the raw top-[n] frames so the log is never empty. It still cannot cross a
+ * suspension boundary — pair it with a launch-site breadcrumb for async flows.
+ */
+internal fun formatAppCallStack(stack: Array<StackTraceElement>, n: Int = 8): String {
+    fun format(e: StackTraceElement) =
+        "${e.className.removePrefix("$APP_PACKAGE.")}.${e.methodName} (${e.fileName}:${e.lineNumber})"
+
+    val appFrames = stack.filter { it.className.startsWith(APP_PACKAGE) && it.fileName != "debug.kt" }
+    val chosen = if (appFrames.isNotEmpty()) appFrames else stack.drop(3)
+    return chosen.take(n).joinToString("\n") { format(it) }
+}
+
 fun logCallStack(reason: String, n: Int = 8) {
-    val stackTrace = Thread.currentThread().stackTrace
-        .drop(3) // Skip internal calls
-        .take(n) // Limit depth
-        .joinToString("\n") {
-            "${it.className.removePrefix("com.ethran.notable.")}.${it.methodName} (${it.fileName}:${it.lineNumber})"
-        }
-    log.w("$reason Call stack:\n$stackTrace")
+    log.w("$reason Call stack:\n${formatAppCallStack(Thread.currentThread().stackTrace, n)}")
 }
 
 fun ensureNotMainThread(taskName: String) {
