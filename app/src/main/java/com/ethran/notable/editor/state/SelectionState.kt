@@ -245,12 +245,12 @@ class SelectionState {
             }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // A displacement happened or this is a paste commit - create history for this
-                operationList += Operation.DeleteStroke(displacedStrokes.map { it.id })
-                // in case we are on a move operation, this history point re-adds the original strokes
-                if (placementMode == PlacementMode.Move) operationList += Operation.AddStroke(
-                    selectedStrokesCopy
-                )
+                // History (inverse of this change): undo a Move by restoring the originals in place
+                // (Update, not delete+add); undo a Paste by deleting the pasted strokes.
+                operationList += if (placementMode == PlacementMode.Move)
+                    Operation.UpdateStroke(selectedStrokesCopy)
+                else
+                    Operation.DeleteStroke(displacedStrokes.map { it.id })
             }
         }
         if (!selectedImagesCopy.isNullOrEmpty()) {
@@ -271,13 +271,12 @@ class SelectionState {
             }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // A displacement happened or this is a paste commit - create history for this.
-                // To undo changes we first remove image
-                operationList += Operation.DeleteImage(displacedImages.map { it.id })
-                // then add the original images, only if we intended to move it.
-                if (placementMode == PlacementMode.Move) operationList += Operation.AddImage(
-                    selectedImagesCopy
-                )
+                // History (inverse): undo a Move by restoring the originals in place (Update, not
+                // delete+add — that's what raced to the UNIQUE crash); undo a Paste by deleting.
+                operationList += if (placementMode == PlacementMode.Move)
+                    Operation.UpdateImage(selectedImagesCopy)
+                else
+                    Operation.DeleteImage(displacedImages.map { it.id })
             }
         }
         page.drawAreaPageCoordinates(finalZone)

@@ -21,6 +21,12 @@ sealed class Operation {
     data class AddStroke(val strokes: List<Stroke>) : Operation()
     data class AddImage(val images: List<Image>) : Operation()
     data class DeleteImage(val imageIds: List<String>) : Operation()
+
+    // In-place update of existing entities (same ids): move, resize, recolour, … Its inverse is
+    // another Update carrying the previous values, so undo/redo never delete-then-reinsert the same
+    // id (which raced to a UNIQUE(Image.id) crash). See docs/crash-handling-plan.md, Crash #3.
+    data class UpdateStroke(val strokes: List<Stroke>) : Operation()
+    data class UpdateImage(val images: List<Image>) : Operation()
 }
 
 typealias OperationBlock = List<Operation>
@@ -116,6 +122,21 @@ class History @AssistedInject constructor(
                 val images = pageModel.getImages(operation.imageIds).filterNotNull()
                 pageModel.removeImages(operation.imageIds)
                 return Operation.AddImage(images = images) to imageBoundsInt(images)
+            }
+
+            is Operation.UpdateStroke -> {
+                // Snapshot current values first — that's the inverse. Then apply the new values.
+                val previous = pageModel.getStrokes(operation.strokes.map { it.id }).filterNotNull()
+                pageModel.updateStrokes(operation.strokes)
+                return Operation.UpdateStroke(strokes = previous) to
+                        strokeBounds(operation.strokes + previous)
+            }
+
+            is Operation.UpdateImage -> {
+                val previous = pageModel.getImages(operation.images.map { it.id }).filterNotNull()
+                pageModel.updateImages(operation.images)
+                return Operation.UpdateImage(images = previous) to
+                        imageBoundsInt(operation.images + previous)
             }
         }
     }
