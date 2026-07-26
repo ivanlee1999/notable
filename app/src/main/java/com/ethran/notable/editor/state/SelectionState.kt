@@ -51,6 +51,13 @@ class SelectionState {
     var selectedStrokes by mutableStateOf<List<Stroke>?>(null)
     var selectedImages by mutableStateOf<List<Image>?>(null)
 
+    // Pre-edit snapshot of a Move selection (original size AND position), captured when the
+    // selection is created. resizeImages/resizeStrokes mutate selectedStrokes/Images in place, so
+    // those no longer hold the originals — the Move's undo baseline must come from here, or undoing
+    // a resize would restore the position but keep the new size.
+    var initialSelectedStrokes: List<Stroke>? = null
+    var initialSelectedImages: List<Image>? = null
+
     // TODO: Bitmap should be change, if scale changes.
     var selectedBitmap by mutableStateOf<Bitmap?>(null)
 
@@ -79,6 +86,8 @@ class SelectionState {
         log.v("reset")
         selectedStrokes = null
         selectedImages = null
+        initialSelectedStrokes = null
+        initialSelectedImages = null
         secondPageCut = null
         firstPageCut = null
         selectedBitmap = null
@@ -245,10 +254,11 @@ class SelectionState {
             }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // History (inverse of this change): undo a Move by restoring the originals in place
-                // (Update, not delete+add); undo a Paste by deleting the pasted strokes.
+                // History (inverse of this change): undo a Move by restoring the pre-edit originals
+                // in place (Update, not delete+add) — using the snapshot, since a resize already
+                // mutated selectedStrokesCopy; undo a Paste by deleting the pasted strokes.
                 operationList += if (placementMode == PlacementMode.Move)
-                    Operation.UpdateStroke(selectedStrokesCopy)
+                    Operation.UpdateStroke(initialSelectedStrokes ?: selectedStrokesCopy)
                 else
                     Operation.DeleteStroke(displacedStrokes.map { it.id })
             }
@@ -271,10 +281,11 @@ class SelectionState {
             }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // History (inverse): undo a Move by restoring the originals in place (Update, not
-                // delete+add — that's what raced to the UNIQUE crash); undo a Paste by deleting.
+                // History (inverse): undo a Move by restoring the pre-edit originals in place
+                // (Update, not delete+add — that's what raced to the UNIQUE crash) using the
+                // snapshot, since a resize already mutated selectedImagesCopy; undo a Paste deletes.
                 operationList += if (placementMode == PlacementMode.Move)
-                    Operation.UpdateImage(selectedImagesCopy)
+                    Operation.UpdateImage(initialSelectedImages ?: selectedImagesCopy)
                 else
                     Operation.DeleteImage(displacedImages.map { it.id })
             }
