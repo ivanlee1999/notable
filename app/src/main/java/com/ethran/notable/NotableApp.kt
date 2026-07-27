@@ -180,7 +180,9 @@ class NotableApp : Application() {
         private const val KEY_LAST_CRASH = "last_crash"
         private const val CRASH_LOOP_MS = 5_000L
         private const val MAX_CRASH_FILES = 20
-        private const val CRASH_DIR = "crashes"
+
+        /** Sub-directory of `filesDir` holding the crash files; read by the Settings crash-log viewer. */
+        const val CRASH_DIR = "crashes"
 
         // The handler instance we last installed, so a re-install can tell "already ours" from "an
         // SDK replaced it". @Volatile because it is read/written across threads.
