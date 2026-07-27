@@ -106,6 +106,9 @@ class MainActivity : ComponentActivity() {
         ShipBook.start(
             this.application, BuildConfig.SHIPBOOK_APP_ID, BuildConfig.SHIPBOOK_APP_KEY
         )
+        // ShipBook installs its own uncaught handler in start(); re-install ours on top so it is
+        // outermost and still writes the durable crash file even if ShipBook doesn't chain back.
+        (application as? NotableApp)?.reinstallCrashHandler()
 
         Log.i(TAG, "Notable started")
 
