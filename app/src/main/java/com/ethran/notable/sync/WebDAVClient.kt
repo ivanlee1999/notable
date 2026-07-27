@@ -13,6 +13,7 @@ import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.File
@@ -178,7 +179,24 @@ class WebDAVClient(
         ifMatch: String? = null
     ): AppResult<Unit, DomainError> {
         if (!localFile.exists()) return AppResult.Error(DomainError.SyncError("Local file missing"))
-        return putFile(path, localFile.readBytes(), contentType, ifMatch)
+        // Stream the file straight to the socket (okhttp reads it in chunks with a known
+        // Content-Length) instead of readBytes() loading the whole file into memory — matters for
+        // large serialized pages and images. See docs/crash-handling-plan.md "Sync upload memory".
+        return execute("PUT", {
+            val requestBody = localFile.asRequestBody(contentType.toMediaType())
+            Request.Builder().url(buildUrl(path)).put(requestBody)
+                .header("Authorization", credentials)
+                .apply { ifMatch?.let { header("If-Match", it) } }
+                .build()
+        }) { response ->
+            when {
+                response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
+                    AppResult.Error(DomainError.SyncConflict)
+
+                response.isSuccessful -> AppResult.Success(Unit)
+                else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
+            }
+        }
     }
 
     /**

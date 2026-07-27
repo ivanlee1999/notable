@@ -105,6 +105,29 @@ class KvProxy @Inject constructor(
         json.decodeFromString(serializer, jsonValue)
     }
 
+    /**
+     * Fault-isolated read: on a decode failure, back up the corrupt JSON to a
+     * `<key>_corrupt_<ts>` row (never silently discard user config) and return [default] instead of
+     * throwing. A single unreadable key must never block startup — the `AppSettings` load routes
+     * through here so one bad value can't brick the app. See docs/crash-handling-plan.md, Crash #2.
+     */
+    suspend fun <T> getOrDefault(
+        key: String,
+        serializer: KSerializer<T>,
+        default: T
+    ): T = withContext(Dispatchers.IO) {
+        val kv = kvRepository.get(key) ?: return@withContext default
+        try {
+            json.decodeFromString(serializer, kv.value)
+        } catch (e: Exception) {
+            log.e("Failed to decode '$key'; backing up corrupt value and using default", e)
+            runCatching {
+                kvRepository.set(Kv("${key}_corrupt_${System.currentTimeMillis()}", kv.value))
+            }.onFailure { log.w("Failed to back up corrupt '$key'", it) }
+            default
+        }
+    }
+
 
     suspend fun <T> setKv(key: String, value: T, serializer: KSerializer<T>) {
         val jsonValue = json.encodeToString(serializer, value)

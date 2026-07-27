@@ -51,6 +51,13 @@ class SelectionState {
     var selectedStrokes by mutableStateOf<List<Stroke>?>(null)
     var selectedImages by mutableStateOf<List<Image>?>(null)
 
+    // Pre-edit snapshot of a Move selection (original size AND position), captured when the
+    // selection is created. resizeImages/resizeStrokes mutate selectedStrokes/Images in place, so
+    // those no longer hold the originals — the Move's undo baseline must come from here, or undoing
+    // a resize would restore the position but keep the new size.
+    var initialSelectedStrokes: List<Stroke>? = null
+    var initialSelectedImages: List<Image>? = null
+
     // TODO: Bitmap should be change, if scale changes.
     var selectedBitmap by mutableStateOf<Bitmap?>(null)
 
@@ -79,6 +86,8 @@ class SelectionState {
         log.v("reset")
         selectedStrokes = null
         selectedImages = null
+        initialSelectedStrokes = null
+        initialSelectedImages = null
         secondPageCut = null
         firstPageCut = null
         selectedBitmap = null
@@ -120,7 +129,12 @@ class SelectionState {
         } ?: IntOffset.Zero
 
         val pageBounds = imageBoundsInt(selectedImagesCopy)
-        selectionRect = page.toScreenCoordinates(pageBounds)
+        // selectionRect must be in PAGE coordinates (as set by selectImagesAndStrokes and expected
+        // by SelectorBitmap + applySelectionDisplace's drawAreaPageCoordinates). Storing screen
+        // coords here mis-transformed the commit redraw zone, so after a resize the image's bounds
+        // no longer intersected the redraw area and it wasn't repainted — it vanished until
+        // re-selected.
+        selectionRect = pageBounds
 
         selectionDisplaceOffset = selectionDisplaceOffset?.let { it - sizeChange } ?: IntOffset.Zero
 
@@ -245,12 +259,13 @@ class SelectionState {
             }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // A displacement happened or this is a paste commit - create history for this
-                operationList += Operation.DeleteStroke(displacedStrokes.map { it.id })
-                // in case we are on a move operation, this history point re-adds the original strokes
-                if (placementMode == PlacementMode.Move) operationList += Operation.AddStroke(
-                    selectedStrokesCopy
-                )
+                // History (inverse of this change): undo a Move by restoring the pre-edit originals
+                // in place (Update, not delete+add) — using the snapshot, since a resize already
+                // mutated selectedStrokesCopy; undo a Paste by deleting the pasted strokes.
+                operationList += if (placementMode == PlacementMode.Move)
+                    Operation.UpdateStroke(initialSelectedStrokes ?: selectedStrokesCopy)
+                else
+                    Operation.DeleteStroke(displacedStrokes.map { it.id })
             }
         }
         if (!selectedImagesCopy.isNullOrEmpty()) {
@@ -259,19 +274,25 @@ class SelectionState {
             val displacedImages = selectedImagesCopy.map {
                 offsetImage(it, offset = offset.toOffset())
             }
-            if (placementMode == PlacementMode.Move) page.removeImages(selectedImagesCopy.map { it.id })
 
-            page.addImage(displacedImages)
+            // Mirror the stroke path above: a Move updates the existing rows in place (same ids);
+            // a Paste adds new rows (paste already assigned fresh ids upstream). The old code did
+            // removeImages + addImage for Move, which delete-then-reinserted the same id via two
+            // unordered coroutines and raced to a UNIQUE(Image.id) crash (P3).
+            if (placementMode == PlacementMode.Move) {
+                page.updateImages(displacedImages)
+            } else {
+                page.addImage(displacedImages)
+            }
 
             if (offset.x != 0 || offset.y != 0 || placementMode == PlacementMode.Paste) {
-                // TODO: find why sometimes we add two times same operation.
-                // A displacement happened or this is a paste commit - create history for this
-                // To undo changes we first remove image
-                operationList += Operation.DeleteImage(displacedImages.map { it.id })
-                // then add the original images, only if we intended to move it.
-                if (placementMode == PlacementMode.Move) operationList += Operation.AddImage(
-                    selectedImagesCopy
-                )
+                // History (inverse): undo a Move by restoring the pre-edit originals in place
+                // (Update, not delete+add — that's what raced to the UNIQUE crash) using the
+                // snapshot, since a resize already mutated selectedImagesCopy; undo a Paste deletes.
+                operationList += if (placementMode == PlacementMode.Move)
+                    Operation.UpdateImage(initialSelectedImages ?: selectedImagesCopy)
+                else
+                    Operation.DeleteImage(displacedImages.map { it.id })
             }
         }
         page.drawAreaPageCoordinates(finalZone)

@@ -14,7 +14,10 @@ import com.ethran.notable.utils.logCallStack
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import java.io.BufferedWriter
 import java.io.File
+import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.time.Instant
 import java.time.format.DateTimeParseException
 import java.util.Base64
@@ -28,6 +31,14 @@ object NotebookSerializer {
 
     private val json = Json {
         prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+
+    // Compact (no pretty-print) JSON used by the streaming page serializer: smaller output and,
+    // more importantly, each element is encoded on its own so a whole-page JSON string is never
+    // materialised. deserializePage ignores whitespace, so compact output stays compatible.
+    private val compactJson = Json {
+        prettyPrint = false
         ignoreUnknownKeys = true
     }
 
@@ -92,15 +103,47 @@ object NotebookSerializer {
     }
 
     /**
-     * Serialize a page with its strokes and images to JSON format.
-     * Stroke points are embedded as base64-encoded SB binary format.
+     * Serialize a page with its strokes and images to JSON, **streaming** directly to [output].
+     *
+     * Strokes and images are encoded one element at a time and written immediately, so the whole
+     * page is never held in memory as a `List<StrokeDto>` nor as a single giant JSON string.
+     * Peak extra memory
+     * here is one stroke's binary + base64 plus the IO buffer, independent of page size.
+     *
+     * The page's scalar fields are emitted via [PageHeaderDto]; the `strokes`/`images` arrays are
+     * spliced in after it. The result parses back to [PageDto] unchanged.
      */
     fun serializePage(page: Page, strokes: List<Stroke>, images: List<Image>): String {
-        val strokeDtos = strokes.map { stroke ->
-            val binaryData = encodeStrokePoints(stroke.points)
-            val base64Data = Base64.getEncoder().encodeToString(binaryData)
+        val out = java.io.ByteArrayOutputStream()
+        serializePage(page, strokes, images, out)
+        return out.toString("UTF-8")
+    }
 
-            StrokeDto(
+    fun serializePage(page: Page, strokes: List<Stroke>, images: List<Image>, output: OutputStream) {
+        val writer = BufferedWriter(OutputStreamWriter(output, Charsets.UTF_8))
+
+        val header = PageHeaderDto(
+            version = 1,
+            id = page.id,
+            notebookId = page.notebookId,
+            background = page.background,
+            backgroundType = page.backgroundType,
+            parentFolderId = page.parentFolderId,
+            scroll = page.scroll,
+            createdAt = page.createdAt.toInstant().toString(),
+            updatedAt = page.updatedAt.toInstant().toString()
+        )
+        // Write the page object's scalar fields, drop the closing brace, then splice the arrays.
+        val headerJson = compactJson.encodeToString(header)
+        writer.write(headerJson.substring(0, headerJson.length - 1))
+
+        writer.write(",\"strokes\":[")
+        var first = true
+        for (stroke in strokes) {
+            if (!first) writer.write(",")
+            first = false
+            val base64Data = Base64.getEncoder().encodeToString(encodeStrokePoints(stroke.points))
+            val dto = StrokeDto(
                 id = stroke.id,
                 size = stroke.size,
                 pen = stroke.pen.name,
@@ -114,10 +157,15 @@ object NotebookSerializer {
                 createdAt = stroke.createdAt.toInstant().toString(),
                 updatedAt = stroke.updatedAt.toInstant().toString()
             )
+            writer.write(compactJson.encodeToString(dto))
         }
 
-        val imageDtos = images.map { image ->
-            ImageDto(
+        writer.write("],\"images\":[")
+        first = true
+        for (image in images) {
+            if (!first) writer.write(",")
+            first = false
+            val dto = ImageDto(
                 id = image.id,
                 x = image.x,
                 y = image.y,
@@ -127,23 +175,10 @@ object NotebookSerializer {
                 createdAt = image.createdAt.toInstant().toString(),
                 updatedAt = image.updatedAt.toInstant().toString()
             )
+            writer.write(compactJson.encodeToString(dto))
         }
-
-        val pageDto = PageDto(
-            version = 1,
-            id = page.id,
-            notebookId = page.notebookId,
-            background = page.background,
-            backgroundType = page.backgroundType,
-            parentFolderId = page.parentFolderId,
-            scroll = page.scroll,
-            createdAt = page.createdAt.toInstant().toString(),
-            updatedAt = page.updatedAt.toInstant().toString(),
-            strokes = strokeDtos,
-            images = imageDtos
-        )
-
-        return json.encodeToString(pageDto)
+        writer.write("]}")
+        writer.flush()
     }
 
     /**
@@ -295,6 +330,22 @@ object NotebookSerializer {
         val createdAt: String,
         val updatedAt: String,
         val serverTimestamp: String
+    )
+
+    // Scalar page fields only — the streaming serializer emits this, then splices the
+    // strokes/images arrays after it. Field names/order match [PageDto]'s scalar prefix so the
+    // spliced result parses back as a [PageDto].
+    @Serializable
+    private data class PageHeaderDto(
+        val version: Int,
+        val id: String,
+        val notebookId: String?,
+        val background: String,
+        val backgroundType: String,
+        val parentFolderId: String?,
+        val scroll: Int,
+        val createdAt: String,
+        val updatedAt: String
     )
 
     @Serializable

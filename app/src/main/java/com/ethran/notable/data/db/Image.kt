@@ -55,12 +55,20 @@ interface ImageDao {
     @Update
     suspend fun update(image: Image)
 
+    @Update
+    suspend fun update(images: List<Image>)
+
     @Query("DELETE FROM Image WHERE id IN (:ids)")
     suspend fun deleteAll(ids: List<String>)
 
     @Transaction
     @Query("SELECT * FROM Image WHERE id = :imageId")
     suspend fun getById(imageId: String): Image
+
+    /** URIs only, for a page — used by sync GC to enumerate referenced media without loading
+     *  the page's strokes (see NotebookSyncService.garbageCollectRemote). */
+    @Query("SELECT uri FROM Image WHERE pageId = :pageId")
+    suspend fun getUrisForPage(pageId: String): List<String?>
 }
 
 // Repository for image operations
@@ -104,8 +112,16 @@ class ImageRepository @Inject constructor(
         db.update(image)
     }
 
+    suspend fun update(images: List<Image>) {
+        db.update(images)
+    }
+
     suspend fun deleteAll(ids: List<String>) {
         db.deleteAll(ids)
+    }
+
+    suspend fun getUrisForPage(pageId: String): List<String?> {
+        return db.getUrisForPage(pageId)
     }
 
     suspend fun getImageWithPointsById(imageId: String): Image {

@@ -144,7 +144,12 @@ class CanvasRefreshManager(
                 // Lock the canvas only for the dirtyRect region
                 canvas = drawCanvas.holder.lockCanvas(zoneToRedraw)
                 if (canvas == null) {
-                    log.e("FAILED to lock canvas! Surface is likely invalid, destroyed, or locked by another thread.")
+                    log.e(
+                        "FAILED to lock canvas (surface invalid/destroyed or locked by another " +
+                            "thread). page=${page.currentPageId}, dirtyRect=$zoneToRedraw, " +
+                            "surfaceValid=${drawCanvas.holder.surface?.isValid}, " +
+                            "thread=${Thread.currentThread().name}"
+                    )
                     return@post
                 }
                 canvas.drawBitmap(page.windowedBitmap, zoneToRedraw, zoneToRedraw, Paint())

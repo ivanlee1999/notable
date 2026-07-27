@@ -228,8 +228,13 @@ fun encodeStrokePoints(
     bodyBuffer.put(encodedY)
 
     if (hasP) {
-        if (points.any { it.pressure!! > 1f }) {
-            log.e("Encoding stroke with un-normalized pressure (>1); values will be clamped. Callers must normalize to [0,1] first.")
+        val overCount = points.count { it.pressure!! > 1f }
+        if (overCount > 0) {
+            log.e(
+                "Encoding stroke with un-normalized pressure (>1); values will be clamped. " +
+                    "Callers must normalize to [0,1] first. " +
+                    "offending=$overCount/${points.size}, maxPressure=${points.maxOf { it.pressure!! }}"
+            )
         }
         for (p in points) {
             val q = (p.pressure!!.coerceIn(0f, 1f) * PRESSURE_QUANT).roundToInt()

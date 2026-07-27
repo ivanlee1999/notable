@@ -122,6 +122,10 @@ fun selectImagesAndStrokes(
     // set state
     viewModel.selectionState.selectedImages = imagesToSelect
     viewModel.selectionState.selectedStrokes = strokesToSelect
+    // Pre-edit originals for the undo baseline (see SelectionState.initialSelected*). Captured
+    // before any resize mutates selectedImages/Strokes, so undo of a resize restores the size.
+    viewModel.selectionState.initialSelectedImages = imagesToSelect
+    viewModel.selectionState.initialSelectedStrokes = strokesToSelect
     viewModel.selectionState.selectedBitmap = selectedBitmap
     viewModel.selectionState.selectionRect = pageBounds
     viewModel.selectionState.selectionStartOffset = startOffset

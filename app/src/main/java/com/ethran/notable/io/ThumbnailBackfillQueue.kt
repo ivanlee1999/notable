@@ -94,7 +94,8 @@ class ThumbnailBackfillQueue @Inject constructor(
         try {
             thumbnailGenerator.ensureThumbnail(pageId, mode)
         } catch (t: Throwable) {
-            log.e("Thumbnail generation failed for pageId=$pageId: ${t.message}")
+            // Log the throwable (not just t.message) so the throw site is visible in ShipBook.
+            log.e("Thumbnail generation failed for pageId=$pageId", t)
         } finally {
             mutex.withLock {
                 queuedPageIds.remove(pageId)
