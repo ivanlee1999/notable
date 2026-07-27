@@ -19,6 +19,7 @@ import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.KvRepository
+import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.StrokePoint
@@ -183,13 +184,16 @@ class EditorUnsupportedConcurrentChangeTests {
         val kvRepository = KvRepository(db.kvDao(), context)
         val kvProxy = KvProxy(kvRepository, CryptoHelper())
 
+        val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
         val appRepository = AppRepository(
             bookRepository = bookRepository,
             pageRepository = pageRepository,
             strokeRepository = strokeRepository,
             imageRepository = imageRepository,
             folderRepository = folderRepository,
+            notebookSyncStateRepository = notebookSyncStateRepository,
             kvProxy = kvProxy,
+            db = db,
         )
 
         val editorSettingCacheManager = EditorSettingCacheManager(kvRepository)

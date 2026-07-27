@@ -61,5 +61,6 @@ fun DebugSettings(
                 onSettingsChange(settings.copy(destructiveMigrations = isChecked))
             }
         )
+        CrashLogsSettings()
     }
 }
