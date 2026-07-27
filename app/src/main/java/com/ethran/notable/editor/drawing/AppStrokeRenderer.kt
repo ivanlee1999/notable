@@ -3,9 +3,9 @@ package com.ethran.notable.editor.drawing
 import android.graphics.Canvas
 import android.graphics.Paint
 import androidx.compose.ui.geometry.Offset
+import androidx.core.graphics.withTranslation
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.editor.utils.Pen
-import com.ethran.notable.editor.utils.offsetStroke
 
 /**
  * Onyx-free renderer that draws every pen through plain Canvas path code. Markers use the
@@ -19,12 +19,16 @@ object AppStrokeRenderer : StrokeRenderer {
             color = stroke.color
             strokeWidth = stroke.size
         }
-        val points = offsetStroke(stroke, offset).points
+        val points = stroke.points
         if (points.isEmpty()) return
 
-        when (stroke.pen) {
-            Pen.MARKER -> drawMarkerStroke(canvas, paint, stroke.size, points)
-            else -> drawBallPenStroke(canvas, paint, stroke.size, points)
+        // Apply the scroll [offset] as a canvas translation rather than copying every point
+        // into a shifted Stroke (see OnyxStrokeRenderer / P15).
+        canvas.withTranslation(offset.x, offset.y) {
+            when (stroke.pen) {
+                Pen.MARKER -> drawMarkerStroke(canvas, paint, stroke.size, points)
+                else -> drawBallPenStroke(canvas, paint, stroke.size, points)
+            }
         }
     }
 }

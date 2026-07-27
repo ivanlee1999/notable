@@ -91,6 +91,42 @@ class NotebookSyncService @Inject constructor(
         }
     }
 
+    /**
+     * Remove orphaned remote notebook directories: a `/notebooks/<id>/` that has no manifest.json
+     * and that we do NOT hold locally. This is the leftover of an interrupted upload (pages-first,
+     * manifest-last) or a partial delete from *another* device, which 3a can't self-heal (3a re-uploads
+     * only the ones we own locally). Strictly time-gated by the directory's own last-modified: only
+     * dirs older than [maxAgeDays] are touched, so an in-flight upload — whose dir is recent — is
+     * never raced. Best-effort: failures are logged, never fatal to the run. (P6 cleanup / 3c)
+     */
+    suspend fun garbageCollectOrphanedRemotes(
+        client: WebDAVClient,
+        localNotebookIds: Set<String>,
+        maxAgeDays: Long
+    ) {
+        val cutoff = java.util.Date(System.currentTimeMillis() - maxAgeDays * 86_400_000L)
+        val entries = client.listCollectionWithMetadata(SyncPaths.notebooksDir()).getOrElse {
+            log.w(TAG, "Orphan GC: listing notebooks failed: ${it.userMessage}")
+            return
+        }
+        for (entry in entries) {
+            val id = entry.name
+            // Owned locally -> 3a re-uploads it to self-heal; never GC a notebook we still have.
+            if (id in localNotebookIds) continue
+            // Unknown age -> don't risk deleting what might be an in-flight upload.
+            val lastModified = entry.lastModified ?: continue
+            if (!lastModified.before(cutoff)) continue
+            // A manifest means a real, healthy notebook this device just doesn't have yet (it will be
+            // downloaded as new) -> leave it. On an ambiguous error, assume present and skip.
+            val hasManifest = client.exists(SyncPaths.manifestFile(id)).getOrElse { true }
+            if (hasManifest) continue
+            log.i(TAG, "Orphan GC: removing dead remote notebook $id (no manifest, older than $maxAgeDays days)")
+            client.delete(SyncPaths.notebookDir(id)).onError {
+                log.w(TAG, "Orphan GC: failed to remove $id: ${it.userMessage}")
+            }
+        }
+    }
+
     suspend fun detectAndUploadLocalDeletions(
         client: WebDAVClient, preDownloadNotebookIds: Set<String>
     ): AppResult<Int, DomainError> {

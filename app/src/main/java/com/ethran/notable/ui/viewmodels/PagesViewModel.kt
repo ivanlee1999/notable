@@ -10,6 +10,7 @@ import com.ethran.notable.io.ThumbnailBackfillQueue
 import com.ethran.notable.ui.components.getFolderList
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,10 @@ data class PagesUiState(
     val pageIds: List<String> = emptyList(),
     val openPageId: String? = null,
     val folderList: List<Folder> = emptyList(),
-    val isLoading: Boolean = true
+    val isLoading: Boolean = true,
+    // True once the observed notebook is gone (deleted under an open screen, or never existed).
+    // The screen should stop showing pages and navigate back instead of dereferencing a null book.
+    val bookMissing: Boolean = false
 )
 
 @HiltViewModel
@@ -34,19 +38,31 @@ class PagesViewModel @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
+    private val log = ShipBook.getLogger("PagesViewModel")
+
     private val _uiState = MutableStateFlow(PagesUiState())
     val uiState: StateFlow<PagesUiState> = _uiState.asStateFlow()
 
     fun loadBook(bookId: String) {
         viewModelScope.launch {
             appRepository.bookRepository.getByIdLive(bookId).asFlow().collect { book ->
+                if (book == null) {
+                    // Room re-emits on every write to the table; a null here means the row is gone.
+                    // Don't dereference it (that was the Crash #5 NPE). Diagnose why it's null: log
+                    // the id and whether the row currently exists in the DB at all.
+                    val existsNow = appRepository.bookRepository.getById(bookId) != null
+                    log.w("Observed notebook '$bookId' is null (existsNow=$existsNow) — treating as deleted")
+                    _uiState.update { it.copy(bookId = bookId, isLoading = false, bookMissing = true) }
+                    return@collect
+                }
                 val folderList = getFolderList(appRepository, book.parentFolderId)
                 _uiState.update { it.copy(
                     bookId = bookId,
                     pageIds = book.pageIds,
                     openPageId = book.openPageId,
                     folderList = folderList,
-                    isLoading = false
+                    isLoading = false,
+                    bookMissing = false
                 ) }
             }
         }

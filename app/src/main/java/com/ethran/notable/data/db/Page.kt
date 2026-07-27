@@ -72,6 +72,11 @@ interface PageDao {
     @Query("UPDATE page SET scroll=:scroll WHERE id =:pageId")
     suspend fun updateScroll(pageId: String, scroll: Int)
 
+    // Bump only the edit timestamp, without a read-modify-write of the whole row. updatedAt is
+    // stored as epoch millis (Date <-> Long converter), so a Long here matches the column format.
+    @Query("UPDATE page SET updatedAt=:updatedAt WHERE id =:pageId")
+    suspend fun touchUpdatedAt(pageId: String, updatedAt: Long)
+
     @Query("SELECT * FROM page WHERE notebookId is null AND parentFolderId is :folderId")
     fun getSinglePagesInFolder(folderId: String? = null): LiveData<List<Page>>
 
@@ -97,6 +102,12 @@ class PageRepository @Inject constructor(
 
     suspend fun updateScroll(id: String, scroll: Int) {
         return db.updateScroll(id, scroll)
+    }
+
+    /** Advance a page's edit timestamp — the per-page dirty signal for incremental sync. */
+    suspend fun touchUpdatedAt(pageId: String, updatedAt: Long = System.currentTimeMillis()) {
+        if (pageId.isEmpty()) return
+        db.touchUpdatedAt(pageId, updatedAt)
     }
 
     suspend fun getById(pageId: String): Page? {

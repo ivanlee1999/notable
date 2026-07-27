@@ -3,6 +3,7 @@ package com.ethran.notable.data
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.database.SQLException
 import android.database.sqlite.SQLiteConstraintException
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -612,22 +613,42 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    fun updateStrokesInDb(strokes: List<Stroke>) {
+    /**
+     * Runs a DB content-write on [dataScope], catching SQL errors so a storage/device failure
+     * (e.g. SQLiteDiskIOException on endTransaction — Crash #4) is logged with context instead of
+     * escaping the coroutine and killing the process. For now this only logs and no-ops: the
+     * in-memory state is untouched, so the next successful write re-persists it. No retry/snackbar
+     * yet — if this shows up in the field logs we escalate.
+     */
+    private fun launchDbWrite(op: String, block: suspend () -> Unit) {
         dataScope.launch {
+            try {
+                block()
+            } catch (e: SQLException) {
+                log.e(
+                    "DB write '$op' failed on page $currentPage " +
+                            "(notebook ${pageFromDb?.notebookId}): ${e.message}", e
+                )
+            }
+        }
+    }
+
+    fun updateStrokesInDb(strokes: List<Stroke>) {
+        launchDbWrite("updateStrokes(${strokes.size})") {
             appRepository.strokeRepository.update(strokes)
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
     fun updateImagesInDb(images: List<Image>) {
-        dataScope.launch {
+        launchDbWrite("updateImages(${images.size})") {
             appRepository.imageRepository.update(images)
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
     fun saveStrokesToDb(strokes: List<Stroke>) {
-        dataScope.launch {
+        launchDbWrite("saveStrokes(${strokes.size})") {
             try {
                 appRepository.strokeRepository.create(strokes)
             } catch (_: SQLiteConstraintException) {
@@ -641,39 +662,46 @@ class PageDataManager @Inject constructor(
                 )
                 appRepository.strokeRepository.update(strokes)
             }
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
     fun saveImagesToDb(images: List<Image>) {
-        dataScope.launch {
+        launchDbWrite("saveImages(${images.size})") {
             appRepository.imageRepository.create(images)
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
     fun removeStrokesFromDb(strokes: List<String>) {
-        dataScope.launch {
+        launchDbWrite("removeStrokes(${strokes.size})") {
             appRepository.strokeRepository.deleteAll(strokes)
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
     fun removeImagesFromDb(images: List<String>) {
-        dataScope.launch {
+        launchDbWrite("removeImages(${images.size})") {
             appRepository.imageRepository.deleteAll(images)
-            updateParentNotebookTimestamp()
+            bumpEditTimestamps()
         }
     }
 
-    private suspend fun updateParentNotebookTimestamp() {
+    // Bump the edit timestamps after a content write on the current page. The page timestamp is
+    // the per-page dirty signal (for incremental upload); the notebook timestamp drives the
+    // per-notebook sync Upload/Download decision. Both advance together on any stroke/image edit.
+    private suspend fun bumpEditTimestamps() {
+        val pageId = pageFromDb?.id
+        if (!pageId.isNullOrEmpty()) {
+            appRepository.pageRepository.touchUpdatedAt(pageId)
+        }
         val notebookId = pageFromDb?.notebookId ?: return
         val notebook = appRepository.bookRepository.getById(notebookId) ?: return
         appRepository.bookRepository.update(notebook)
     }
 
     fun setScrollInDb() {
-        dataScope.launch {
+        launchDbWrite("scroll") {
             appRepository.pageRepository.updateScroll(
                 currentPage,
                 getPageScroll(currentPage).y.toInt()

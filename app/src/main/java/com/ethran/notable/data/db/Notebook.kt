@@ -57,8 +57,11 @@ interface NotebookDao {
     @Query("SELECT * FROM notebook")
     fun getAllFlow(): Flow<List<Notebook>>
 
+    // Nullable: Room emits null when the row is absent (e.g. the notebook was deleted while a
+    // screen still observes it) and re-emits on every write to the table. Typing it non-null let
+    // collectors dereference a null and NPE — Crash #5.
     @Query("SELECT * FROM notebook WHERE id = (:notebookId)")
-    fun getByIdLive(notebookId: String): LiveData<Notebook>
+    fun getByIdLive(notebookId: String): LiveData<Notebook?>
 
     @Query("SELECT * FROM notebook WHERE id = (:notebookId)")
     suspend fun getById(notebookId: String): Notebook?
@@ -132,7 +135,7 @@ class BookRepository @Inject constructor(
         return notebookDao.getById(notebookId)
     }
 
-    fun getByIdLive(notebookId: String): LiveData<Notebook> {
+    fun getByIdLive(notebookId: String): LiveData<Notebook?> {
         return notebookDao.getByIdLive(notebookId)
     }
 
