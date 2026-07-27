@@ -105,6 +105,16 @@ class NotableApp : Application() {
         flushStartupTelemetry()
     }
 
+    /**
+     * One-shot: true if this launch looked like a crash loop (the previous run crashed within
+     * [CRASH_LOOP_MS] of starting). The UI consumes it once to show a "copy crash logs" hint.
+     */
+    fun consumeCrashLoopDetected(): Boolean {
+        val detected = crashLoopDetected
+        crashLoopDetected = false
+        return detected
+    }
+
     /** Report telemetry gathered before ShipBook was up (it starts in MainActivity, after onCreate). */
     private fun flushStartupTelemetry() {
         val loopMs = pendingCrashLoopMs ?: return
@@ -132,6 +142,7 @@ class NotableApp : Application() {
                 // ShipBook isn't started yet (it starts in MainActivity), so a ShipBook log here is
                 // dropped. Stash it for onShipBookStarted() to report, and log to logcat now.
                 pendingCrashLoopMs = delta
+                crashLoopDetected = true
                 Log.w("NotableApp", "Possible crash loop: previous run crashed $delta ms after launch")
             }
             p.edit { putLong(KEY_LAST_START, System.currentTimeMillis()) }
@@ -202,6 +213,10 @@ class NotableApp : Application() {
         // Crash-loop delta detected at startup before ShipBook was up; reported once ShipBook starts.
         @Volatile
         private var pendingCrashLoopMs: Long? = null
+
+        // Set when startup detects a likely crash loop; consumed once by the UI to show a hint.
+        @Volatile
+        private var crashLoopDetected = false
 
         // Process-local counter for unique crash filenames (avoids the deprecated/recyclable Thread.id).
         private val crashSeq = AtomicInteger(0)

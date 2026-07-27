@@ -1,8 +1,11 @@
 package com.ethran.notable
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -46,6 +49,7 @@ import com.ethran.notable.ui.SnackDispatcher
 import com.ethran.notable.ui.SnackState
 import com.ethran.notable.ui.SyncWorkUiBridge
 import com.ethran.notable.ui.components.NotableApp
+import com.ethran.notable.ui.components.crashLogsAsText
 import com.ethran.notable.ui.theme.InkaTheme
 import com.ethran.notable.utils.hasUsableStorage
 import com.onyx.android.sdk.api.device.epd.EpdController
@@ -110,6 +114,7 @@ class MainActivity : ComponentActivity() {
         // outermost and still writes the durable crash file even if ShipBook doesn't chain back,
         // and flush any startup telemetry (crash-loop signal) that predated ShipBook being up.
         (application as? NotableApp)?.onShipBookStarted()
+        maybeShowCrashLoopHint()
 
         Log.i(TAG, "Notable started")
 
@@ -159,7 +164,6 @@ class MainActivity : ComponentActivity() {
                 }
                 isInitialized = true
             }
-
             InkaTheme {
                 CompositionLocalProvider(LocalSnackContext provides snackState) {
                     if (isInitialized) {
@@ -178,6 +182,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
+    /**
+     * If startup detected a likely crash loop, show one dismissible snack with a "Copy logs" action
+     * that copies the local crash files to the clipboard. Simplest possible surface — the full
+     * viewer lives in Settings → Debug (Phase 8e-2). Returns whether a loop was detected (so a test
+     * harness can crash only on the non-recovery launch).
+     */
+    private fun maybeShowCrashLoopHint(): Boolean {
+        if ((application as? NotableApp)?.consumeCrashLoopDetected() != true) return false
+        snackDispatcher.showOrUpdateSnack(
+            SnackConf(
+                text = "Notable restarted after repeated crashes.",
+                duration = null, // stays until dismissed
+                actions = listOf(
+                    "Copy logs" to {
+                        val text = crashLogsAsText(this)
+                        getSystemService(ClipboardManager::class.java)
+                            ?.setPrimaryClip(ClipData.newPlainText("Notable crash logs", text))
+                        Toast.makeText(this, "Copied crash logs", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            )
+        )
+        return true
+    }
 
     private fun triggerInitialSync() {
         lifecycleScope.launch {

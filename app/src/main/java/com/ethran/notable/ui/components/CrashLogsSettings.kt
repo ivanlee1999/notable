@@ -103,6 +103,10 @@ fun CrashLogsSettings() {
     }
 }
 
+/** Load + combine all crash files into one shareable/copyable string. Reusable outside Compose
+ *  (e.g. the crash-loop hint's "Copy logs" action). Small text files, so this is cheap. */
+internal fun crashLogsAsText(context: Context): String = combineForExport(loadCrashLogs(context))
+
 /** Newest-first; small text files, so reading them here is cheap (and this runs off the main thread). */
 private fun loadCrashLogs(context: Context): List<CrashLog> {
     val dir = File(context.filesDir, NotableApp.CRASH_DIR)
