@@ -264,6 +264,11 @@ class WebDAVClient(
                 response.isSuccessful ->
                     AppResult.Success(DownloadedFile(response.body.bytes(), response.header("ETag")))
 
+                // Same typed signal as getFileWithMetadata so a vanished manifest is handled
+                // identically on both the conditional and unconditional fetch paths (P6).
+                response.code == HttpURLConnection.HTTP_NOT_FOUND ->
+                    AppResult.Error(DomainError.RemoteMissing(path))
+
                 else -> AppResult.Error(DomainError.SyncError("GET failed: ${response.code}"))
             }
         }

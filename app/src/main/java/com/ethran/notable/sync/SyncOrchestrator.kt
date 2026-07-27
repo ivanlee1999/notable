@@ -165,6 +165,17 @@ class SyncOrchestrator @Inject constructor(
             // No bulk finalize needed: each notebook's sync-state row is written at its own commit
             // point (upload/download success), and deletions dropped their rows above.
 
+            // Best-effort cleanup of dead remote data (dir with no manifest, not held locally, older
+            // than a week) — an abandoned half-upload from another device that 3a can't self-heal.
+            // Full bidirectional mode only: it deletes remotely (skip in download-only) and needs the
+            // remote scan (skip in upload-only). Never fails the run. (3c)
+            if (!uploadOnly && !downloadOnly) {
+                val currentLocalIds = appRepository.bookRepository.getAll().map { it.id }.toSet()
+                notebookSyncService.garbageCollectOrphanedRemotes(
+                    client, currentLocalIds, ORPHAN_MAX_AGE_DAYS
+                )
+            }
+
             val summary = SyncSummary(
                 preDownloadIds.size,
                 downloadedCount,
@@ -363,6 +374,7 @@ class SyncOrchestrator @Inject constructor(
         private const val PROGRESS_FINALIZING = 0.9f
         private const val SUCCESS_STATE_AUTO_RESET_MS = 3000L
         private const val TOMBSTONE_MAX_AGE_DAYS = 90L
+        private const val ORPHAN_MAX_AGE_DAYS = 7L
         private const val REMOTE_NEWER_TOLERANCE_MS = 1000L
         private val syncMutex = Mutex()
     }

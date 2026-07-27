@@ -1,6 +1,7 @@
 package com.ethran.notable.sync
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.sync.serializers.NotebookSerializer
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
@@ -89,23 +90,44 @@ class NotebookReconciliationService @Inject constructor(
 
         // Fetch the remote manifest -- conditionally when we have a stored ETag, so an unchanged
         // notebook comes back as a cheap, bodyless 304 (5a).
+        //
+        // The directory `/notebooks/<id>/` was listed (remotePresent==true) but its manifest.json
+        // can still be missing: an interrupted upload (pages-first, manifest-last) or a partial
+        // delete leaves a dir-without-manifest shell. A 404 here (RemoteMissing) must NOT fail the
+        // run — treat the remote as absent and self-heal by re-uploading the local copy (P6/3a).
         val remoteChanged: Boolean
         val remote: RemoteManifestInfo?
         if (storedEtag != null) {
-            val fetched = client.getFileIfNoneMatch(manifestPath, storedEtag)
-                .onFailure { return AppResult.Error(it) }
-            if (fetched == null) {
-                remoteChanged = false
-                remote = null
-            } else {
-                remoteChanged = true
-                remote = fetched.toManifestInfo()
+            when (val fetched = client.getFileIfNoneMatch(manifestPath, storedEtag)) {
+                is AppResult.Error -> {
+                    if (fetched.error is DomainError.RemoteMissing)
+                        return healMissingRemoteManifest(localNotebook, client, downloadOnly)
+                    return AppResult.Error(fetched.error)
+                }
+
+                is AppResult.Success -> {
+                    if (fetched.data == null) {
+                        remoteChanged = false
+                        remote = null
+                    } else {
+                        remoteChanged = true
+                        remote = fetched.data.toManifestInfo()
+                    }
+                }
             }
         } else {
-            val fetched = client.getFileWithMetadata(manifestPath)
-                .onFailure { return AppResult.Error(it) }
-            remoteChanged = true
-            remote = fetched.toManifestInfo()
+            when (val fetched = client.getFileWithMetadata(manifestPath)) {
+                is AppResult.Error -> {
+                    if (fetched.error is DomainError.RemoteMissing)
+                        return healMissingRemoteManifest(localNotebook, client, downloadOnly)
+                    return AppResult.Error(fetched.error)
+                }
+
+                is AppResult.Success -> {
+                    remoteChanged = true
+                    remote = fetched.data.toManifestInfo()
+                }
+            }
         }
 
         val action = NotebookSyncPlanner.decide(
@@ -162,6 +184,26 @@ class NotebookReconciliationService @Inject constructor(
                 AppResult.Success(Unit)
             }
         }
+    }
+
+    /**
+     * The remote notebook directory exists but its manifest.json is gone — a broken shell from an
+     * interrupted upload or partial delete. Don't fail the run and don't route it to download
+     * (there is nothing coherent to download). Since we hold the notebook locally, self-heal by
+     * re-uploading our copy, which rewrites the manifest and completes the commit. In download-only
+     * mode we can't push, so skip it (the owning device heals it on its next full sync). (P6/3a)
+     */
+    private suspend fun healMissingRemoteManifest(
+        localNotebook: Notebook,
+        client: WebDAVClient,
+        downloadOnly: Boolean
+    ): AppResult<Unit, DomainError> {
+        if (downloadOnly) {
+            log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; skipping (download-only)")
+            return AppResult.Success(Unit)
+        }
+        log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; re-uploading local copy to self-heal")
+        return notebookSyncService.uploadNotebook(localNotebook, client)
     }
 
     private fun DownloadedFile.toManifestInfo(): RemoteManifestInfo {
