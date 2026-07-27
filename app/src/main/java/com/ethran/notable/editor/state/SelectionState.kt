@@ -129,7 +129,12 @@ class SelectionState {
         } ?: IntOffset.Zero
 
         val pageBounds = imageBoundsInt(selectedImagesCopy)
-        selectionRect = page.toScreenCoordinates(pageBounds)
+        // selectionRect must be in PAGE coordinates (as set by selectImagesAndStrokes and expected
+        // by SelectorBitmap + applySelectionDisplace's drawAreaPageCoordinates). Storing screen
+        // coords here mis-transformed the commit redraw zone, so after a resize the image's bounds
+        // no longer intersected the redraw area and it wasn't repainted — it vanished until
+        // re-selected.
+        selectionRect = pageBounds
 
         selectionDisplaceOffset = selectionDisplaceOffset?.let { it - sizeChange } ?: IntOffset.Zero
 
