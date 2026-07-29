@@ -93,7 +93,7 @@ object OnyxStrokeRenderer : StrokeRenderer {
         // into a shifted Stroke (the old offsetStroke). All pen paths below ultimately draw
         // via canvas.drawPath at point coordinates, so they honour this transform — same
         // pixels, but zero per-frame per-point allocation on a page that may hold thousands
-        // of strokes (see docs/crash-handling-plan.md, P15).
+        // of strokes (see docs/plans/crash-handling-plan.md, P15).
         canvas.withTranslation(offset.x, offset.y) {
             // Trying to find what throws error when drawing quickly
             try {

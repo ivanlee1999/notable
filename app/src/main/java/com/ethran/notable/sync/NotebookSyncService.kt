@@ -327,7 +327,7 @@ class NotebookSyncService @Inject constructor(
         // to the PUT, rather than building a whole-page JSON string + toByteArray() in memory. This
         // bounds upload memory to ~one stroke regardless of page size — a 12k-stroke page otherwise
         // materialised its point data several times over and OOM'd. See
-        // docs/crash-handling-plan.md "Sync upload memory".
+        // docs/plans/crash-handling-plan.md "Sync upload memory".
         val tempFile = File.createTempFile("notable-page-", ".json", context.cacheDir)
         val pageUploaded = try {
             tempFile.outputStream().buffered().use { out ->
@@ -557,7 +557,7 @@ class NotebookSyncService @Inject constructor(
             // GC only needs the page's media filenames — load the page metadata + image URIs, NOT
             // getWithDataById (which loads and normalizes every stroke on the page). On a large
             // notebook the old call re-materialised the whole notebook right after upload and
-            // re-triggered the Crash #1 OOM. See docs/crash-handling-plan.md "Sync over-upload".
+            // re-triggered the Crash #1 OOM. See docs/plans/crash-handling-plan.md "Sync over-upload".
             val page = appRepository.pageRepository.getById(pageId) ?: continue
             appRepository.imageRepository.getUrisForPage(pageId).forEach { uri ->
                 if (!uri.isNullOrEmpty()) referencedImages.add(File(uri).name)

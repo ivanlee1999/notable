@@ -109,7 +109,7 @@ class KvProxy @Inject constructor(
      * Fault-isolated read: on a decode failure, back up the corrupt JSON to a
      * `<key>_corrupt_<ts>` row (never silently discard user config) and return [default] instead of
      * throwing. A single unreadable key must never block startup — the `AppSettings` load routes
-     * through here so one bad value can't brick the app. See docs/crash-handling-plan.md, Crash #2.
+     * through here so one bad value can't brick the app. See docs/plans/crash-handling-plan.md, Crash #2.
      */
     suspend fun <T> getOrDefault(
         key: String,

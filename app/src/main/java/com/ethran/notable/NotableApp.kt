@@ -48,7 +48,7 @@ class NotableApp : Application() {
      * right after `ShipBook.start()` in MainActivity** ([onShipBookStarted]) so our handler is
      * outermost and is guaranteed to write the durable file even if an SDK replaces the handler
      * without chaining. The [alreadyHandled] guard makes the crash work run once even when two of
-     * our handlers end up in the chain. See docs/crash-handling-plan.md, Phase 8.
+     * our handlers end up in the chain. See docs/plans/crash-handling-plan.md, Phase 8.
      */
     private fun installCrashHandler() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()

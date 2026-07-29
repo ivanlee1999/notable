@@ -1,3 +1,4 @@
+
 package com.ethran.notable.data.db
 
 import android.content.Context
@@ -98,6 +99,12 @@ interface StrokeDao {
     @Query("DELETE FROM stroke WHERE id IN (:ids)")
     suspend fun deleteAll(ids: List<String>)
 
+    // Summed byte size of every stroke's compressed `points` blob for a page. Used to estimate a
+    // page's resident memory cost *before* loading it (cache admission control). LENGTH() on a BLOB
+    // returns its byte count; COALESCE keeps an empty page at 0 instead of null.
+    @Query("SELECT COALESCE(SUM(LENGTH(points)), 0) FROM stroke WHERE pageId = :pageId")
+    suspend fun sumPointsLength(pageId: String): Long
+
     @Transaction
     @Query("SELECT * FROM stroke WHERE id =:strokeId")
     suspend fun getById(strokeId: String): Stroke
@@ -128,6 +135,11 @@ class StrokeRepository @Inject constructor(
         ids.chunked(900).forEach { batch ->
             db.deleteAll(batch)
         }
+    }
+
+    /** Summed compressed-blob byte size of a page's strokes; for pre-load cache cost estimation. */
+    suspend fun sumPointsLength(pageId: String): Long {
+        return db.sumPointsLength(pageId)
     }
 
     suspend fun getStrokeWithPointsById(strokeId: String): Stroke {

@@ -24,7 +24,7 @@ sealed class Operation {
 
     // In-place update of existing entities (same ids): move, resize, recolour, … Its inverse is
     // another Update carrying the previous values, so undo/redo never delete-then-reinsert the same
-    // id (which raced to a UNIQUE(Image.id) crash). See docs/crash-handling-plan.md, Crash #3.
+    // id (which raced to a UNIQUE(Image.id) crash). See docs/plans/crash-handling-plan.md, Crash #3.
     data class UpdateStroke(val strokes: List<Stroke>) : Operation()
     data class UpdateImage(val images: List<Image>) : Operation()
 }

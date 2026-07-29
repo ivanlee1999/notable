@@ -50,7 +50,6 @@ import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -302,9 +301,11 @@ class PageView(
                 logCache.d("Loaded page from persistent layer $currentPageId")
                 if (!pageDataManager.validatePageDataLoaded(currentPageId))
                     logCache.e("Page should be loaded, but it is not. $currentPageId")
+                // Admission control already evicts to fit before this load, so this trim is only a
+                // safety net for an under-estimate (actual > estimate); run it at load completion,
+                // not after a magic delay. Then prefetch neighbors into whatever budget is left.
                 coroutineScope.launch(Dispatchers.Default) {
-                    delay(10)
-                    pageDataManager.reduceCache(20)
+                    pageDataManager.trimToBudget()
                     pageDataManager.cacheNeighbors()
                 }
 //                sleep(10000)

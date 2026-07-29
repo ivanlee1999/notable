@@ -181,7 +181,7 @@ class WebDAVClient(
         if (!localFile.exists()) return AppResult.Error(DomainError.SyncError("Local file missing"))
         // Stream the file straight to the socket (okhttp reads it in chunks with a known
         // Content-Length) instead of readBytes() loading the whole file into memory — matters for
-        // large serialized pages and images. See docs/crash-handling-plan.md "Sync upload memory".
+        // large serialized pages and images. See docs/plans/crash-handling-plan.md "Sync upload memory".
         return execute("PUT", {
             val requestBody = localFile.asRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)

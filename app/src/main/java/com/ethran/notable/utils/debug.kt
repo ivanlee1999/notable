@@ -13,7 +13,7 @@ private const val APP_PACKAGE = "com.ethran.notable"
  *
  * Keeps only frames in [APP_PACKAGE] — coroutine dispatchers, `BaseContinuationImpl.resumeWith`,
  * reflection, and other plumbing otherwise fill a fixed window and push the real caller out (see
- * docs/crash-handling-plan.md, Phase 0). Excludes this file's own frames, then takes at most [n].
+ * docs/plans/crash-handling-plan.md, Phase 0). Excludes this file's own frames, then takes at most [n].
  * If no app frame is present (e.g. a pure coroutine resume with nothing of ours on the stack), it
  * falls back to the raw top-[n] frames so the log is never empty. It still cannot cross a
  * suspension boundary — pair it with a launch-site breadcrumb for async flows.
