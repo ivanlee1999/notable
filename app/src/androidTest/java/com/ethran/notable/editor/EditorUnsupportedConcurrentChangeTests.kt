@@ -27,7 +27,7 @@ import org.junit.runner.RunWith
  *
  * Device-independent variant: it deliberately does NOT use a Compose test rule, so it runs on every
  * device — including ones where the Compose UI-test harness wedges (Redmi Note 9 Pro / LineageOS; see
- * [com.ethran.notable.testing.ComposeUiTestSupport]). The real assertion — that no [SelectionState]
+ * [com.ethran.notable.testing.ComposeUiTestSupport]). The real assertion — that no [com.ethran.notable.editor.state.SelectionState]
  * snapshot write happens off the main thread during a page switch — is caught by
  * `Snapshot.registerGlobalWriteObserver`, which needs no running composition.
  *
@@ -54,7 +54,7 @@ class EditorUnsupportedConcurrentChangeTests {
     }
 
     /**
-     * Drives a real page switch through the ViewModel and asserts that no [SelectionState] snapshot
+     * Drives a real page switch through the ViewModel and asserts that no [com.ethran.notable.editor.state.SelectionState] snapshot
      * write happens off the main thread — the root of the "Unsupported concurrent change during
      * composition" crash. Uses `Snapshot.registerGlobalWriteObserver` (no composition needed).
      */
