@@ -70,6 +70,8 @@ class EditorSimpleStateTests {
         val kvProxy = KvProxy(kvRepository, CryptoHelper())
 
         val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
+        val pageSyncStateRepository =
+            com.ethran.notable.data.db.PageSyncStateRepository(db.pageSyncStateDao())
         val appRepository = AppRepository(
             bookRepository = bookRepository,
             pageRepository = pageRepository,
@@ -77,6 +79,7 @@ class EditorSimpleStateTests {
             imageRepository = imageRepository,
             folderRepository = folderRepository,
             notebookSyncStateRepository = notebookSyncStateRepository,
+            pageSyncStateRepository = pageSyncStateRepository,
             kvProxy = kvProxy,
             db = db,
         )
