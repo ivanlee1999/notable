@@ -227,6 +227,37 @@ class WebDAVClient(
             }
         }
 
+    /**
+     * Stream a local file to the server and return its new ETag (or `null` if the server sent none),
+     * the streaming counterpart of the ByteArray [putFileReturningEtag]. Used for per-page uploads
+     * (Phase 10c): the page JSON is streamed from a temp file to bound memory, and the returned ETag
+     * is stored in `page_sync_state` so the next sync can skip the page when unchanged. Returns
+     * [DomainError.SyncConflict] on a 412 (the [ifMatch] guard, Phase 10e).
+     */
+    fun putFileReturningEtag(
+        path: String,
+        localFile: File,
+        contentType: String = "application/octet-stream",
+        ifMatch: String? = null
+    ): AppResult<String?, DomainError> {
+        if (!localFile.exists()) return AppResult.Error(DomainError.SyncError("Local file missing"))
+        return execute("PUT", {
+            val requestBody = localFile.asRequestBody(contentType.toMediaType())
+            Request.Builder().url(buildUrl(path)).put(requestBody)
+                .header("Authorization", credentials)
+                .apply { ifMatch?.let { header("If-Match", it) } }
+                .build()
+        }) { response ->
+            when {
+                response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
+                    AppResult.Error(DomainError.SyncConflict)
+
+                response.isSuccessful -> AppResult.Success(response.header("ETag"))
+                else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
+            }
+        }
+    }
+
     fun getFile(path: String): AppResult<ByteArray, DomainError> {
         return getFileWithMetadata(path).map { it.content }
     }
@@ -377,6 +408,31 @@ class WebDAVClient(
         }
 
     /**
+     * List a collection's child files with their ETags, keyed by full (decoded) filename —
+     * `{pageId}.json`, image, and background names, *not* bare UUIDs (unlike [listCollection] /
+     * [listCollectionWithMetadata], whose `isValidUuid` filter would drop every `.json`). Used by
+     * per-page sync (Phase 10) to compare each page's remote ETag against the stored one. Returns an
+     * empty map when the collection does not exist (404). Entries whose ETag the server omitted map
+     * to `null`.
+     */
+    fun listEtags(path: String): AppResult<Map<String, String?>, DomainError> =
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+            when {
+                response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyMap())
+                response.isSuccessful -> {
+                    val selfName = path.trimEnd('/').substringAfterLast('/')
+                    val map = WebDavXml.parseEntries(response.body.string())
+                        .map { Uri.decode(it.href.trimEnd('/').substringAfterLast('/')) to it.etag }
+                        .filter { (name, _) -> name.isNotEmpty() && name != selfName }
+                        .toMap()
+                    AppResult.Success(map)
+                }
+
+                else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
+            }
+        }
+
+    /**
      * List resources in a collection with their last-modified timestamps.
      * Used for tombstone-based deletion tracking where we need the server's
      * own timestamp for conflict resolution.
@@ -388,10 +444,10 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
                     val entries = WebDavXml.parseEntries(response.body.string())
-                    AppResult.Success(entries.filter { (href, _) -> href != path && !href.endsWith("/$path") }
-                        .mapNotNull { (href, lastModified) ->
-                            val name = Uri.decode(href.trimEnd('/').substringAfterLast('/'))
-                            if (WebDavXml.isValidUuid(name)) RemoteEntry(name, lastModified) else null
+                    AppResult.Success(entries.filter { it.href != path && !it.href.endsWith("/$path") }
+                        .mapNotNull { entry ->
+                            val name = Uri.decode(entry.href.trimEnd('/').substringAfterLast('/'))
+                            if (WebDavXml.isValidUuid(name)) RemoteEntry(name, entry.lastModified) else null
                         })
                 }
 

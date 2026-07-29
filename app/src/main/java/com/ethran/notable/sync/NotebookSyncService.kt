@@ -4,6 +4,8 @@ import android.net.Uri
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
+import com.ethran.notable.data.db.PageSyncState
+import com.ethran.notable.sync.PageSyncSelector.selectDirtyPages
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.sync.serializers.NotebookSerializer
@@ -225,12 +227,36 @@ class NotebookSyncService @Inject constructor(
         }.flatMap {
             client.createCollection(SyncPaths.backgroundsDir(notebookId))
         }.flatMap {
-            // 1. Upload every page (and its images/backgrounds) FIRST.
+            // 1. Upload only the DIRTY pages FIRST (Phase 10c). Pages unchanged since their last
+            //    committed sync are skipped -- editing one page of an 800-page notebook now PUTs one
+            //    page, not 800. Skipped pages keep their existing page_sync_state row.
             val pages = appRepository.pageRepository.getByIds(notebook.pageIds)
+            val rowsByPageId =
+                appRepository.pageSyncStateRepository.getByNotebook(notebookId).associateBy { it.pageId }
+            val dirtyPages = selectDirtyPages(pages, rowsByPageId)
+            log.i(TAG, "${dirtyPages.size}/${pages.size} page(s) dirty, uploading")
+
             val errors = ErrorAccumulator()
-            for (page in pages) {
-                uploadPage(page, notebookId, client).onError { errors.add(it) }
+            val committedPageRows = mutableListOf<PageSyncState>()
+            for (page in dirtyPages) {
+                // Phase 10e: guard the dirty-page PUT with the stored ETag. A concurrent remote
+                // change to this page 412s, aborting before manifest publish (nothing committed);
+                // new pages (no row) send no If-Match.
+                val ifMatch = rowsByPageId[page.id]?.remoteEtag
+                uploadPage(page, notebookId, client, ifMatch).onSuccess { pageEtag ->
+                    committedPageRows.add(
+                        PageSyncState(
+                            pageId = page.id,
+                            notebookId = notebookId,
+                            remoteEtag = pageEtag,
+                            localUpdatedAtAtSync = page.updatedAt,
+                            lastSyncedAt = java.util.Date(),
+                        )
+                    )
+                }.onError { errors.add(it) }
             }
+            // Rows for pages that left the notebook are dropped in the commit transaction.
+            val departedPageIds = rowsByPageId.keys - notebook.pageIds.toSet()
 
             // 2. If any page failed, do NOT publish the manifest. Leaving the old commit marker in
             //    place keeps the notebook "not yet updated" for other devices and makes this device
@@ -238,19 +264,26 @@ class NotebookSyncService @Inject constructor(
             if (errors.hasErrors) {
                 errors.asResult(Unit)
             } else {
-                // 3. All pages are up: publish the manifest last. This is the atomic commit; the
-                //    If-Match guard rejects the publish if the remote changed since we read it.
+                // 3. All dirty pages are up: publish the manifest last. This is the atomic commit;
+                //    the If-Match guard rejects the publish if the remote changed since we read it.
                 //    Capture the new ETag so next sync can do a cheap If-None-Match check (P26).
                 val manifestJson = NotebookSerializer.serializeManifest(notebook)
                 publishManifest(notebookId, manifestJson.toByteArray(), manifestIfMatch, client)
                     .onSuccess { newEtag ->
-                    // Commit point: record the notebook as synced. After upload, the remote's
-                    // updatedAt equals the manifest we just wrote (notebook.updatedAt).
-                    appRepository.notebookSyncStateRepository.markSynced(
-                        notebookId = notebookId,
+                    // If the server returned no ETag on any page PUT, one PROPFIND on the pages dir
+                    // backfills them so the stored rows can drive next sync's skip (Phase 10c).
+                    backfillMissingPageEtags(notebookId, committedPageRows, client)
+                    // Commit point (Phase 10 invariant 2, page-level): mark the notebook synced,
+                    // write the uploaded pages' rows, and drop departed rows -- all in one
+                    // transaction. After upload the remote's updatedAt equals the manifest we just
+                    // wrote (notebook.updatedAt).
+                    appRepository.commitNotebookSync(
+                        notebook = notebook,
                         localUpdatedAt = notebook.updatedAt,
                         remoteUpdatedAt = notebook.updatedAt,
-                        remoteEtag = newEtag,
+                        manifestEtag = newEtag,
+                        committedPageRows = committedPageRows,
+                        departedPageIds = departedPageIds.toList(),
                     )
                     // Only after a committed upload: drop any stale tombstone for a resurrected
                     // notebook. Best-effort -- a leftover tombstone is re-checked next sync.
@@ -267,6 +300,30 @@ class NotebookSyncService @Inject constructor(
                     // referenced by the manifest we just committed (P11). Never fails the upload.
                     garbageCollectRemote(notebook, client)
                 }.map { }
+            }
+        }
+    }
+
+    /**
+     * Fill in ETags for uploaded pages whose PUT response carried none, via one Depth-1 PROPFIND on
+     * the pages directory. A page row with a null ETag would force a re-download next sync (its
+     * stored ETag never matches the server's), so this keeps the skip path effective on servers that
+     * don't echo an ETag on PUT. Best-effort: on PROPFIND failure the rows keep their null ETags.
+     */
+    private suspend fun backfillMissingPageEtags(
+        notebookId: String,
+        rows: MutableList<PageSyncState>,
+        client: WebDAVClient
+    ) {
+        if (rows.none { it.remoteEtag == null }) return
+        val etagsByName = client.listEtags(SyncPaths.pagesDir(notebookId)).getOrElse {
+            log.w(TAG, "Page ETag backfill PROPFIND failed: ${it.userMessage}")
+            return
+        }
+        for (i in rows.indices) {
+            val row = rows[i]
+            if (row.remoteEtag == null) {
+                etagsByName["${row.pageId}.json"]?.let { rows[i] = row.copy(remoteEtag = it) }
             }
         }
     }
@@ -314,11 +371,17 @@ class NotebookSyncService @Inject constructor(
         }
     }
 
+    /**
+     * Upload one page's JSON (streamed from a temp file) plus its images/backgrounds, returning the
+     * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
+     * against a concurrent remote change (Phase 10e); pass `null` for a page with no prior sync row.
+     */
     private suspend fun uploadPage(
         page: Page,
         notebookId: String,
-        client: WebDAVClient
-    ): AppResult<Unit, DomainError> {
+        client: WebDAVClient,
+        ifMatch: String? = null
+    ): AppResult<String?, DomainError> {
         val pageWithData =
             appRepository.pageRepository.getWithDataById(page.id) ?: return AppResult.Error(
                 DomainError.DatabaseError("Page data not found for page ID: ${page.id}")
@@ -329,17 +392,32 @@ class NotebookSyncService @Inject constructor(
         // materialised its point data several times over and OOM'd. See
         // docs/plans/crash-handling-plan.md "Sync upload memory".
         val tempFile = File.createTempFile("notable-page-", ".json", context.cacheDir)
+        val pagePath = SyncPaths.pageFile(notebookId, page.id)
         val pageUploaded = try {
             tempFile.outputStream().buffered().use { out ->
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
-            client.putFile(
-                SyncPaths.pageFile(notebookId, page.id), tempFile, "application/json"
-            )
+            val guarded = client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch)
+            // A page-level 412 is NOT a terminal conflict in 10-I. The manifest publish's own If-Match
+            // is the real whole-notebook last-writer-wins guard; a page's stored ETag can be stale for
+            // benign reasons that must self-heal, not wedge the notebook in a permanent false conflict:
+            //  - our own prior sync PUT this page then failed on a later media upload, so the row was
+            //    never committed and still holds the pre-PUT ETag (review Risk 1);
+            //  - the server regenerated the ETag with no content change (review Risk 2 / the "harmless
+            //    re-transfer" design note).
+            // Overwrite unconditionally; a genuine concurrent *notebook* change is still caught when
+            // the manifest publish 412s, keeping page-file clobbering invisible to other devices (they
+            // stay gated on the manifest commit marker). True page-level conflict handling is 10f.
+            if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict && ifMatch != null) {
+                log.w(TAG, "Page ${page.id} If-Match 412; overwriting (manifest guard still applies)")
+                client.putFileReturningEtag(pagePath, tempFile, "application/json", null)
+            } else {
+                guarded
+            }
         } finally {
             tempFile.delete()
         }
-        return pageUploaded.flatMap {
+        return pageUploaded.flatMap { pageEtag ->
             val errors = ErrorAccumulator()
             for (image in pageWithData.images) {
                 if (!image.uri.isNullOrEmpty()) {
@@ -381,7 +459,7 @@ class NotebookSyncService @Inject constructor(
                 }
             }
 
-            errors.asResult(Unit)
+            errors.asResult(pageEtag)
         }
     }
 
@@ -434,29 +512,73 @@ class NotebookSyncService @Inject constructor(
             }
         }
 
-        // 4. Download and persist all pages.
+        // 4. One Depth-1 PROPFIND on the pages dir gives every page's current remote ETag, so we can
+        //    fetch only the pages that changed since our last committed sync (Phase 10d). On PROPFIND
+        //    failure the map is empty -> every page's current ETag reads null -> all pages fetched
+        //    (the pre-10d behavior), which is safe, just not economical.
+        val currentEtagByPageId = client.listEtags(SyncPaths.pagesDir(notebookId)).getOrElse {
+            log.w(TAG, "Page listing PROPFIND failed for ${notebook.title}; fetching all pages: ${it.userMessage}")
+            emptyMap<String, String?>()
+        }.mapNotNull { (name, etag) ->
+            if (name.endsWith(".json")) name.removeSuffix(".json") to etag else null
+        }.toMap()
+        // A server that lists pages but omits <getetag> makes download-skip a silent no-op (every page
+        // re-fetched every sync). Correct, just not economical -- surface it once so it's diagnosable.
+        if (currentEtagByPageId.isNotEmpty() && currentEtagByPageId.values.all { it == null }) {
+            log.w(TAG, "Server returned no page ETags for ${notebook.title}; download-skip disabled (fetching all)")
+        }
+        val rowsByPageId =
+            appRepository.pageSyncStateRepository.getByNotebook(notebookId).associateBy { it.pageId }
+
+        // 5. Download and persist the changed pages; skipped pages keep their local content and row.
         val errors = ErrorAccumulator()
+        val committedPageRows = mutableListOf<PageSyncState>()
         // Backgrounds are often shared across pages (e.g. a PDF); fetch each distinct one once.
         val attemptedBackgrounds = mutableSetOf<String>()
+        var fetched = 0
         for (pageId in notebook.pageIds) {
-            downloadPage(pageId, notebookId, client, attemptedBackgrounds).onError { errors.add(it) }
+            val currentEtag = currentEtagByPageId[pageId]
+            val storedEtag = rowsByPageId[pageId]?.remoteEtag
+            // Fetch when we have no committed row, when we couldn't read the remote ETag (fetch to be
+            // safe), or when the remote ETag differs from what we last committed.
+            val needsFetch = rowsByPageId[pageId] == null || currentEtag == null || storedEtag != currentEtag
+            if (!needsFetch) continue
+            fetched++
+            downloadPage(pageId, notebookId, client, attemptedBackgrounds).onSuccess { pageUpdatedAt ->
+                committedPageRows.add(
+                    PageSyncState(
+                        pageId = pageId,
+                        notebookId = notebookId,
+                        remoteEtag = currentEtag,
+                        localUpdatedAtAtSync = pageUpdatedAt,
+                        lastSyncedAt = java.util.Date(),
+                    )
+                )
+            }.onError { errors.add(it) }
         }
+        log.i(TAG, "Downloaded $fetched/${notebook.pageIds.size} changed page(s) for ${notebook.title}")
 
-        // 5. Commit: only when every page landed, write the notebook row with the real remote
+        // 6. Commit: only when every fetched page landed, write the notebook row with the real remote
         //    timestamp. On any failure the notebook keeps its old/sentinel timestamp, so the next
         //    sync retries the download rather than treating the hole as "in sync".
         if (errors.hasErrors) {
             log.w(TAG, "Download incomplete for ${notebook.title}; leaving timestamp stale to retry")
             return errors.asResult(Unit)
         }
+        val departedPageIds =
+            (rowsByPageId.keys - notebook.pageIds.toSet()).toList()
         return try {
             appRepository.bookRepository.updatePreservingTimestamp(notebook)
-            // Commit point: record the notebook as synced at the remote timestamp.
-            appRepository.notebookSyncStateRepository.markSynced(
-                notebookId = notebookId,
+            // Commit point (Phase 10 invariant 2, page-level): mark the notebook synced at the remote
+            // timestamp, write the fetched pages' rows, and drop rows for departed pages -- one
+            // transaction. Skipped pages keep their prior rows untouched.
+            appRepository.commitNotebookSync(
+                notebook = notebook,
                 localUpdatedAt = notebook.updatedAt,
                 remoteUpdatedAt = notebook.updatedAt,
-                remoteEtag = remoteEtag,
+                manifestEtag = remoteEtag,
+                committedPageRows = committedPageRows,
+                departedPageIds = departedPageIds,
             )
             // Best-effort GC: delete local pages that are no longer in the downloaded manifest (P11).
             pruneLocalOrphanPages(notebook)
@@ -467,12 +589,17 @@ class NotebookSyncService @Inject constructor(
         }
     }
 
+    /**
+     * Fetch, persist, and return one page's `updatedAt` (used as its `page_sync_state` anchor). A
+     * permanently-missing media file (404) is non-fatal; a transient media error is aggregated so
+     * the page is retried next sync.
+     */
     private suspend fun downloadPage(
         pageId: String,
         notebookId: String,
         client: WebDAVClient,
         attemptedBackgrounds: MutableSet<String>
-    ): AppResult<Unit, DomainError> {
+    ): AppResult<java.util.Date, DomainError> {
 
         // 1. Fetch JSON file (Early Return on error)
         val pageBytes = client.getFile(SyncPaths.pageFile(notebookId, pageId))
@@ -539,8 +666,8 @@ class NotebookSyncService @Inject constructor(
             errors.add(DomainError.DatabaseError("Failed to save page $pageId: ${e.message}"))
         }
 
-        // 6. Return aggregated result
-        return errors.asResult(Unit)
+        // 6. Return aggregated result, carrying the page's updatedAt as its sync anchor (Phase 10d).
+        return errors.asResult(page.updatedAt)
     }
 
     /**

@@ -114,4 +114,36 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 35 -> 36 (Phase 10-I): the additive `page_sync_state` table. Verifies the auto-migration
+     * creates the table with the expected columns and that a row round-trips after migration.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate35To36_addsPageSyncStateTable() {
+        val dbName = "migration-test-36"
+
+        // 1. Create the v35 schema (page_sync_state does not exist yet) and close it.
+        helper.createDatabase(dbName, 35).close()
+
+        // 2. Reopen at the latest version to trigger the 35 -> 36 auto-migration.
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // 3. The new table exists and accepts a row with the expected columns.
+        migratedDb.execSQL(
+            """
+            INSERT INTO page_sync_state (pageId, notebookId, remoteEtag, localUpdatedAtAtSync, lastSyncedAt)
+            VALUES ('page1', 'notebook1', '"etag-1"', 1620000000000, 1620000000001)
+            """.trimIndent()
+        )
+        val cursor = migratedDb.query("SELECT remoteEtag FROM page_sync_state WHERE pageId = 'page1'")
+        cursor.use {
+            assertTrue(it.moveToFirst())
+            assertEquals("\"etag-1\"", it.getString(it.getColumnIndexOrThrow("remoteEtag")))
+        }
+
+        roomDb.close()
+    }
 }

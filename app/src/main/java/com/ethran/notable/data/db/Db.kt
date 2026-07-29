@@ -54,8 +54,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class],
-    version = 35,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class],
+    version = 36,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -71,7 +71,10 @@ class Converters {
         AutoMigration(31, 32, spec = AutoMigration31to32::class),
         AutoMigration(32, 33),
         AutoMigration(33, 34),
-        AutoMigration(34, 35)
+        AutoMigration(34, 35),
+        // 35 -> 36: purely additive `page_sync_state` table (Phase 10-I per-page sync). No spec
+        // needed — Room generates the CREATE TABLE. See docs/plans/webdav-sync-improvement-plan.md.
+        AutoMigration(35, 36)
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -84,6 +87,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun strokeDao(): StrokeDao
     abstract fun ImageDao(): ImageDao
     abstract fun notebookSyncStateDao(): NotebookSyncStateDao
+    abstract fun pageSyncStateDao(): PageSyncStateDao
 
 //    companion object {
 //        private var INSTANCE: AppDatabase? = null
@@ -173,6 +177,10 @@ object DatabaseModule {
     @Provides
     fun provideNotebookSyncStateDao(db: AppDatabase): NotebookSyncStateDao =
         db.notebookSyncStateDao()
+
+    @Provides
+    fun providePageSyncStateDao(db: AppDatabase): PageSyncStateDao =
+        db.pageSyncStateDao()
 
 
 
