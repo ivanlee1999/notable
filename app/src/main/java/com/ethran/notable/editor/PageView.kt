@@ -62,6 +62,10 @@ import kotlin.system.measureTimeMillis
 
 const val OVERLAP = 2
 
+// Backgrounds are rendered this much larger than the current zoom so a small zoom-in reuses the
+// cached bitmap instead of re-rendering (trades a little memory/render cost for fewer reloads).
+private const val BACKGROUND_ZOOM_HEADROOM = 1.2f
+
 data class PageCutMoveResult(
     val previousStrokes: List<Stroke>,
     val movedStrokes: List<Stroke>,
@@ -159,8 +163,11 @@ class PageView(
             log.i("Background bitmap (cached): ${cached.bitmap}")
             return cached.bitmap
         }
-        // 0.1 to avoid constant rerender on zoom.
-        val newBackground = CachedBackground(filePath, pageNumber, scale + 0.1f)
+        // Render a little larger than requested so small zoom-in steps reuse this bitmap instead of
+        // forcing a re-render (matches() accepts any cached scale >= requested). Multiplicative so
+        // the headroom stays proportional as you zoom; floored to the old additive margin near 1x.
+        val renderScale = (scale * BACKGROUND_ZOOM_HEADROOM).coerceAtLeast(scale + 0.1f)
+        val newBackground = CachedBackground(filePath, pageNumber, renderScale)
         currentBackground = newBackground
         log.i("Background bitmap: ${newBackground.bitmap}")
         return newBackground.bitmap

@@ -55,6 +55,13 @@ data class CachedBackground(val path: String, val pageNumber: Int, val scale: Fl
     val id: String = keyOf(path, pageNumber)
 
     var bitmap: Bitmap? = loadBackgroundBitmap(path, pageNumber, scale)
+
+    // Access-order stamp for the background pool's own LRU eviction (a budget line separate from
+    // stroke/image page eviction); bumped whenever this background is set or read.
+    var lastAccessSeq: Long = 0L
+
+    fun bitmapBytes(): Long = bitmap?.allocationByteCount?.toLong() ?: 0L
+
     fun matches(filePath: String, pageNum: Int, targetScale: Float): Boolean {
         return path == filePath && pageNumber == pageNum && scale >= targetScale // Consider valid if our scale is larger
     }
@@ -98,6 +105,11 @@ internal class PageCacheEntry(val pageId: String) {
     var loadJob: Job? = null
     var backgroundKey: String? = null
 
+    // Whether this page's background is a Native (dotted/lined/blank) type, which has no bitmap to
+    // cache — resolved once by [PageDataManager.preLoadBackground]. null = not yet known. Lets
+    // [PageDataManager.ensureBackgroundLoaded] skip a pointless reload/DB fetch for native pages.
+    var backgroundIsNative: Boolean? = null
+
     // Windowed screen bitmap (was bitmapCache); SoftReference so ART can reclaim it under pressure.
     var bitmap: SoftReference<Bitmap>? = null
 
@@ -138,11 +150,32 @@ class PageDataManager @Inject constructor(
     private var entriesTotalBytes = 0L
     private var accessSeq = 0L
 
-    // Shared background pool, deduped by CachedBackground.id, counted once for the budget.
+    // Shared background pool, deduped by CachedBackground.id. Backgrounds are large PDF/image
+    // bitmaps (tens of MB each) and are managed on their OWN budget line ([backgroundCapLocked] /
+    // [trimBackgroundsLocked]), independent of stroke/image page eviction — so a page full of cheap
+    // strokes is never evicted just because backgrounds are big (the churn Phase 1b originally
+    // caused; the plan's 1b-2 "own budget line" made concrete).
     private val backgroundCache = LinkedHashMap<String, CachedBackground>()
+    private var bgAccessSeq = 0L
 
-    // Heap budget: half the ART app-heap ceiling minus a fixed reserve for windowed/UI bitmaps.
-    private val budget = CacheBudget({ Runtime.getRuntime().maxMemory() })
+    // Fraction of the ART app-heap that stroke pages + backgrounds may use *together*. The remaining
+    // ~30% is deliberately left uncounted for: the windowed canvas bitmap, Compose/UI objects, and
+    // the transient stroke copy a page load allocates (the copy that actually OOMed in the P1 repro).
+    // Raised from the original ~0.5 combined budget (which held only ~2 backgrounds and thrashed);
+    // pushing it higher trades that safety margin — tune down first if the P1 repro OOMs.
+    private val heapBudgetFraction = 0.7
+
+    // Stroke/image page budget: [heapBudgetFraction] of the ART app-heap. Governs page (entry)
+    // eviction only — backgrounds are NOT counted against it, so cheap stroke pages have huge
+    // headroom and are essentially never evicted on a normal notebook. Strokes are user data and get
+    // priority: a pathologically large page may use the whole ceiling, evicting backgrounds first.
+    private val budget = CacheBudget(
+        { Runtime.getRuntime().maxMemory() }, fraction = heapBudgetFraction, reserveBytes = 0L
+    )
+
+    // Always leave room for at least one full-screen background bitmap (the pinned current page's),
+    // even when strokes dominate the heap.
+    private val minBackgroundBytes = 32L * 1024 * 1024
 
     // observe background file changes
     // fileObservers: filename to observer
@@ -202,12 +235,81 @@ class PageDataManager @Inject constructor(
     private fun isPinnedLocked(pageId: String, entry: PageCacheEntry): Boolean =
         pageId == currentPage || entry.loadJob?.isActive == true
 
-    /** Distinct background bitmaps, counted once (dedup pool) — a separate budget line. */
+    /** Distinct background bitmaps, counted once (dedup pool) — the background budget line. */
     private fun backgroundBytesLocked(): Long =
-        backgroundCache.values.sumOf { it.bitmap?.allocationByteCount?.toLong() ?: 0L }
+        backgroundCache.values.sumOf { it.bitmapBytes() }
 
-    /** Total counted resident bytes: stroke/image entries + pooled backgrounds (not windowed bitmaps). */
+    /** Total resident bytes for reporting only (stroke/image entries + pooled backgrounds). */
     private fun residentBytesLocked(): Long = entriesTotalBytes + backgroundBytesLocked()
+
+    /**
+     * Byte budget for the background pool: whatever is left under the shared heap ceiling
+     * ([heapBudgetFraction]) after resident stroke/image bytes, floored so the current page's
+     * background always fits. Strokes (resident + the [pendingEntryBytes] of a page about to load)
+     * are weighted ×2, so a growing stroke page yields background heap ahead of its own load's
+     * transient copy rather than after it. Recomputed on demand — cheap.
+     */
+    private fun backgroundCapLocked(pendingEntryBytes: Long = 0L): Long {
+        val ceiling = (Runtime.getRuntime().maxMemory() * heapBudgetFraction).toLong()
+        return (ceiling - 2 * entriesTotalBytes - 2 * pendingEntryBytes)
+            .coerceAtLeast(minBackgroundBytes)
+    }
+
+    /**
+     * Evict least-recently-used pooled backgrounds until the pool fits [backgroundCapLocked]. The
+     * current page's background is pinned (never evicted). An evicted background leaves its page's
+     * [PageCacheEntry.backgroundKey] intact and is transparently reloaded on demand by
+     * [ensureBackgroundLoaded] when that page is next shown — so this is safe for still-resident
+     * pages. Must hold [lock].
+     */
+    private fun trimBackgroundsLocked(pendingEntryBytes: Long = 0L) {
+        val cap = backgroundCapLocked(pendingEntryBytes)
+        var total = backgroundBytesLocked()
+        if (total <= cap) return
+        val currentKey = entries[currentPage]?.backgroundKey
+        val victims = backgroundCache.values
+            .asSequence()
+            .filter { it.id != currentKey }
+            .sortedBy { it.lastAccessSeq }
+            .toList()
+        var evicted = 0
+        for (bg in victims) {
+            if (total <= cap) break
+            backgroundCache.remove(bg.id)
+            total -= bg.bitmapBytes()
+            evicted++
+        }
+        if (evicted > 0)
+            log.d("trimBackgrounds evicted $evicted background(s) (cap=${cap / 1024 / 1024}MB, now=${total / 1024 / 1024}MB)")
+    }
+
+    /**
+     * Ensures [pageId]'s background bitmap is resident, reloading it if the pool evicted it while the
+     * page's strokes stayed cached (backgrounds and pages are on separate budget lines). No-op if
+     * already present (just bumps its LRU stamp). Suspends on a reload (PDF/image decode); the check
+     * runs before constructing anything so an already-cached background is never re-decoded.
+     */
+    private suspend fun ensureBackgroundLoaded(pageId: String) {
+        if (pageId.isEmpty()) return
+        val needsReload = synchronized(lock) {
+            val entry = entries[pageId]
+            when {
+                // Native (dotted/lined/blank) pages have no bitmap background — nothing to reload.
+                entry?.backgroundIsNative == true -> false
+                else -> {
+                    val bg = entry?.backgroundKey?.let { backgroundCache[it] }
+                    if (bg?.bitmap != null) {
+                        bg.lastAccessSeq = ++bgAccessSeq
+                        false
+                    } else true
+                }
+            }
+        }
+        if (needsReload) {
+            log.d("Background not resident for $pageId — reloading")
+            preLoadBackground(pageId)
+        }
+    }
 
     /**
      * Recompute an entry's stroke/image resident size and apply the delta to [entriesTotalBytes].
@@ -296,7 +398,9 @@ class PageDataManager @Inject constructor(
                         isPrefetch = isPrefetch,
                         estimateBytes = estimate,
                         alreadyResidentBytes = alreadyResident,
-                        residentBytes = residentBytesLocked(),
+                        // Page eviction is gated on stroke/image bytes only; backgrounds have their
+                        // own budget line ([trimBackgroundsLocked]) and never evict a stroke page.
+                        residentBytes = entriesTotalBytes,
                         cap = cap,
                         candidates = evictCandidatesLocked(),
                     )
@@ -307,6 +411,11 @@ class PageDataManager @Inject constructor(
 
                         is AdmissionDecision.Load -> {
                             decision.evict.forEach { removePageLocked(it) }
+                            // Shrink the background pool to leave heap for this page's incoming
+                            // strokes, so a large current-page load can't OOM against resident
+                            // backgrounds. Evicted backgrounds reload on demand.
+                            val incoming = ((estimate ?: 0L) - alreadyResident).coerceAtLeast(0L)
+                            trimBackgroundsLocked(pendingEntryBytes = incoming)
                             if (decision.overBudget) {
                                 log.w("Over-budget load $pageId: est=$estimate cap=$cap — loading anyway")
                                 appEventBus.tryEmit(
@@ -344,6 +453,9 @@ class PageDataManager @Inject constructor(
         val bookId = pageFromDb?.notebookId
         log.d("requestCurrentPageLoadJoin($currentPage)")
         getOrStartLoadingJob(currentPage, bookId, isPrefetch = false)?.join()
+        // Strokes may be cached from a prior visit while the background pool evicted its bitmap;
+        // reload it so the current page never draws blank.
+        ensureBackgroundLoaded(currentPage)
     }
 
     private suspend fun cancelUnnecessaryLoading(pageId: String, bookId: String) {
@@ -373,7 +485,10 @@ class PageDataManager @Inject constructor(
             val nextPageId =
                 appRepository.getNextPageIdFromBookAndPage(pageId = currentPage, notebookId = bookId)
             log.d("Caching next page $nextPageId")
-            nextPageId?.let { getOrStartLoadingJob(it, null, isPrefetch = true) }
+            nextPageId?.let {
+                getOrStartLoadingJob(it, null, isPrefetch = true)
+                ensureNeighborBackground(it)
+            }
 
             val prevPageId =
                 appRepository.getPreviousPageIdFromBookAndPage(
@@ -381,7 +496,10 @@ class PageDataManager @Inject constructor(
                     notebookId = bookId
                 )
             log.d("Caching prev page $prevPageId")
-            prevPageId?.let { getOrStartLoadingJob(it, null, isPrefetch = true) }
+            prevPageId?.let {
+                getOrStartLoadingJob(it, null, isPrefetch = true)
+                ensureNeighborBackground(it)
+            }
         } catch (e: CancellationException) {
             log.i("Caching was cancelled: ${e.message}")
         } catch (e: Exception) {
@@ -390,6 +508,17 @@ class PageDataManager @Inject constructor(
                 AppEvent.ActionHint("Error encountered while caching neighbors", 5000)
             )
         }
+    }
+
+    /**
+     * Warms a neighbor's background only when its page is already resident: in that case its own
+     * (prefetch) load short-circuits and won't re-run [preLoadBackground], so if the pool evicted
+     * its background we reload it here. A not-yet-loaded neighbor loads its background as part of
+     * its fresh load, so we skip it here to avoid decoding the same bitmap twice.
+     */
+    private suspend fun ensureNeighborBackground(pageId: String) {
+        val alreadyLoaded = synchronized(lock) { entries[pageId]?.loaded == true }
+        if (alreadyLoaded) ensureBackgroundLoaded(pageId)
     }
 
     /**
@@ -416,9 +545,16 @@ class PageDataManager @Inject constructor(
                 appRepository, pageDataFromDb.notebookId, pageId
             ) ?: return
 
-            BackgroundType.Native -> return
+            // Native backgrounds (dotted/lined/blank) have no bitmap to cache; record that so
+            // ensureBackgroundLoaded doesn't keep trying to reload a nonexistent background.
+            BackgroundType.Native -> {
+                synchronized(lock) { entries[pageId]?.backgroundIsNative = true }
+                return
+            }
+
             BackgroundType.Image, ImageRepeating, CoverImage -> -1
         }
+        synchronized(lock) { entries[pageId]?.backgroundIsNative = false }
         val value = CachedBackground(background, pageNumber, 1f)
         log.i("Preloaded background: $value")
         setBackground(pageId, value)
@@ -861,9 +997,11 @@ class PageDataManager @Inject constructor(
                 // Merge/upgrade the shared pool: keep the higher-scale (higher-quality) bitmap.
                 val existing = backgroundCache[background.id]
                 if (existing == null || background.scale > existing.scale) {
+                    background.lastAccessSeq = ++bgAccessSeq
                     backgroundCache[background.id] = background
                     log.d("Cached background set: id=${background.id} scale=${background.scale}")
                 } else {
+                    existing.lastAccessSeq = ++bgAccessSeq
                     log.d("Cached background exists with equal/higher scale; reusing id=${existing.id} scale=${existing.scale}")
                 }
 
@@ -871,6 +1009,9 @@ class PageDataManager @Inject constructor(
                 getOrCreateEntryLocked(pageId).backgroundKey = background.id
 
                 if (observeBg) observeBackgroundFile(pageId, background.path)
+
+                // Keep the pool within its own budget line right after every addition.
+                trimBackgroundsLocked()
             }
         }
     }
@@ -883,6 +1024,7 @@ class PageDataManager @Inject constructor(
         return synchronized(lock) {
             val key = entries[currentPage]?.backgroundKey
             val bg = if (key != null) backgroundCache[key] else null
+            bg?.let { it.lastAccessSeq = ++bgAccessSeq }
             log.d("Background for page $currentPage (no. $currentPageNumber): $bg")
             bg ?: CachedBackground("", 0, 1.0f)
         }
@@ -1124,10 +1266,14 @@ class PageDataManager @Inject constructor(
     fun trimToBudget() {
         synchronized(lock) {
             val cap = budget.capBytes()
-            val victims = selectEvictions(evictCandidatesLocked(), residentBytesLocked(), 0L, cap)
+            // Page eviction is gated on stroke/image bytes only; backgrounds are trimmed on their
+            // own budget line below. On a normal notebook strokes are tiny, so this evicts nothing
+            // and the current page + both neighbors stay resident (no churn).
+            val victims = selectEvictions(evictCandidatesLocked(), entriesTotalBytes, 0L, cap)
             if (victims.isNotEmpty())
                 log.d("trimToBudget evicting ${victims.size} page(s): $victims (cap=${cap / 1024 / 1024}MB)")
             victims.forEach { removePageLocked(it) }
+            trimBackgroundsLocked()
             assertTotalsLocked()
         }
     }
