@@ -80,9 +80,6 @@ internal class PageCacheEntry(val pageId: String) {
     var strokes: MutableList<Stroke>? = null
     var images: MutableList<Image>? = null
 
-    // Per-page zoom (was the separate pageZoom map).
-    var zoom: Float = 1f
-
     // Resident bytes of strokes+images only (backgrounds and windowed bitmaps excluded).
     var sizeBytes: Long = 0L
     var sizeComputed: Boolean = false
@@ -133,8 +130,8 @@ class PageDataManager @Inject constructor(
      * - suspend calls — DB reads and cost estimation run outside, only their results are stored;
      * - filesystem or syscall work — see [BackgroundFileWatcher], called with the lock released;
      * - Compose snapshot commits — they run Compose's global write observers and can wake the
-     *   recomposer. Height/scroll live in [PageViewportState] for exactly this reason, and this
-     *   class no longer touches snapshot state at all;
+     *   recomposer. Height/scroll/zoom live in [PageViewportState] for exactly this reason, and
+     *   this class no longer touches snapshot state at all;
      * - other locks;
      * - remote logging above `log.d` — `log.w`/`log.e`/`log.i` reach ShipBook. Decide under the
      *   lock, report after; see the over-budget path in [getOrStartLoadingJob] and
@@ -184,9 +181,10 @@ class PageDataManager @Inject constructor(
     // lock. It is called only OUTSIDE [lock] (it touches the filesystem) and never calls back in;
     // it reports page ids to invalidate through a flow, collected in [init].
 
-    // Per-page height/scroll are Compose snapshot state owned by [PageViewportState]; this class
-    // only forwards to it, always with [lock] released. The one exception is its documented
-    // lock-safe [PageViewportState.scheduleRemoval], used when evicting.
+    // Per-page height/scroll/zoom are Compose snapshot state owned by [PageViewportState]; this
+    // class only forwards to it, always with [lock] released. The one exception is its documented
+    // lock-safe [PageViewportState.scheduleRemoval], used when evicting — which clears all three,
+    // so this view state still dies with its page exactly as it did when zoom lived in the entry.
 
     private val currentPage: String
         get() = pageFromDb?.id.orEmpty()
@@ -810,9 +808,8 @@ class PageDataManager @Inject constructor(
                 log.i("Persisting batch of bitmaps for pages: $uniquePageIds")
 
                 for (pageId in uniquePageIds) {
-                    val entry = synchronized(lock) { entries[pageId] }
-                    val bitmap = entry?.bitmap?.get()
-                    val currentZoomLevel = entry?.zoom
+                    val bitmap = synchronized(lock) { entries[pageId]?.bitmap?.get() }
+                    val currentZoomLevel = viewport.zoom(pageId)
                     val currentScroll = viewport.scroll(pageId)
 
                     if (bitmap == null || bitmap.isRecycled) {
@@ -890,9 +887,11 @@ class PageDataManager @Inject constructor(
         viewport.setScroll(pageId, scroll)
     }
 
-    fun getPageZoom(pageId: String): Float = synchronized(lock) { entries[pageId]?.zoom ?: 1f }
-    fun setPageZoom(pageId: String, zoom: Float) = synchronized(lock) {
-        getOrCreateEntryLocked(pageId).zoom = zoom
+    /** Stored zoom for [pageId]; 1f (unzoomed) for a page that has not been zoomed this session. */
+    fun getPageZoom(pageId: String): Float = viewport.zoom(pageId) ?: 1f
+
+    fun setPageZoom(pageId: String, zoom: Float) {
+        viewport.setZoom(pageId, zoom)
     }
 
 
