@@ -207,9 +207,12 @@ private fun JavaHeapSection(snap: MemorySnapshot) {
     )
     Caption("page entries ${mb(snap.entryBytes)} · other ${mb(snap.untrackedHeapBytes)}")
     if (snap.heapOverAccounted) {
+        // PageMemoryModel over-estimates on purpose (evict rather than OOM), so this is a magnitude
+        // readout, not a defect report: past 100% the margin has stopped being a safety margin.
         Caption(
-            "⚠ Modelled entry bytes exceed measured heap use — PageMemoryModel is over-estimating, " +
-                "so pages are being evicted earlier than necessary. \"other\" is clamped to zero."
+            "Modelled entry bytes are ${pctOf(snap.entryBytes, snap.usedHeapBytes)} of measured " +
+                "heap use. The model over-estimates by design, but above 100% it cannot be " +
+                "calibrated from here and \"other\" is clamped to zero."
         )
     }
 
@@ -457,6 +460,9 @@ private fun weightOf(part: Long, total: Long): Float =
     (part.toFloat() / total.toFloat()).coerceAtLeast(0.0001f)
 
 private fun pct(fraction: Double): String = "${(fraction * 100).toInt()}%"
+
+private fun pctOf(part: Long, whole: Long): String =
+    if (whole <= 0) "n/a" else "${part * 100 / whole}%"
 
 // Locale.US throughout: this text is copied into bug reports, and a locale-dependent decimal
 // separator would also break the monospace column alignment above.

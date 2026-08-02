@@ -157,8 +157,12 @@ class PageDataManager @Inject constructor(
         { Runtime.getRuntime().maxMemory() }, fraction = heapBudgetFraction, reserveBytes = 0L
     )
 
-    // Always leave room for at least the current page's full-screen background bitmap.
-    private val minBackgroundBytes = 32L * 1024 * 1024
+    // ARGB_8888; backgrounds and windowed bitmaps are both 4 bytes per pixel.
+    private val bytesPerPixel = 4
+
+    // Ceiling on the background floor below, as a fraction of the ART heap ceiling, so one
+    // pathologically large background cannot justify keeping the whole pool resident.
+    private val maxBackgroundFloorFraction = 0.25
 
     // observe background file changes
     // fileObservers: filename to observer
@@ -226,15 +230,42 @@ class PageDataManager @Inject constructor(
     private fun residentBytesLocked(): Long = entriesTotalBytes + backgroundBytesLocked()
 
     /**
+     * Bytes for one screen-sized ARGB_8888 bitmap. Read fresh rather than captured in a field:
+     * [SCREEN_WIDTH]/[SCREEN_HEIGHT] are globals that MainActivity overwrites with real display
+     * metrics, which can happen after this singleton is constructed — a captured value could be the
+     * pre-init EpdController guess.
+     */
+    private fun screenBitmapBytes(): Long =
+        SCREEN_WIDTH.toLong() * SCREEN_HEIGHT * bytesPerPixel
+
+    /**
+     * Floor for [backgroundCapLocked]: room for the current page's background plus one neighbour's,
+     * so an ordinary page turn doesn't re-decode a PDF page.
+     *
+     * Measured from the backgrounds actually resident rather than assumed from the screen. A
+     * background is rendered at screen width and the source PDF's own aspect ratio, so it is
+     * routinely taller than the screen — on a 2560-wide panel a single page measured ~42 MB against
+     * a 17.6 MB screen bitmap. The previous fixed 32 MB floor was therefore smaller than one
+     * background: the cap pinned to it, every non-current background was evicted on sight, and each
+     * page turn paid a fresh render. Bounded by [maxBackgroundFloorFraction]. Must hold [lock].
+     */
+    private fun minBackgroundBytesLocked(): Long {
+        val largestResident = backgroundCache.values.maxOfOrNull { it.bitmapBytes() } ?: 0L
+        val floor = maxOf(largestResident, screenBitmapBytes()) * 2
+        val bound = (Runtime.getRuntime().maxMemory() * maxBackgroundFloorFraction).toLong()
+        return floor.coerceAtMost(bound)
+    }
+
+    /**
      * Byte budget for the background pool: heap left under the ceiling after resident stroke/image
-     * bytes, floored at [minBackgroundBytes]. Strokes (resident + [pendingEntryBytes] of a page
-     * about to load) are weighted ×2 so a growing stroke page yields background heap ahead of its
-     * own load's transient copy.
+     * bytes, floored at [minBackgroundBytesLocked]. Strokes (resident + [pendingEntryBytes] of a
+     * page about to load) are weighted ×2 so a growing stroke page yields background heap ahead of
+     * its own load's transient copy.
      */
     private fun backgroundCapLocked(pendingEntryBytes: Long = 0L): Long {
         val ceiling = (Runtime.getRuntime().maxMemory() * heapBudgetFraction).toLong()
         return (ceiling - 2 * entriesTotalBytes - 2 * pendingEntryBytes)
-            .coerceAtLeast(minBackgroundBytes)
+            .coerceAtLeast(minBackgroundBytesLocked())
     }
 
     /**
