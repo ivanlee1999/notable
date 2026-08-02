@@ -72,7 +72,7 @@ class Converters {
         AutoMigration(32, 33),
         AutoMigration(33, 34),
         AutoMigration(34, 35),
-        AutoMigration(35, 36) // add `page_sync_state` table for
+        AutoMigration(35, 36, spec = AutoMigration35to36::class)  // add `page_sync_state` table for
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

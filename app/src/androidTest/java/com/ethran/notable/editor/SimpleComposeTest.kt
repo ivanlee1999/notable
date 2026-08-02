@@ -11,7 +11,6 @@ import org.junit.runner.RunWith
 /**
  * Compose harness smoke test. Gated by [ComposeUiSupportRule] so it is skipped (reported as ignored,
  * not hung) on devices whose Compose UI-test harness wedges — e.g. Redmi Note 9 Pro / LineageOS.
- * See docs/plans/instrumented-test-reliability-plan.md.
  */
 @RunWith(AndroidJUnit4::class)
 class SimpleComposeTest {

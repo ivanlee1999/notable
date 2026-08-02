@@ -7,7 +7,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Parser coverage for the ETag added to [WebDavXml.parseEntries] in Phase 10a. Instrumented because
+ * Parser coverage for the ETag parsed by [WebDavXml.parseEntries]. Instrumented because
  * `XmlPullParser` needs the Android runtime (no Robolectric in the JVM test source set).
  */
 @RunWith(AndroidJUnit4::class)

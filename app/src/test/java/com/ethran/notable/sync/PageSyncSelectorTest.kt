@@ -7,7 +7,7 @@ import org.junit.Test
 import java.util.Date
 
 /**
- * Table-driven tests for the pure page-level upload decision (Phase 10c). A page is dirty iff it has
+ * Table-driven tests for the pure page-level upload decision. A page is dirty iff it has
  * no committed sync row or its `updatedAt` is strictly newer than the row's anchor.
  */
 class PageSyncSelectorTest {
@@ -19,7 +19,7 @@ class PageSyncSelectorTest {
         pageId = pageId,
         notebookId = "nb",
         remoteEtag = etag,
-        localUpdatedAtAtSync = Date(anchor),
+        syncedLocalUpdatedAt = Date(anchor),
         lastSyncedAt = Date(anchor),
     )
 

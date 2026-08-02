@@ -132,7 +132,7 @@ class NotebookReconciliationService @Inject constructor(
 
         val action = NotebookSyncPlanner.decide(
             localUpdatedAt = localNotebook.updatedAt.time,
-            syncedLocalUpdatedAt = syncState?.localUpdatedAtAtSync?.time,
+            syncedLocalUpdatedAt = syncState?.syncedLocalUpdatedAt?.time,
             storedEtag = storedEtag,
             remoteChanged = remoteChanged,
             remote = remote,

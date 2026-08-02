@@ -35,7 +35,7 @@ sealed interface NotebookAction {
  * executor directly as a plain upload — it needs no timestamp reasoning.
  *
  * Conflict handling: when *both* sides changed, this returns the last-writer-wins outcome (upload if
- * local is newer, download if remote is newer). Surfacing a conflict badge is deferred to Phase 7.
+ * local is newer, download if remote is newer); it does not surface a conflict badge.
  */
 object NotebookSyncPlanner {
     const val TOLERANCE_MS = 1000L
@@ -43,7 +43,7 @@ object NotebookSyncPlanner {
     fun decide(
         /** Local `Notebook.updatedAt`, epoch millis. */
         localUpdatedAt: Long,
-        /** `localUpdatedAtAtSync` from the sync-state row, or null if never synced. */
+        /** `syncedLocalUpdatedAt` from the sync-state row, or null if never synced. */
         syncedLocalUpdatedAt: Long?,
         /** ETag we stored for the remote manifest at the last sync (used as `If-Match` on upload). */
         storedEtag: String?,

@@ -15,7 +15,7 @@ import javax.inject.Inject
  *
  * Deliberately has **no** foreign key to [Notebook]: the row must outlive local deletion of the
  * notebook so the next sync can still detect "was synced, now gone" and propagate a tombstone. It
- * is the single source of truth for badges, deletion detection, and (Phase 5) change detection —
+ * is the single source of truth for badges, deletion detection, and change detection —
  * the richer replacement for the old `SyncSettings.syncedNotebookIds` set.
  */
 @Entity(tableName = "notebook_sync_state")
@@ -23,9 +23,14 @@ data class NotebookSyncState(
     @PrimaryKey val notebookId: String,
     /** [SyncStateValue.SYNCED] or [SyncStateValue.ERROR]. */
     val state: String,
+    /** Wall-clock time of the last committed sync. Informational (log/UI); never compared. */
     val lastSyncedAt: Date,
-    /** The local `Notebook.updatedAt` at the moment this notebook last committed a sync. */
-    val localUpdatedAtAtSync: Date,
+    /**
+     * The **change anchor**: the value `Notebook.updatedAt` had at that commit. Compared against the
+     * notebook's current `updatedAt` to answer "edited since we last synced?" — both sides are the
+     * same local edit clock, so equality means unchanged.
+     */
+    val syncedLocalUpdatedAt: Date,
     val remoteEtag: String? = null,
     val remoteUpdatedAt: Date? = null,
     val lastError: String? = null,
@@ -81,7 +86,7 @@ class NotebookSyncStateRepository @Inject constructor(
             notebookId = notebookId,
             state = SyncStateValue.SYNCED,
             lastSyncedAt = Date(),
-            localUpdatedAtAtSync = localUpdatedAt,
+            syncedLocalUpdatedAt = localUpdatedAt,
             remoteUpdatedAt = remoteUpdatedAt,
             remoteEtag = remoteEtag,
         )
@@ -102,7 +107,7 @@ class NotebookSyncStateRepository @Inject constructor(
             notebookId = notebookId,
             state = SyncStateValue.REMOTE_AHEAD,
             lastSyncedAt = Date(),
-            localUpdatedAtAtSync = localUpdatedAt,
+            syncedLocalUpdatedAt = localUpdatedAt,
             remoteUpdatedAt = remoteUpdatedAt,
             remoteEtag = remoteEtag,
         )
@@ -110,7 +115,7 @@ class NotebookSyncStateRepository @Inject constructor(
 
     /**
      * Record that a notebook's last sync attempt failed, so the library shows the ERROR badge.
-     * Preserves the previous sync anchor ([localUpdatedAtAtSync], ETag, remote timestamp) if a row
+     * Preserves the previous sync anchor ([syncedLocalUpdatedAt], ETag, remote timestamp) if a row
      * already existed, so a later successful sync still knows what was last committed. If no row
      * existed, an epoch-0 anchor is used — the ERROR state is checked before the anchor, so the
      * badge is correct either way.
@@ -122,7 +127,7 @@ class NotebookSyncStateRepository @Inject constructor(
                 notebookId = notebookId,
                 state = SyncStateValue.ERROR,
                 lastSyncedAt = Date(),
-                localUpdatedAtAtSync = existing?.localUpdatedAtAtSync ?: Date(0),
+                syncedLocalUpdatedAt = existing?.syncedLocalUpdatedAt ?: Date(0),
                 remoteUpdatedAt = existing?.remoteUpdatedAt,
                 remoteEtag = existing?.remoteEtag,
                 lastError = message,

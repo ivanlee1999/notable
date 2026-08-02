@@ -54,7 +54,7 @@ class NotebookSyncStatusStore @Inject constructor(
                 row.state == SyncStateValue.ERROR -> SyncBadge.ERROR
                 // Local edited since its last committed sync -> pending upload (supersedes a stale
                 // REMOTE_AHEAD: once you edit locally, the badge is about your unsynced change).
-                nb.updatedAt.time - row.localUpdatedAtAtSync.time > TOLERANCE_MS -> SyncBadge.NOT_SYNCED
+                nb.updatedAt.time - row.syncedLocalUpdatedAt.time > TOLERANCE_MS -> SyncBadge.NOT_SYNCED
                 row.state == SyncStateValue.REMOTE_AHEAD -> SyncBadge.REMOTE_AHEAD
                 else -> SyncBadge.SYNCED
             }

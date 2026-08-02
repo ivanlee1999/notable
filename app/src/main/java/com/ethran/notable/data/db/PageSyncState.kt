@@ -13,8 +13,8 @@ import javax.inject.Inject
 /**
  * Per-page sync bookkeeping, the page-level companion to [NotebookSyncState]. One row records what a
  * page looked like the last time it *committed* a sync, so the next sync can skip pages that have not
- * changed on either side (Phase 10-I): a page is uploaded only when its local edit is newer than
- * [localUpdatedAtAtSync], and downloaded only when its remote ETag differs from [remoteEtag].
+ * changed on either side: a page is uploaded only when its local edit is newer than
+ * [syncedLocalUpdatedAt], and downloaded only when its remote ETag differs from [remoteEtag].
  *
  * Deliberately has **no** foreign key to [Page] (same reasoning as [NotebookSyncState]): the row
  * describes the last committed sync and is managed by the sync commit transaction, independent of the
@@ -29,8 +29,13 @@ data class PageSyncState(
     @ColumnInfo(index = true) val notebookId: String,
     /** The page file's server ETag at the last committed sync; opaque, compared for equality only. */
     val remoteEtag: String? = null,
-    /** The local `Page.updatedAt` at the moment this page last committed a sync. */
-    val localUpdatedAtAtSync: Date,
+    /**
+     * The **change anchor**: the value `Page.updatedAt` had at that commit. Compared against the
+     * page's current `updatedAt` to answer "edited since we last synced?" — both sides are the same
+     * local edit clock, so equality means unchanged.
+     */
+    val syncedLocalUpdatedAt: Date,
+    /** Wall-clock time of the last committed sync. Informational (log/UI); never compared. */
     val lastSyncedAt: Date,
 )
 

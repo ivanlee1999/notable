@@ -48,7 +48,7 @@ class PagesViewModel @Inject constructor(
             appRepository.bookRepository.getByIdLive(bookId).asFlow().collect { book ->
                 if (book == null) {
                     // Room re-emits on every write to the table; a null here means the row is gone.
-                    // Don't dereference it (that was the Crash #5 NPE). Diagnose why it's null: log
+                    // Don't dereference it (that was the NPE). Diagnose why it's null: log
                     // the id and whether the row currently exists in the DB at all.
                     val existsNow = appRepository.bookRepository.getById(bookId) != null
                     log.w("Observed notebook '$bookId' is null (existsNow=$existsNow) — treating as deleted")

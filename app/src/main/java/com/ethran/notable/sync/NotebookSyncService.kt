@@ -227,7 +227,7 @@ class NotebookSyncService @Inject constructor(
         }.flatMap {
             client.createCollection(SyncPaths.backgroundsDir(notebookId))
         }.flatMap {
-            // 1. Upload only the DIRTY pages FIRST (Phase 10c). Pages unchanged since their last
+            // 1. Upload only the DIRTY pages FIRST. Pages unchanged since their last
             //    committed sync are skipped -- editing one page of an 800-page notebook now PUTs one
             //    page, not 800. Skipped pages keep their existing page_sync_state row.
             val pages = appRepository.pageRepository.getByIds(notebook.pageIds)
@@ -239,7 +239,7 @@ class NotebookSyncService @Inject constructor(
             val errors = ErrorAccumulator()
             val committedPageRows = mutableListOf<PageSyncState>()
             for (page in dirtyPages) {
-                // Phase 10e: guard the dirty-page PUT with the stored ETag. A concurrent remote
+                // Guard the dirty-page PUT with the stored ETag. A concurrent remote
                 // change to this page 412s, aborting before manifest publish (nothing committed);
                 // new pages (no row) send no If-Match.
                 val ifMatch = rowsByPageId[page.id]?.remoteEtag
@@ -249,7 +249,7 @@ class NotebookSyncService @Inject constructor(
                             pageId = page.id,
                             notebookId = notebookId,
                             remoteEtag = pageEtag,
-                            localUpdatedAtAtSync = page.updatedAt,
+                            syncedLocalUpdatedAt = page.updatedAt,
                             lastSyncedAt = java.util.Date(),
                         )
                     )
@@ -271,9 +271,9 @@ class NotebookSyncService @Inject constructor(
                 publishManifest(notebookId, manifestJson.toByteArray(), manifestIfMatch, client)
                     .onSuccess { newEtag ->
                     // If the server returned no ETag on any page PUT, one PROPFIND on the pages dir
-                    // backfills them so the stored rows can drive next sync's skip (Phase 10c).
+                    // backfills them so the stored rows can drive next sync's skip.
                     backfillMissingPageEtags(notebookId, committedPageRows, client)
-                    // Commit point (Phase 10 invariant 2, page-level): mark the notebook synced,
+                    // Commit point: mark the notebook synced,
                     // write the uploaded pages' rows, and drop departed rows -- all in one
                     // transaction. After upload the remote's updatedAt equals the manifest we just
                     // wrote (notebook.updatedAt).
@@ -331,7 +331,7 @@ class NotebookSyncService @Inject constructor(
     /**
      * Publish the manifest atomically: PUT to a `.tmp` sibling (a full write that never touches the
      * live commit marker), then MOVE it over `manifest.json`. This closes the only interruption
-     * window Phase 3 left open — a torn PUT of the manifest itself would otherwise leave a corrupt
+     * window a plain PUT leaves open — a torn PUT of the manifest itself would otherwise leave a corrupt
      * commit marker. Falls back to a direct guarded PUT when the server doesn't support MOVE.
      *
      * A 412 during MOVE is a genuine concurrency conflict and is propagated (not retried). The tmp
@@ -374,7 +374,7 @@ class NotebookSyncService @Inject constructor(
     /**
      * Upload one page's JSON (streamed from a temp file) plus its images/backgrounds, returning the
      * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
-     * against a concurrent remote change (Phase 10e); pass `null` for a page with no prior sync row.
+     * against a concurrent remote change; pass `null` for a page with no prior sync row.
      */
     private suspend fun uploadPage(
         page: Page,
@@ -389,8 +389,7 @@ class NotebookSyncService @Inject constructor(
         // Serialize the page to a temp file (streaming, one stroke at a time) and stream that file
         // to the PUT, rather than building a whole-page JSON string + toByteArray() in memory. This
         // bounds upload memory to ~one stroke regardless of page size — a 12k-stroke page otherwise
-        // materialised its point data several times over and OOM'd. See
-        // docs/plans/crash-handling-plan.md "Sync upload memory".
+        // materialised its point data several times over and OOM'd.
         val tempFile = File.createTempFile("notable-page-", ".json", context.cacheDir)
         val pagePath = SyncPaths.pageFile(notebookId, page.id)
         val pageUploaded = try {
@@ -422,7 +421,7 @@ class NotebookSyncService @Inject constructor(
             for (image in pageWithData.images) {
                 if (!image.uri.isNullOrEmpty()) {
                     // Normalize the URI: some rows store a `file://` scheme that File() can't resolve,
-                    // which silently skipped the upload and left a dangling reference (Phase 8c).
+                    // which silently skipped the upload and left a dangling reference.
                     val localFile = resolveLocalFile(image.uri)
                     if (localFile.exists()) {
                         val remotePath = SyncPaths.imageFile(notebookId, localFile.name)
@@ -435,14 +434,14 @@ class NotebookSyncService @Inject constructor(
                         }
                     } else {
                         // Dangling reference: the page references an image we can't find locally, so
-                        // it will 404 on every other device. Surface it (Phase 8e).
+                        // it will 404 on every other device. Surface it.
                         log.w(TAG, "Image referenced by page but missing locally: ${image.uri}")
                     }
                 }
             }
 
             // Linked external PDFs (absolute path outside managed storage) can't be synced -- skip
-            // (Phase 8d); the reference is left as-is and is non-fatal on download.
+            // them; the reference is left as-is and is non-fatal on download.
             if (page.backgroundType != "native" && page.background != "blank" &&
                 !File(page.background).isAbsolute
             ) {
@@ -513,9 +512,9 @@ class NotebookSyncService @Inject constructor(
         }
 
         // 4. One Depth-1 PROPFIND on the pages dir gives every page's current remote ETag, so we can
-        //    fetch only the pages that changed since our last committed sync (Phase 10d). On PROPFIND
+        //    fetch only the pages that changed since our last committed sync. On PROPFIND
         //    failure the map is empty -> every page's current ETag reads null -> all pages fetched
-        //    (the pre-10d behavior), which is safe, just not economical.
+        //    which is safe, just not economical.
         val currentEtagByPageId = client.listEtags(SyncPaths.pagesDir(notebookId)).getOrElse {
             log.w(TAG, "Page listing PROPFIND failed for ${notebook.title}; fetching all pages: ${it.userMessage}")
             emptyMap<String, String?>()
@@ -550,7 +549,7 @@ class NotebookSyncService @Inject constructor(
                         pageId = pageId,
                         notebookId = notebookId,
                         remoteEtag = currentEtag,
-                        localUpdatedAtAtSync = pageUpdatedAt,
+                        syncedLocalUpdatedAt = pageUpdatedAt,
                         lastSyncedAt = java.util.Date(),
                     )
                 )
@@ -569,7 +568,7 @@ class NotebookSyncService @Inject constructor(
             (rowsByPageId.keys - notebook.pageIds.toSet()).toList()
         return try {
             appRepository.bookRepository.updatePreservingTimestamp(notebook)
-            // Commit point (Phase 10 invariant 2, page-level): mark the notebook synced at the remote
+            // Commit point: mark the notebook synced at the remote
             // timestamp, write the fetched pages' rows, and drop rows for departed pages -- one
             // transaction. Skipped pages keep their prior rows untouched.
             appRepository.commitNotebookSync(
@@ -636,17 +635,17 @@ class NotebookSyncService @Inject constructor(
         if (page.backgroundType != "native" && page.background != "blank") {
             val filename = page.background
             // Linked external PDFs live outside managed storage (absolute path); they can't be synced
-            // -- skip them entirely, and don't treat their absence as a failure (Phase 8d).
+            // -- skip them entirely, and don't treat their absence as a failure.
             if (File(filename).isAbsolute) {
                 log.i(TAG, "Skipping external background (not in managed storage): $filename")
             } else if (filename in attemptedBackgrounds) {
-                // A background shared by many pages is only fetched once per notebook (Phase 8a-3).
+                // A background shared by many pages is only fetched once per notebook.
             } else {
                 attemptedBackgrounds.add(filename)
                 val localFile = File(ensureBackgroundsFolder(), filename)
                 if (!localFile.exists()) {
                     localFile.parentFile?.mkdirs()
-                    // Remote path uses the basename (flat), matching how upload stores it (Phase 8b).
+                    // Remote path uses the basename (flat), matching how upload stores it.
                     val remoteName = File(filename).name
                     client.getFile(
                         SyncPaths.backgroundFile(notebookId, remoteName),
@@ -666,7 +665,7 @@ class NotebookSyncService @Inject constructor(
             errors.add(DomainError.DatabaseError("Failed to save page $pageId: ${e.message}"))
         }
 
-        // 6. Return aggregated result, carrying the page's updatedAt as its sync anchor (Phase 10d).
+        // 6. Return aggregated result, carrying the page's updatedAt as its sync anchor.
         return errors.asResult(page.updatedAt)
     }
 
@@ -684,7 +683,7 @@ class NotebookSyncService @Inject constructor(
             // GC only needs the page's media filenames — load the page metadata + image URIs, NOT
             // getWithDataById (which loads and normalizes every stroke on the page). On a large
             // notebook the old call re-materialised the whole notebook right after upload and
-            // re-triggered the Crash #1 OOM. See docs/plans/crash-handling-plan.md "Sync over-upload".
+            // re-triggered the OOM.
             val page = appRepository.pageRepository.getById(pageId) ?: continue
             appRepository.imageRepository.getUrisForPage(pageId).forEach { uri ->
                 if (!uri.isNullOrEmpty()) referencedImages.add(File(uri).name)
@@ -730,7 +729,7 @@ class NotebookSyncService @Inject constructor(
     /**
      * Aggregate a media (image/background) download failure. A [DomainError.RemoteMissing] (404) is
      * a *permanent* absence — log and skip it so one missing media file can't wedge the whole
-     * notebook download into an endless retry (Phase 8a-2). Transient errors are still aggregated so
+     * notebook download into an endless retry. Transient errors are still aggregated so
      * the notebook keeps its stale timestamp and retries next sync.
      */
     private fun addMediaError(errors: ErrorAccumulator, what: String, error: DomainError) {
@@ -744,7 +743,7 @@ class NotebookSyncService @Inject constructor(
 
     private fun extractFilename(uri: String): String = uri.substringAfterLast('/')
 
-    /** Resolve a stored media URI to a [File], tolerating a `file://` scheme (Phase 8c). */
+    /** Resolve a stored media URI to a [File], tolerating a `file://` scheme. */
     private fun resolveLocalFile(uri: String): File =
         if (uri.startsWith("file:")) File(Uri.parse(uri).path ?: uri) else File(uri)
 
