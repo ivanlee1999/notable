@@ -8,7 +8,6 @@ import android.database.sqlite.SQLiteConstraintException
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Debug
-import android.os.FileObserver
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Offset
@@ -28,10 +27,7 @@ import com.ethran.notable.data.model.BackgroundType.ImageRepeating
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
-import com.ethran.notable.io.IN_IGNORED
-import com.ethran.notable.io.fileObserverEventNames
 import com.ethran.notable.io.loadBackgroundBitmap
-import com.ethran.notable.io.waitForFileAvailable
 import com.ethran.notable.utils.chunked
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.ShipBook
@@ -116,7 +112,8 @@ internal class PageCacheEntry(val pageId: String) {
 @Singleton
 class PageDataManager @Inject constructor(
     private val appRepository: AppRepository,
-    private val appEventBus: AppEventBus
+    private val appEventBus: AppEventBus,
+    private val backgroundFileWatcher: BackgroundFileWatcher,
 ) {
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -164,12 +161,9 @@ class PageDataManager @Inject constructor(
     // pathologically large background cannot justify keeping the whole pool resident.
     private val maxBackgroundFloorFraction = 0.25
 
-    // observe background file changes
-    // fileObservers: filename to observer
-    // fileToPages: filename to files with this file
-    private val fileObservers = mutableMapOf<String, FileObserver>()
-    private val fileToPages = mutableMapOf<String, MutableSet<String>>()
-    val invalidateFileFlow = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    // Background files are watched by [BackgroundFileWatcher], which owns that registry and its own
+    // lock. It is called only OUTSIDE [lock] (it touches the filesystem) and never calls back in;
+    // it reports page ids to invalidate through a flow, collected in [init].
 
     // Needs to be observable by UI, for scroll bars (read during composition in ScrollIndicator).
     // These are Compose snapshot states, but they are written from background coroutines
@@ -206,7 +200,7 @@ class PageDataManager @Inject constructor(
     val saveTopic = MutableSharedFlow<String>()
 
     init {
-        startFileInvalidationCollector()
+        collectBackgroundFileChanges()
     }
 
     /* ---------------- entry helpers (must hold [lock]) ---------------- */
@@ -1052,11 +1046,13 @@ class PageDataManager @Inject constructor(
                 // Link this page to the background key.
                 getOrCreateEntryLocked(pageId).backgroundKey = background.id
 
-                if (observeBg) observeBackgroundFile(pageId, background.path)
-
                 // Keep the pool within its own budget line right after every addition.
                 trimBackgroundsLocked()
             }
+
+            // Registering the watch stats the file and arms an inotify watch, so it happens after
+            // the lock is released — never with the drawing path blocked behind it.
+            if (observeBg) backgroundFileWatcher.watch(pageId, background.path)
         }
     }
 
@@ -1082,99 +1078,25 @@ class PageDataManager @Inject constructor(
     }
 
     /**
-     * Start observing a background file for changes.
-     * Registers the pageId to the file, and launches a FileObserver if not already present.
+     * Drops the cached background of every page whose file changed on disk, and repaints if the
+     * current page was among them.
+     *
+     * The watcher reports page ids (already batched and de-duplicated), so the file→pages mapping
+     * and its lock stay inside [BackgroundFileWatcher] instead of being read from here without one.
      */
-    private fun observeBackgroundFile(pageId: String, filePath: String) {
-        synchronized(fileObservers) {
-            fileToPages.getOrPut(filePath) { mutableSetOf() }.add(pageId)
-            if (fileObservers.containsKey(filePath)) return // Already observing this file
-
-            val file = File(filePath)
-            if (!file.exists() || !file.canRead()) {
-                log.w("Cannot observe background file: $filePath does not exist or is not readable")
-                return
-            }
-            val mask = (FileObserver.CREATE or
-                    FileObserver.DELETE or
-                    FileObserver.DELETE_SELF or
-                    FileObserver.CLOSE_WRITE or
-                    FileObserver.MOVED_TO or
-                    FileObserver.MOVE_SELF)
-
-            // Launch a FileObserver for this file
-            val observer = object : FileObserver(file, mask) {
-                override fun onEvent(event: Int, path: String?) {
-                    dataLoadingScope.launch {
-                        if (event == IN_IGNORED)
-                            return@launch
-                        val eventString = fileObserverEventNames(event)
-
-                        log.d("Background file changed: $filePath [event=$eventString]")
-                        if (event == DELETE || event == DELETE_SELF) {
-                            log.d("Background file deleted.")
-                            synchronized(fileObservers) {
-                                fileObservers.remove(filePath)?.stopWatching()
-                            }
-                            if (!waitForFileAvailable(filePath)) {
-                                log.w("File changed, but does not exist: $filePath")
-                                appEventBus.tryEmit(
-                                    AppEvent.ActionHint("Background does not exist", 3000)
-                                )
-                                return@launch
-                            } else
-                                observeBackgroundFile(pageId, filePath)
-                        }
-
-                        invalidateFileFlow.emit(filePath)
-                    }
-                }
-            }
-            observer.startWatching()
-            fileObservers[filePath] = observer
-        }
-    }
-
-
-    /**
-     * Starts the collector to process file invalidation events.
-     * Uses chunked batching to process all events received in a 10ms window.
-     */
-    fun startFileInvalidationCollector() {
+    private fun collectBackgroundFileChanges() {
         dataLoadingScope.launch {
-            invalidateFileFlow.chunked(10) // Batch events every 20ms
-                .collect { filePathBatch ->
-                    val uniqueFilePaths = filePathBatch.distinct()
-                    if (uniqueFilePaths.isEmpty()) return@collect
-                    log.i("Persisting batch of fileChanges: $uniqueFilePaths")
-                    for (filePath in uniqueFilePaths) {
-                        // Invalidate all pages that use this file
-                        fileToPages[filePath]?.forEach { pid ->
-                            invalidateBackground(pid)
-                            if (pid == currentPage) {
-                                CanvasEventBus.forceUpdate.emit(null)
-                                appEventBus.tryEmit(
-                                    AppEvent.ActionHint("Background file changed", 4000)
-                                )
-                            }
-                        }
+            backgroundFileWatcher.invalidatedPages.collect { pageIds ->
+                if (pageIds.isEmpty()) return@collect
+                log.i("Background file(s) changed, invalidating pages: $pageIds")
+                for (pageId in pageIds) {
+                    invalidateBackground(pageId)
+                    if (pageId == currentPage) {
+                        CanvasEventBus.forceUpdate.emit(null)
+                        appEventBus.tryEmit(
+                            AppEvent.ActionHint("Background file changed", 4000)
+                        )
                     }
-                }
-        }
-    }
-
-    /**
-     * Stop observing the background file for the given page.
-     * Cleans up observers if no more pages are using the file.
-     */
-    private fun stopObservingBackground(pageId: String) {
-        synchronized(fileObservers) {
-            val iterator = fileToPages.entries.iterator()
-            while (iterator.hasNext()) {
-                val (filePath, pageIds) = iterator.next()
-                if (pageIds.remove(pageId) && pageIds.isEmpty()) {
-                    fileObservers.remove(filePath)?.stopWatching()
-                    iterator.remove()
                 }
             }
         }
@@ -1243,7 +1165,7 @@ class PageDataManager @Inject constructor(
             pageHigh.remove(pageId)
             pageScroll.remove(pageId)
         }
-        stopObservingBackground(pageId)
+        backgroundFileWatcher.unwatchAsync(pageId)
         assertTotalsLocked()
         return true
     }
