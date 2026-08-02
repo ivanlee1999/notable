@@ -7,6 +7,7 @@ import android.database.SQLException
 import android.database.sqlite.SQLiteConstraintException
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Debug
 import android.os.FileObserver
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.Snapshot
@@ -316,6 +317,66 @@ class PageDataManager @Inject constructor(
 
     private fun evictCandidatesLocked(): List<EvictCandidate> =
         entries.map { (id, e) -> EvictCandidate(id, e.sizeBytes, isPinnedLocked(id, e), e.lastAccessSeq) }
+
+    /* ---------------- memory reporting ---------------- */
+
+    /**
+     * A consistent snapshot of the cache's memory accounting, for the debug memory view. Taken under
+     * [lock] so the budget lines and the per-page rows always agree with each other; everything is
+     * copied into immutable value types so the caller holds no live cache references.
+     *
+     * O(#resident strokes) — [PageMemoryRow.pointCount] sums each stroke's point list, which is the
+     * figure [PageMemoryModel] is calibrated against. That is enough work, under a lock the drawing
+     * path also takes, that callers must sample off the main thread.
+     */
+    fun memorySnapshot(): MemorySnapshot = synchronized(lock) {
+        val runtime = Runtime.getRuntime()
+        val currentId = currentPage
+        val pages = entries.map { (id, e) ->
+            PageMemoryRow(
+                pageId = id,
+                strokeCount = e.strokes?.size ?: 0,
+                pointCount = e.strokes?.sumOf { it.points.size.toLong() } ?: 0L,
+                imageCount = e.images?.size ?: 0,
+                sizeBytes = e.sizeBytes,
+                estimateBytes = e.estimateBytes,
+                bitmapBytes = e.bitmap?.get()?.allocationByteCount?.toLong() ?: 0L,
+                backgroundKey = e.backgroundKey,
+                loaded = e.loaded,
+                loading = e.loadJob?.isActive == true,
+                pinned = isPinnedLocked(id, e),
+                isCurrent = id == currentId,
+                lastAccessSeq = e.lastAccessSeq,
+            )
+        }.sortedByDescending { it.sizeBytes }
+
+        val backgrounds = backgroundCache.values.map { bg ->
+            BackgroundMemoryRow(
+                id = bg.id,
+                name = File(bg.path).name,
+                pageNumber = bg.pageNumber,
+                scale = bg.scale,
+                bytes = bg.bitmapBytes(),
+                resident = bg.bitmap != null,
+                lastAccessSeq = bg.lastAccessSeq,
+            )
+        }.sortedByDescending { it.bytes }
+
+        MemorySnapshot(
+            maxHeapBytes = runtime.maxMemory(),
+            totalHeapBytes = runtime.totalMemory(),
+            freeHeapBytes = runtime.freeMemory(),
+            nativeHeapBytes = Debug.getNativeHeapAllocatedSize(),
+            heapBudgetFraction = heapBudgetFraction,
+            entryCapBytes = budget.capBytes(),
+            entryBytes = entriesTotalBytes,
+            backgroundCapBytes = backgroundCapLocked(),
+            backgroundBytes = backgroundBytesLocked(),
+            currentPageId = currentId.ifEmpty { null },
+            pages = pages,
+            backgrounds = backgrounds,
+        )
+    }
 
     /* ---------------- loading ---------------- */
 
@@ -828,7 +889,7 @@ class PageDataManager @Inject constructor(
 
     /**
      * Runs a DB content-write on [dataScope], catching SQL errors so a storage/device failure
-     * (e.g. SQLiteDiskIOException on endTransaction — Crash #4) is logged with context instead of
+     * (e.g. SQLiteDiskIOException on endTransaction) is logged with context instead of
      * escaping the coroutine and killing the process. For now this only logs and no-ops: the
      * in-memory state is untouched, so the next successful write re-persists it.
      */
