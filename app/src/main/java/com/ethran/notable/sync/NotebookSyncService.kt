@@ -1,13 +1,14 @@
 package com.ethran.notable.sync
 
+import android.content.Context
 import android.net.Uri
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageSyncState
-import com.ethran.notable.sync.PageSyncSelector.selectDirtyPages
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
+import com.ethran.notable.sync.PageSyncSelector.selectDirtyPages
 import com.ethran.notable.sync.serializers.NotebookSerializer
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
@@ -18,9 +19,9 @@ import com.ethran.notable.utils.map
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import com.ethran.notable.utils.onSuccess
-import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -68,8 +69,11 @@ class NotebookSyncService @Inject constructor(
                     try {
                         appRepository.bookRepository.delete(notebookId)
                         // Gone on both sides now -- drop the sync-state row so it is not later
-                        // mis-read as a local deletion to re-tombstone.
+                        // mis-read as a local deletion to re-tombstone, and the per-page rows with
+                        // it: a resurrected notebook must re-download every page, not skip pages
+                        // whose stale ETag still matches while no local page row exists.
                         appRepository.notebookSyncStateRepository.delete(notebookId)
+                        appRepository.pageSyncStateRepository.deleteByNotebook(notebookId)
                     } catch (e: Exception) {
                         log.e(TAG, "Failed to delete ${localNotebook.title}: ${e.message}")
                         errors.add(DomainError.DatabaseError("Failed to delete ${localNotebook.title}"))
@@ -77,7 +81,7 @@ class NotebookSyncService @Inject constructor(
                 }
             }
 
-            val cutoff = java.util.Date(System.currentTimeMillis() - maxAgeDays * 86_400_000L)
+            val cutoff = Date(System.currentTimeMillis() - maxAgeDays * 86_400_000L)
             val stale =
                 tombstones.filter { it.lastModified != null && it.lastModified.before(cutoff) }
             if (stale.isNotEmpty()) {
@@ -106,7 +110,7 @@ class NotebookSyncService @Inject constructor(
         localNotebookIds: Set<String>,
         maxAgeDays: Long
     ) {
-        val cutoff = java.util.Date(System.currentTimeMillis() - maxAgeDays * 86_400_000L)
+        val cutoff = Date(System.currentTimeMillis() - maxAgeDays * 86_400_000L)
         val entries = client.listCollectionWithMetadata(SyncPaths.notebooksDir()).getOrElse {
             log.w(TAG, "Orphan GC: listing notebooks failed: ${it.userMessage}")
             return
@@ -152,8 +156,9 @@ class NotebookSyncService @Inject constructor(
                     SyncPaths.tombstone(notebookId), ByteArray(0), "application/octet-stream"
                 ).onSuccess {
                     log.i(TAG, "Tombstone uploaded for: $notebookId")
-                    // Deletion propagated -- drop the sync-state row so it is not detected again.
+                    // Deletion propagated -- drop the sync-state rows so it is not detected again.
                     appRepository.notebookSyncStateRepository.delete(notebookId)
+                    appRepository.pageSyncStateRepository.deleteByNotebook(notebookId)
                 }.onError { error ->
                     log.e(TAG, "Failed to upload tombstone for $notebookId: ${error.userMessage}")
                     errors.add(error)
@@ -250,7 +255,7 @@ class NotebookSyncService @Inject constructor(
                             notebookId = notebookId,
                             remoteEtag = pageEtag,
                             syncedLocalUpdatedAt = page.updatedAt,
-                            lastSyncedAt = java.util.Date(),
+                            lastSyncedAt = Date(),
                         )
                     )
                 }.onError { errors.add(it) }
@@ -505,7 +510,7 @@ class NotebookSyncService @Inject constructor(
         val isNew = appRepository.bookRepository.getById(notebookId) == null
         if (isNew) {
             try {
-                appRepository.bookRepository.createEmpty(notebook.copy(updatedAt = java.util.Date(0)))
+                appRepository.bookRepository.createEmpty(notebook.copy(updatedAt = Date(0)))
             } catch (e: Exception) {
                 return AppResult.Error(DomainError.DatabaseError("Failed to create notebook locally: ${e.message}"))
             }
@@ -528,6 +533,12 @@ class NotebookSyncService @Inject constructor(
         }
         val rowsByPageId =
             appRepository.pageSyncStateRepository.getByNotebook(notebookId).associateBy { it.pageId }
+        // Which of the manifest's pages we actually hold locally. A `page_sync_state` row is not
+        // proof the page row still exists (it may have been deleted locally while offline, or the
+        // notebook restored from a backup that predates it), and skipping a page we don't have would
+        // leave the notebook permanently referencing a page with no content.
+        val localPageIds =
+            appRepository.pageRepository.getByIds(notebook.pageIds).map { it.id }.toSet()
 
         // 5. Download and persist the changed pages; skipped pages keep their local content and row.
         val errors = ErrorAccumulator()
@@ -538,9 +549,13 @@ class NotebookSyncService @Inject constructor(
         for (pageId in notebook.pageIds) {
             val currentEtag = currentEtagByPageId[pageId]
             val storedEtag = rowsByPageId[pageId]?.remoteEtag
-            // Fetch when we have no committed row, when we couldn't read the remote ETag (fetch to be
-            // safe), or when the remote ETag differs from what we last committed.
-            val needsFetch = rowsByPageId[pageId] == null || currentEtag == null || storedEtag != currentEtag
+            // Fetch when we have no committed row, when the page is missing locally, when we
+            // couldn't read the remote ETag (fetch to be safe), or when the remote ETag differs
+            // from what we last committed.
+            val needsFetch = rowsByPageId[pageId] == null ||
+                pageId !in localPageIds ||
+                currentEtag == null ||
+                storedEtag != currentEtag
             if (!needsFetch) continue
             fetched++
             downloadPage(pageId, notebookId, client, attemptedBackgrounds).onSuccess { pageUpdatedAt ->
@@ -550,7 +565,7 @@ class NotebookSyncService @Inject constructor(
                         notebookId = notebookId,
                         remoteEtag = currentEtag,
                         syncedLocalUpdatedAt = pageUpdatedAt,
-                        lastSyncedAt = java.util.Date(),
+                        lastSyncedAt = Date(),
                     )
                 )
             }.onError { errors.add(it) }
@@ -598,7 +613,7 @@ class NotebookSyncService @Inject constructor(
         notebookId: String,
         client: WebDAVClient,
         attemptedBackgrounds: MutableSet<String>
-    ): AppResult<java.util.Date, DomainError> {
+    ): AppResult<Date, DomainError> {
 
         // 1. Fetch JSON file (Early Return on error)
         val pageBytes = client.getFile(SyncPaths.pageFile(notebookId, pageId))

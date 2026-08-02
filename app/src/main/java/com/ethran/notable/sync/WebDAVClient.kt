@@ -229,8 +229,8 @@ class WebDAVClient(
 
     /**
      * Stream a local file to the server and return its new ETag (or `null` if the server sent none),
-     * the streaming counterpart of the ByteArray [putFileReturningEtag]. Used for per-page uploads
-     * the page JSON is streamed from a temp file to bound memory, and the returned ETag is stored in
+     * the streaming counterpart of the `ByteArray` overload above. Used for per-page uploads: the
+     * page JSON is streamed from a temp file to bound memory, and the returned ETag is stored in
      * `page_sync_state` so the next sync can skip the page when unchanged. Returns
      * [DomainError.SyncConflict] on a 412 (the [ifMatch] guard).
      */

@@ -810,13 +810,16 @@ class PageDataManager @Inject constructor(
     }
 
     fun recomputeHeight(pageId: String): Int {
-        synchronized(lock) {
+        // Compute under [lock], publish outside it: applying a Compose snapshot runs global write
+        // observers (and can wake the recomposer), which must not happen while this hot drawing-path
+        // lock is held.
+        val newHeight = synchronized(lock) {
             val list = entries[pageId]?.strokes
             if (list.isNullOrEmpty()) return SCREEN_HEIGHT
-            val newHeight = max(list.maxOf { it.bottom }.plus(50).toInt(), SCREEN_HEIGHT)
-            mutateUiState { pageHigh[pageId] = newHeight }
-            return newHeight
+            max(list.maxOf { it.bottom }.plus(50).toInt(), SCREEN_HEIGHT)
         }
+        mutateUiState { pageHigh[pageId] = newHeight }
+        return newHeight
     }
 
     fun computeWidth(pageId: String): Int {

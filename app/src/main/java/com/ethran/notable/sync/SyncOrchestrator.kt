@@ -329,8 +329,9 @@ class SyncOrchestrator @Inject constructor(
                 when (val tombstoneResult =
                     client.putFile(SyncPaths.tombstone(notebookId), ByteArray(0))) {
                     is AppResult.Success -> {
-                        // Deletion propagated -- drop the sync-state row.
+                        // Deletion propagated -- drop the sync-state rows (notebook + per-page).
                         appRepository.notebookSyncStateRepository.delete(notebookId)
+                        appRepository.pageSyncStateRepository.deleteByNotebook(notebookId)
                         AppResult.Success(Unit)
                     }
 

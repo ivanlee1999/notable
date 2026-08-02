@@ -1,4 +1,3 @@
-
 package com.ethran.notable.data.db
 
 import android.content.Context

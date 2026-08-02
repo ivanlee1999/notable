@@ -7,18 +7,18 @@ import java.io.StringReader
 import java.util.Date
 
 /**
+ * One `<response>` block from a PROPFIND: the resource's href plus the properties Notable reads —
+ * its last-modified date and its ETag (either may be null if the server omitted it).
+ */
+data class DavEntry(val href: String, val lastModified: Date?, val etag: String?)
+
+/**
  * Parsing helpers for WebDAV PROPFIND XML responses.
  *
  * Split out of [WebDAVClient], which is otherwise concerned only with issuing HTTP requests and
  * mapping status codes. Date-header parsing stays in [WebDAVClient.parseHttpDate] (it is HTTP,
  * not XML, and has a unit test pinned to that location).
  */
-/**
- * One `<response>` block from a PROPFIND: the resource's href plus the properties Notable reads —
- * its last-modified date and its ETag (either may be null if the server omitted it).
- */
-data class DavEntry(val href: String, val lastModified: Date?, val etag: String?)
-
 internal object WebDavXml {
     private const val TAG = "WebDavXml"
 
