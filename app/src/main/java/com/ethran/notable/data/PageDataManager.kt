@@ -122,10 +122,30 @@ class PageDataManager @Inject constructor(
     @Volatile
     var pageFromDb: Page? = null
 
-    // Single lock for all cached page state ([entries], [entriesTotalBytes], [backgroundCache] and
-    // per-entry fields). A plain monitor (not a suspending Mutex) so hot non-suspend accessors
-    // (drawing, selection) can take it — therefore NO suspend call may run inside synchronized(lock):
-    // suspend work (DB reads, cost estimation) runs outside, only its results are stored under it.
+    /**
+     * Single lock for all cached page state ([entries], [entriesTotalBytes], [backgroundCache] and
+     * per-entry fields). A plain monitor (not a suspending Mutex) so hot non-suspend accessors
+     * (drawing, selection) can take it.
+     *
+     * **Invariant: nothing blocking or re-entrant runs inside `synchronized(lock)`.**
+     * The drawing thread blocks on this monitor, so anything slow or re-entrant held across it is a
+     * jank source or a deadlock waiting to happen. Inside the lock there must be no:
+     * - suspend calls — DB reads and cost estimation run outside, only their results are stored;
+     * - filesystem or syscall work — see [BackgroundFileWatcher], called with the lock released;
+     * - Compose snapshot commits — they run Compose's global write observers and can wake the
+     *   recomposer. Height/scroll live in [PageViewportState] for exactly this reason, and this
+     *   class no longer touches snapshot state at all;
+     * - other locks;
+     * - remote logging above `log.d` — `log.w`/`log.e`/`log.i` reach ShipBook. Decide under the
+     *   lock, report after; see the over-budget path in [getOrStartLoadingJob] and
+     *   [validatePageDataLoaded], which classifies under the lock and repairs outside it.
+     *
+     * What *is* allowed is appending to a buffered flow: [AppEventBus.tryEmit],
+     * [PageViewportState.scheduleRemoval] and [BackgroundFileWatcher.unwatchAsync] all enqueue and
+     * return, delivering nothing inline, so they never block the holder or re-enter this class.
+     * Eviction relies on that — it happens under the lock and has to hand work to both collaborators.
+     * The one launch under the lock ([getOrStartLoadingJob]) is justified at its call site.
+     */
     private val lock = Any()
 
     // Insertion-ordered for stable iteration/logging; LRU is driven by [PageCacheEntry.lastAccessSeq].
@@ -429,6 +449,9 @@ class PageDataManager @Inject constructor(
         if (!isPrefetch && bookId != null) cancelUnnecessaryLoading(pageId, bookId)
 
         var result: Job? = null
+        // Recorded under the lock, reported after it: an admission report is telemetry, and
+        // tryEmit + remote logging have no business running with the drawing lock held.
+        var overBudgetCap: Long? = null
         synchronized(lock) {
             val existing = entries[pageId]?.loadJob
             val loaded = entries[pageId]?.loaded == true
@@ -462,18 +485,15 @@ class PageDataManager @Inject constructor(
                             // backgrounds. Evicted backgrounds reload on demand.
                             val incoming = ((estimate ?: 0L) - alreadyResident).coerceAtLeast(0L)
                             trimBackgroundsLocked(pendingEntryBytes = incoming)
-                            if (decision.overBudget) {
-                                log.w("Over-budget load $pageId: est=$estimate cap=$cap — loading anyway")
-                                appEventBus.tryEmit(
-                                    AppEvent.LogMessage(
-                                        reason = "PageDataManager.admission",
-                                        message = "Over-budget page load: est=${(estimate ?: 0L) / 1024 / 1024}MB " +
-                                            "cap=${cap / 1024 / 1024}MB pageId=$pageId"
-                                    )
-                                )
-                            }
+                            if (decision.overBudget) overBudgetCap = cap
                             val entry = getOrCreateEntryLocked(pageId)
                             entry.estimateBytes = estimate ?: 0L
+                            // Started under the lock on purpose: creating the job and publishing it
+                            // to the entry must be atomic, or a concurrent caller sees no active job
+                            // and starts a second load. (A lazily-started job would report
+                            // isActive=false in that window, which also unpins it from eviction.)
+                            // This is a dispatch onto Dispatchers.Default — a queue append, running
+                            // no user code inline — so it is safe to hold the lock across.
                             val newJob = dataLoadingScope.launch { loadPageFromDb(this, pageId) }
                             entry.loadJob = newJob
                             touchLocked(entry)
@@ -482,6 +502,17 @@ class PageDataManager @Inject constructor(
                     }
                 }
             }
+        }
+
+        overBudgetCap?.let { cap ->
+            log.w("Over-budget load $pageId: est=$estimate cap=$cap — loading anyway")
+            appEventBus.tryEmit(
+                AppEvent.LogMessage(
+                    reason = "PageDataManager.admission",
+                    message = "Over-budget page load: est=${(estimate ?: 0L) / 1024 / 1024}MB " +
+                        "cap=${cap / 1024 / 1024}MB pageId=$pageId"
+                )
+            )
         }
         return result
     }
@@ -686,27 +717,60 @@ class PageDataManager @Inject constructor(
         }
     }
 
+    /** What [checkLoadStateLocked] found; [Inconsistent] is the only case needing repair. */
+    private sealed interface LoadState {
+        data object Loading : LoadState
+        data class Settled(val loaded: Boolean) : LoadState
+        data class Inconsistent(val dataLoaded: Boolean, val jobDone: Boolean, val job: Job) :
+            LoadState
+    }
+
     /**
-     * - Verifies loaded data presence and job consistency under [lock].
-     * - If inconsistent (a completed/cancelled job but partial data, or vice versa), logs it,
+     * Pure classification of a page's load state. No emitting, no launching, no repair — so the hot
+     * query paths ([getStrokesInRectangle], [getImagesInRectangle]) can ask "is this page usable?"
+     * without the answer having side effects. Must hold [lock].
+     */
+    private fun checkLoadStateLocked(pageId: String): LoadState {
+        val entry = entries[pageId]
+        val job = entry?.loadJob
+        if (job?.isActive == true) return LoadState.Loading
+        val jobDone = job?.isCompleted ?: false
+        val dataLoaded = entry?.loaded == true
+        return if (job != null && dataLoaded != jobDone) {
+            LoadState.Inconsistent(dataLoaded, jobDone, job)
+        } else {
+            LoadState.Settled(dataLoaded)
+        }
+    }
+
+    /** Whether [pageId]'s data can be read right now. Pure. Must hold [lock]. */
+    private fun isUsableLocked(pageId: String): Boolean =
+        (checkLoadStateLocked(pageId) as? LoadState.Settled)?.loaded == true
+
+    /**
+     * - Verifies loaded data presence and job consistency.
+     * - If inconsistent (a completed/cancelled job but partial data, or vice versa), reports it,
      *   schedules a clear+reload, and returns false.
+     *
+     * The classification happens under [lock]; the report and the repair are issued after it is
+     * released, so this never emits an event or starts a coroutine with the lock held.
      */
     fun validatePageDataLoaded(pageId: String): Boolean {
-        synchronized(lock) {
-            val entry = entries[pageId]
-            val job = entry?.loadJob
-            if (job?.isActive == true) {
+        val state = synchronized(lock) { checkLoadStateLocked(pageId) }
+        return when (state) {
+            is LoadState.Loading -> {
                 log.d("isPageLoaded: Still loading page($pageId).")
-                return false
+                false
             }
-            val jobDone = job?.isCompleted ?: false
-            val dataLoaded = entry?.loaded == true
 
-            if (job != null && dataLoaded != jobDone) {
+            is LoadState.Settled -> state.loaded
+
+            is LoadState.Inconsistent -> {
                 appEventBus.tryEmit(
                     AppEvent.LogMessage(
                         reason = "PageDataManager.validatePageDataLoaded",
-                        message = "Inconsistent state for page($pageId): dataLoaded=$dataLoaded, jobDone=$jobDone, job=$job, trying to fix."
+                        message = "Inconsistent state for page($pageId): dataLoaded=${state.dataLoaded}, " +
+                            "jobDone=${state.jobDone}, job=${state.job}, trying to fix."
                     )
                 )
                 dataLoadingScope.launch {
@@ -715,9 +779,8 @@ class PageDataManager @Inject constructor(
                         removePageLocked(pageId)
                     }
                 }
-                return false
+                false
             }
-            return dataLoaded
         }
     }
 
@@ -867,9 +930,11 @@ class PageDataManager @Inject constructor(
 
 
     // Assuming Rect uses 'left', 'top', 'right', 'bottom'
+    // Uses the pure [isUsableLocked] rather than [validatePageDataLoaded]: a selection query must
+    // not emit an event or start a repair coroutine as a side effect of asking.
     fun getImagesInRectangle(inPageCoordinates: Rect, id: String): List<Image>? {
         synchronized(lock) {
-            if (!validatePageDataLoaded(id)) return null
+            if (!isUsableLocked(id)) return null
             val entry = entries[id] ?: return emptyList()
             touchLocked(entry)
             val imageList = entry.images ?: return emptyList()
@@ -881,7 +946,7 @@ class PageDataManager @Inject constructor(
 
     fun getStrokesInRectangle(inPageCoordinates: Rect, id: String): List<Stroke>? {
         synchronized(lock) {
-            if (!validatePageDataLoaded(id)) return null
+            if (!isUsableLocked(id)) return null
             val entry = entries[id] ?: return emptyList()
             touchLocked(entry)
             val strokeList = entry.strokes ?: return emptyList()
