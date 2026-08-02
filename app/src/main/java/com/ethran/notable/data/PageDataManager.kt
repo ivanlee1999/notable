@@ -83,9 +83,7 @@ data class CachedBackground(val path: String, val pageNumber: Int, val scale: Fl
  */
 internal class PageCacheEntry(val pageId: String) {
     var strokes: MutableList<Stroke>? = null
-    var strokesById: HashMap<String, Stroke>? = null
     var images: MutableList<Image>? = null
-    var imagesById: HashMap<String, Image>? = null
 
     // Per-page zoom (was the separate pageZoom map).
     var zoom: Float = 1f
@@ -567,8 +565,6 @@ class PageDataManager @Inject constructor(
                 // Join with any strokes/images drawn during loading (append, don't replace).
                 appendStrokesLocked(entry, pageWithData.strokes)
                 appendImagesLocked(entry, pageWithData.images)
-                entry.strokesById = HashMap(entry.strokes!!.associateBy { it.id })
-                entry.imagesById = HashMap(entry.images!!.associateBy { it.id })
                 recomputeEntrySizeLocked(entry)
                 touchLocked(entry)
                 logEstimateVsActualLocked(entry)
@@ -781,10 +777,6 @@ class PageDataManager @Inject constructor(
         recomputeEntrySizeLocked(entry)
     }
 
-    fun getStrokesById(pageId: String): HashMap<String, Stroke> = synchronized(lock) {
-        entries[pageId]?.strokesById ?: hashMapOf()
-    }
-
     fun getImages(pageId: String): List<Image> = synchronized(lock) {
         entries[pageId]?.images ?: emptyList()
     }
@@ -795,36 +787,17 @@ class PageDataManager @Inject constructor(
         recomputeEntrySizeLocked(entry)
     }
 
-    fun indexStrokes(scope: CoroutineScope, pageId: String) {
-        scope.launch {
-            synchronized(lock) {
-                val list = entries[pageId]?.strokes ?: return@synchronized
-                entries[pageId]?.strokesById = HashMap(list.associateBy { it.id })
-            }
-        }
-    }
-
-    fun indexImages(scope: CoroutineScope, pageId: String) {
-        scope.launch {
-            synchronized(lock) {
-                val list = entries[pageId]?.images ?: return@synchronized
-                entries[pageId]?.imagesById = HashMap(list.associateBy { it.id })
-            }
-        }
-    }
-
+    // Id -> object resolution for the undo/redo path only. Builds a transient lookup from the list
+    // (the single source of truth) per call; O(N) on a cold, user-initiated action. Hot paths
+    // (render, eraser, selection) work on the list / spatial queries directly, never by id.
     fun getStrokes(strokeIds: List<String>, pageId: String): List<Stroke?> = synchronized(lock) {
-        val byId = entries[pageId]?.strokesById
-        strokeIds.map { byId?.get(it) }
-    }
-
-    fun getImage(imageId: String, pageId: String): Image? = synchronized(lock) {
-        entries[pageId]?.imagesById?.get(imageId)
+        val byId = entries[pageId]?.strokes?.associateBy { it.id } ?: emptyMap()
+        strokeIds.map { byId[it] }
     }
 
     fun getImages(imageIds: List<String>, pageId: String): List<Image?> = synchronized(lock) {
-        val byId = entries[pageId]?.imagesById
-        imageIds.map { byId?.get(it) }
+        val byId = entries[pageId]?.images?.associateBy { it.id } ?: emptyMap()
+        imageIds.map { byId[it] }
     }
 
 

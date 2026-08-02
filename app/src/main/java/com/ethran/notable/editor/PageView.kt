@@ -110,9 +110,6 @@ class PageView(
         get() = pageDataManager.getStrokes(currentPageId)
         set(value) = pageDataManager.setStrokes(currentPageId, value)
 
-    val strokesById: HashMap<String, Stroke>
-        get() = pageDataManager.getStrokesById(currentPageId)
-
     var images: List<Image>
         get() = pageDataManager.getImages(currentPageId)
         set(value) = pageDataManager.setImages(currentPageId, value)
@@ -333,7 +330,6 @@ class PageView(
         updateHeightForChange(strokesToAdd)
 
         saveStrokesToPersistLayer(strokesToAdd)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -375,14 +371,12 @@ class PageView(
         }
         updateHeightForChange(strokesToUpdate)
         pageDataManager.updateStrokesInDb(strokesToUpdate)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
 //        persistBitmapDebounced()
     }
 
     fun removeStrokes(strokeIds: List<String>) {
         strokes = strokes.filter { s -> !strokeIds.contains(s.id) }
         removeStrokesFromPersistLayer(strokeIds)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
         pageDataManager.recomputeHeight(currentPageId)
 
 //        persistBitmapDebounced()
@@ -412,7 +406,6 @@ class PageView(
         if (bottomPlusPadding > height) height = bottomPlusPadding
 
         saveImagesToPersistLayer(listOf(imageToAdd))
-        pageDataManager.indexImages(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -424,7 +417,6 @@ class PageView(
             if (bottomPlusPadding > height) height = bottomPlusPadding
         }
         saveImagesToPersistLayer(imageToAdd)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -432,7 +424,6 @@ class PageView(
     fun removeImages(imageIds: List<String>) {
         images = images.filter { s -> !imageIds.contains(s.id) }
         removeImagesFromPersistLayer(imageIds)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
         pageDataManager.recomputeHeight(currentPageId)
 //        persistBitmapDebounced()
     }
@@ -447,10 +438,8 @@ class PageView(
             if (bottomPlusPadding > height) height = bottomPlusPadding
         }
         pageDataManager.updateImagesInDb(imagesToUpdate)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
     }
 
-    fun getImage(imageId: String): Image? = pageDataManager.getImage(imageId, currentPageId)
     fun getImages(imageIds: List<String>): List<Image?> =
         pageDataManager.getImages(imageIds, currentPageId)
 
