@@ -8,7 +8,6 @@ import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
-import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageRepository
@@ -51,7 +50,7 @@ class AppRepository @Inject constructor(
      * caller runs them after it returns.
      */
     suspend fun commitNotebookSync(
-        notebook: Notebook,
+        notebookId: String,
         localUpdatedAt: Date,
         remoteUpdatedAt: Date?,
         manifestEtag: String?,
@@ -60,7 +59,7 @@ class AppRepository @Inject constructor(
     ) {
         db.withTransaction {
             notebookSyncStateRepository.markSynced(
-                notebookId = notebook.id,
+                notebookId = notebookId,
                 localUpdatedAt = localUpdatedAt,
                 remoteUpdatedAt = remoteUpdatedAt,
                 remoteEtag = manifestEtag,

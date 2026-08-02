@@ -674,8 +674,23 @@ class PageDataManager @Inject constructor(
             log.w("Loading of page $pageId was cancelled.")
             if (!validatePageDataLoaded(pageId)) removePage(pageId)
             throw e  // rethrow cancellation
+        } catch (e: Exception) {
+            // Anything else (a Room error, a corrupt stroke blob, an OOM decoding a background)
+            // would otherwise leave this scope's SupervisorJob with no handler and kill the process.
+            // It would also leave the entry holding a completed-but-empty load job, which only the
+            // inconsistency repair in [validatePageDataLoaded] would eventually notice — so drop the
+            // half-built entry here and let the next request start a clean load.
+            log.e("Loading of page $pageId failed", e)
+            appEventBus.tryEmit(
+                AppEvent.LogMessage(
+                    reason = "PageDataManager.loadPageFromDb",
+                    message = "Page load failed for $pageId: ${e::class.simpleName}: ${e.message}"
+                )
+            )
+            appEventBus.tryEmit(AppEvent.ActionHint("Could not load page", 3000))
+            removePage(pageId)
         } finally {
-            log.d("Loaded page $pageId")
+            log.d("Finished load attempt for page $pageId")
         }
     }
 

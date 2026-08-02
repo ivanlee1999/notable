@@ -291,7 +291,7 @@ class NotebookSyncService @Inject constructor(
                     // transaction. After upload the remote's updatedAt equals the manifest we just
                     // wrote (notebook.updatedAt).
                     appRepository.commitNotebookSync(
-                        notebook = notebook,
+                        notebookId = notebookId,
                         localUpdatedAt = notebook.updatedAt,
                         remoteUpdatedAt = notebook.updatedAt,
                         manifestEtag = newEtag,
@@ -661,7 +661,7 @@ class NotebookSyncService @Inject constructor(
             // timestamp, write the fetched pages' rows, and drop rows for departed pages -- one
             // transaction. Skipped pages keep their prior rows untouched.
             appRepository.commitNotebookSync(
-                notebook = notebook,
+                notebookId = notebookId,
                 localUpdatedAt = notebook.updatedAt,
                 remoteUpdatedAt = notebook.updatedAt,
                 manifestEtag = remoteEtag,
