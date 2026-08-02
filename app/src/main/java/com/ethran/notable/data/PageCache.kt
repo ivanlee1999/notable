@@ -3,9 +3,9 @@ package com.ethran.notable.data
 /**
  * Pure, Android-free cache-sizing and eviction policy for [PageDataManager].
  *
- * Split out so the budget arithmetic and eviction ordering are unit-testable without a device
- * (Phase 1b-2/1b-3 of docs/plans/crash-handling-plan.md). Nothing here touches Room, Bitmaps or
- * coroutines; [PageDataManager] owns the mutable cache and calls into these helpers under its lock.
+ * Split out so the budget arithmetic and eviction ordering are unit-testable without a device.
+ * Nothing here touches Room, Bitmaps or coroutines; [PageDataManager] owns the mutable cache and
+ * calls into these helpers under its lock.
  */
 
 /**
@@ -40,7 +40,7 @@ object PageMemoryModel {
     /**
      * Expansion constant K mapping a page's compressed on-disk blob size (`SUM(LENGTH(points))`,
      * LZ4 + polyline) to its resident cost. Conservative (over-estimate) so admission gates before
-     * the heap fills. Refine from the on-device estimate/actual log (crash-plan 1b-4 calibration).
+     * the heap fills. Refine from the on-device estimate/actual log.
      */
     const val BLOB_EXPANSION_K = 20L
 
@@ -118,7 +118,7 @@ sealed interface AdmissionDecision {
 }
 
 /**
- * Pure admission policy (Phase 1b-4, with review fixes 1b-R4/R5).
+ * Pure admission policy.
  *
  * - The **current page** ([isPrefetch] = false) is never refused: it evicts unpinned LRU pages to
  *   fit and, if it still doesn't fit, loads anyway with [AdmissionDecision.Load.overBudget] set. On

@@ -32,9 +32,8 @@ sealed interface OnyxStrokeStyle {
 }
 
 /**
- * How a persisted stroke becomes pixels, per rendering backend. The app-backend side
- * (perfect-freehand `OutlineOptions` presets) is added in Phase 2 of that plan; until
- * then this carries only the Onyx style.
+ * How a persisted stroke becomes pixels, per rendering backend. Currently carries only the Onyx
+ * style; the app-backend side (perfect-freehand `OutlineOptions` presets) has no field yet.
  */
 data class StrokeStyle(
     val onyx: OnyxStrokeStyle,

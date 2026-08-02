@@ -41,7 +41,7 @@ class AppRepository @Inject constructor(
     private val db: AppDatabase
 ) {
     /**
-     * The atomic sync commit point (extends sync invariant 2 to page granularity). In one Room
+     * The atomic sync commit point, at page granularity. In one Room
      * transaction: mark the notebook synced, upsert the freshly transferred pages' [PageSyncState]
      * rows, and delete rows for pages that left the notebook. Pages skipped this sync keep their
      * existing rows untouched. A crash before this commits leaves *no* per-page rows for the

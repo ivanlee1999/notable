@@ -33,7 +33,6 @@ import org.junit.runner.RunWith
  *
  * The stronger, composition-backed reproduction lives in [EditorUnsupportedConcurrentChangeComposeTests],
  * which is skipped on devices whose Compose harness wedges.
- * See docs/plans/instrumented-test-reliability-plan.md.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorUnsupportedConcurrentChangeTests {

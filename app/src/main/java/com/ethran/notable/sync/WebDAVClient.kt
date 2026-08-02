@@ -181,7 +181,7 @@ class WebDAVClient(
         if (!localFile.exists()) return AppResult.Error(DomainError.SyncError("Local file missing"))
         // Stream the file straight to the socket (okhttp reads it in chunks with a known
         // Content-Length) instead of readBytes() loading the whole file into memory — matters for
-        // large serialized pages and images. See docs/plans/crash-handling-plan.md "Sync upload memory".
+        // large serialized pages and images.
         return execute("PUT", {
             val requestBody = localFile.asRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
@@ -230,9 +230,9 @@ class WebDAVClient(
     /**
      * Stream a local file to the server and return its new ETag (or `null` if the server sent none),
      * the streaming counterpart of the ByteArray [putFileReturningEtag]. Used for per-page uploads
-     * (Phase 10c): the page JSON is streamed from a temp file to bound memory, and the returned ETag
-     * is stored in `page_sync_state` so the next sync can skip the page when unchanged. Returns
-     * [DomainError.SyncConflict] on a 412 (the [ifMatch] guard, Phase 10e).
+     * the page JSON is streamed from a temp file to bound memory, and the returned ETag is stored in
+     * `page_sync_state` so the next sync can skip the page when unchanged. Returns
+     * [DomainError.SyncConflict] on a 412 (the [ifMatch] guard).
      */
     fun putFileReturningEtag(
         path: String,
@@ -411,7 +411,7 @@ class WebDAVClient(
      * List a collection's child files with their ETags, keyed by full (decoded) filename —
      * `{pageId}.json`, image, and background names, *not* bare UUIDs (unlike [listCollection] /
      * [listCollectionWithMetadata], whose `isValidUuid` filter would drop every `.json`). Used by
-     * per-page sync (Phase 10) to compare each page's remote ETag against the stored one. Returns an
+     * per-page sync to compare each page's remote ETag against the stored one. Returns an
      * empty map when the collection does not exist (404). Entries whose ETag the server omitted map
      * to `null`.
      */

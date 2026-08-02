@@ -72,9 +72,7 @@ class Converters {
         AutoMigration(32, 33),
         AutoMigration(33, 34),
         AutoMigration(34, 35),
-        // 35 -> 36: purely additive `page_sync_state` table (Phase 10-I per-page sync). No spec
-        // needed — Room generates the CREATE TABLE. See docs/plans/webdav-sync-improvement-plan.md.
-        AutoMigration(35, 36)
+        AutoMigration(35, 36) // add `page_sync_state` table for
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

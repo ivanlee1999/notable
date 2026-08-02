@@ -5,8 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for the pure cache-budget / eviction / accounting policy (Phase 1b-2/1b-3 of
- * docs/plans/crash-handling-plan.md). No Android or Room dependencies — this is why the policy
+ * Unit tests for the pure cache-budget / eviction / accounting policy.
+ * No Android or Room dependencies — this is why the policy
  * lives in [PageCache].
  */
 class CacheBudgetTest {

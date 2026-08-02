@@ -91,7 +91,7 @@ fun PagesView(
     }
 
     // The observed notebook was deleted (or never existed) while this screen was open — leave
-    // instead of rendering a stale/empty book. Guards the Crash #5 observe-then-delete race.
+    // instead of rendering a stale/empty book. Guards the observe-then-delete race.
     LaunchedEffect(state.bookMissing) {
         if (state.bookMissing) goToLibrary(null)
     }

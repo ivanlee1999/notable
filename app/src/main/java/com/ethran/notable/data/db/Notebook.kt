@@ -59,7 +59,7 @@ interface NotebookDao {
 
     // Nullable: Room emits null when the row is absent (e.g. the notebook was deleted while a
     // screen still observes it) and re-emits on every write to the table. Typing it non-null let
-    // collectors dereference a null and NPE — Crash #5.
+    // collectors dereference a null and NPE.
     @Query("SELECT * FROM notebook WHERE id = (:notebookId)")
     fun getByIdLive(notebookId: String): LiveData<Notebook?>
 
