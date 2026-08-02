@@ -56,8 +56,7 @@ data class CachedBackground(val path: String, val pageNumber: Int, val scale: Fl
 
     var bitmap: Bitmap? = loadBackgroundBitmap(path, pageNumber, scale)
 
-    // Access-order stamp for the background pool's own LRU eviction (a budget line separate from
-    // stroke/image page eviction); bumped whenever this background is set or read.
+    // LRU stamp for the background pool's own eviction line; bumped when set or read.
     var lastAccessSeq: Long = 0L
 
     fun bitmapBytes(): Long = bitmap?.allocationByteCount?.toLong() ?: 0L
@@ -77,13 +76,10 @@ data class CachedBackground(val path: String, val pageNumber: Int, val scale: Fl
 
 /**
  * All in-memory state for a single cached page, owned by [PageDataManager] behind its single
- * [PageDataManager.lock]. Consolidating what used to be ~12 parallel maps into one object per page
- * removes the two-lock/many-map consistency hazard by construction (Phase 1b-1 of
- * docs/plans/crash-handling-plan.md) and is the minimal seed of the multipage plan's `PageStore`
- * owner object.
+ * [PageDataManager.lock]. One object per page replaces the old parallel maps and removes the
+ * multi-map consistency hazard.
  *
- * Nullable collections mirror the old "map contains this pageId" semantics: null == not loaded, an
- * empty list == loaded-but-empty. [loaded] is the successor to the old `areListInitialized` check.
+ * Nullable collections: null == not loaded, empty list == loaded-but-empty.
  */
 internal class PageCacheEntry(val pageId: String) {
     var strokes: MutableList<Stroke>? = null
@@ -94,26 +90,24 @@ internal class PageCacheEntry(val pageId: String) {
     // Per-page zoom (was the separate pageZoom map).
     var zoom: Float = 1f
 
-    // Resident bytes of strokes+images only (backgrounds are pooled/counted separately, windowed
-    // bitmaps are SoftReferences and excluded). Kept in sync with the manager's running total.
+    // Resident bytes of strokes+images only (backgrounds and windowed bitmaps excluded).
     var sizeBytes: Long = 0L
     var sizeComputed: Boolean = false
 
-    // Pre-load resident estimate that admitted this page; kept for the estimate/actual calibration log.
+    // Pre-load estimate that admitted this page; kept for the estimate/actual calibration log.
     var estimateBytes: Long = 0L
 
     var loadJob: Job? = null
     var backgroundKey: String? = null
 
-    // Whether this page's background is a Native (dotted/lined/blank) type, which has no bitmap to
-    // cache — resolved once by [PageDataManager.preLoadBackground]. null = not yet known. Lets
-    // [PageDataManager.ensureBackgroundLoaded] skip a pointless reload/DB fetch for native pages.
+    // Native (dotted/lined/blank) backgrounds have no bitmap; caching this lets
+    // ensureBackgroundLoaded skip a pointless reload. null = not yet known.
     var backgroundIsNative: Boolean? = null
 
-    // Windowed screen bitmap (was bitmapCache); SoftReference so ART can reclaim it under pressure.
+    // Windowed screen bitmap; SoftReference so ART can reclaim it under pressure.
     var bitmap: SoftReference<Bitmap>? = null
 
-    // Access-order stamp for LRU eviction; bumped on genuine access.
+    // LRU stamp; bumped on genuine access.
     var lastAccessSeq: Long = 0L
 
     val loaded: Boolean get() = strokes != null && images != null && sizeComputed
@@ -128,18 +122,15 @@ class PageDataManager @Inject constructor(
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // Read from every thread (including under [lock] via [currentPage]/[isPinnedLocked]) and written
-    // by the suspend setPage; @Volatile so a stale read can't unpin the real current page mid-evict.
-    // A full fix (explicit pageId threading) stays the multipage plan's P18.
+    // Read from every thread, written by the suspend setPage; @Volatile so a stale read can't
+    // unpin the real current page mid-evict.
     @Volatile
     var pageFromDb: Page? = null
 
-    // --- Single owner + single lock for all cached page state (Phase 1b-1) ---
-    // Every read/write of [entries], [entriesTotalBytes], [backgroundCache] and the per-entry fields
-    // happens under this monitor. It is a plain monitor (not a suspending Mutex) so the hot,
-    // non-suspend accessors (drawing, selection) can take it; consequently NO suspend call may run
-    // inside a synchronized(lock) block — suspend work (DB reads, cost estimation) is always done
-    // outside the lock, and only its results are stored under it.
+    // Single lock for all cached page state ([entries], [entriesTotalBytes], [backgroundCache] and
+    // per-entry fields). A plain monitor (not a suspending Mutex) so hot non-suspend accessors
+    // (drawing, selection) can take it — therefore NO suspend call may run inside synchronized(lock):
+    // suspend work (DB reads, cost estimation) runs outside, only its results are stored under it.
     private val lock = Any()
 
     // Insertion-ordered for stable iteration/logging; LRU is driven by [PageCacheEntry.lastAccessSeq].
@@ -150,31 +141,24 @@ class PageDataManager @Inject constructor(
     private var entriesTotalBytes = 0L
     private var accessSeq = 0L
 
-    // Shared background pool, deduped by CachedBackground.id. Backgrounds are large PDF/image
-    // bitmaps (tens of MB each) and are managed on their OWN budget line ([backgroundCapLocked] /
-    // [trimBackgroundsLocked]), independent of stroke/image page eviction — so a page full of cheap
-    // strokes is never evicted just because backgrounds are big (the churn Phase 1b originally
-    // caused; the plan's 1b-2 "own budget line" made concrete).
+    // Shared background pool, deduped by CachedBackground.id. Large PDF/image bitmaps managed on
+    // their OWN budget line ([trimBackgroundsLocked]), separate from stroke/image page eviction, so
+    // a page full of cheap strokes is never evicted just because backgrounds are big.
     private val backgroundCache = LinkedHashMap<String, CachedBackground>()
     private var bgAccessSeq = 0L
 
-    // Fraction of the ART app-heap that stroke pages + backgrounds may use *together*. The remaining
-    // ~30% is deliberately left uncounted for: the windowed canvas bitmap, Compose/UI objects, and
-    // the transient stroke copy a page load allocates (the copy that actually OOMed in the P1 repro).
-    // Raised from the original ~0.5 combined budget (which held only ~2 backgrounds and thrashed);
-    // pushing it higher trades that safety margin — tune down first if the P1 repro OOMs.
+    // Fraction of the ART app-heap that stroke pages + backgrounds may use together. The rest is
+    // left uncounted for the windowed bitmap, Compose/UI objects, and a load's transient stroke
+    // copy. Tune down first if the app OOMs.
     private val heapBudgetFraction = 0.7
 
-    // Stroke/image page budget: [heapBudgetFraction] of the ART app-heap. Governs page (entry)
-    // eviction only — backgrounds are NOT counted against it, so cheap stroke pages have huge
-    // headroom and are essentially never evicted on a normal notebook. Strokes are user data and get
-    // priority: a pathologically large page may use the whole ceiling, evicting backgrounds first.
+    // Stroke/image page budget. Governs entry eviction only — backgrounds aren't counted against it,
+    // so a pathologically large page may use the whole ceiling, evicting backgrounds first.
     private val budget = CacheBudget(
         { Runtime.getRuntime().maxMemory() }, fraction = heapBudgetFraction, reserveBytes = 0L
     )
 
-    // Always leave room for at least one full-screen background bitmap (the pinned current page's),
-    // even when strokes dominate the heap.
+    // Always leave room for at least the current page's full-screen background bitmap.
     private val minBackgroundBytes = 32L * 1024 * 1024
 
     // observe background file changes
@@ -190,7 +174,7 @@ class PageDataManager @Inject constructor(
     // thread while the recomposer is applying its own snapshot throws
     // "Unsupported concurrent change during composition". All mutations must therefore go through
     // [mutateUiState], which commits them inside a global mutable snapshot so they are applied
-    // atomically and coordinate with composition instead of racing it. They are kept OUT of
+    // atomically and coordinate with composition instead of racing it. Kept OUT of
     // [PageCacheEntry]/[lock] on purpose: they must be readable lock-free from composition.
     private val pageHigh = mutableStateMapOf<String, Int>()
     private val pageScroll = mutableStateMapOf<String, Offset>()
@@ -243,11 +227,10 @@ class PageDataManager @Inject constructor(
     private fun residentBytesLocked(): Long = entriesTotalBytes + backgroundBytesLocked()
 
     /**
-     * Byte budget for the background pool: whatever is left under the shared heap ceiling
-     * ([heapBudgetFraction]) after resident stroke/image bytes, floored so the current page's
-     * background always fits. Strokes (resident + the [pendingEntryBytes] of a page about to load)
-     * are weighted ×2, so a growing stroke page yields background heap ahead of its own load's
-     * transient copy rather than after it. Recomputed on demand — cheap.
+     * Byte budget for the background pool: heap left under the ceiling after resident stroke/image
+     * bytes, floored at [minBackgroundBytes]. Strokes (resident + [pendingEntryBytes] of a page
+     * about to load) are weighted ×2 so a growing stroke page yields background heap ahead of its
+     * own load's transient copy.
      */
     private fun backgroundCapLocked(pendingEntryBytes: Long = 0L): Long {
         val ceiling = (Runtime.getRuntime().maxMemory() * heapBudgetFraction).toLong()
@@ -285,9 +268,7 @@ class PageDataManager @Inject constructor(
 
     /**
      * Ensures [pageId]'s background bitmap is resident, reloading it if the pool evicted it while the
-     * page's strokes stayed cached (backgrounds and pages are on separate budget lines). No-op if
-     * already present (just bumps its LRU stamp). Suspends on a reload (PDF/image decode); the check
-     * runs before constructing anything so an already-cached background is never re-decoded.
+     * page's strokes stayed cached. No-op if already present (just bumps its LRU stamp).
      */
     private suspend fun ensureBackgroundLoaded(pageId: String) {
         if (pageId.isEmpty()) return
@@ -313,8 +294,7 @@ class PageDataManager @Inject constructor(
 
     /**
      * Recompute an entry's stroke/image resident size and apply the delta to [entriesTotalBytes].
-     * Costs O(#strokes) (summing `points.size`, each O(1)) — same order as the list copies already
-     * done on edit — so it stays cheap even for a 12k-stroke page.
+     * O(#strokes), same order as the list copies already done on edit.
      */
     private fun recomputeEntrySizeLocked(entry: PageCacheEntry) {
         val strokeList = entry.strokes
@@ -345,10 +325,9 @@ class PageDataManager @Inject constructor(
      * Returns the existing loading Job for the page, or starts and returns a new one. Locking is
      * handled internally; suspend work (cost estimate, neighbor lookup) runs outside the lock.
      *
-     * [isPrefetch] pages are opportunistic: they are admitted only into *spare* budget and never
-     * evict. The current page ([isPrefetch] = false) is never refused — it evicts unpinned pages to
-     * fit, and if it still doesn't fit it loads anyway after evicting everything unpinned and emits
-     * an over-budget telemetry event.
+     * [isPrefetch] pages are admitted only into spare budget and never evict. The current page
+     * ([isPrefetch] = false) is never refused: it evicts unpinned pages to fit, and loads anyway
+     * (emitting an over-budget telemetry event) if it still doesn't fit.
      */
     private suspend fun getOrStartLoadingJob(
         pageId: String, bookId: String?, isPrefetch: Boolean
@@ -369,7 +348,7 @@ class PageDataManager @Inject constructor(
 
         // Estimate the page's resident cost from its compressed blob size (suspend DB) — no lock.
         // null means the estimate failed: the current page then fails open (loads anyway) while a
-        // prefetch fails closed (is skipped) — see [decideAdmission] (1b-R4).
+        // prefetch fails closed (is skipped) — see [decideAdmission].
         val estimate: Long? = try {
             estimatePageCostBytes(pageId)
         } catch (e: CancellationException) {
@@ -392,7 +371,7 @@ class PageDataManager @Inject constructor(
                 else -> {
                     val cap = budget.capBytes()
                     // Subtract what this page already holds so a partially-resident page (strokes
-                    // drawn during load / partial re-load) isn't double-counted (1b-R5).
+                    // drawn during load / partial re-load) isn't double-counted.
                     val alreadyResident = entries[pageId]?.sizeBytes ?: 0L
                     val decision = decideAdmission(
                         isPrefetch = isPrefetch,
@@ -576,12 +555,10 @@ class PageDataManager @Inject constructor(
             }
 
             synchronized(lock) {
-                // Commit only if this load still owns the entry. Cancellation is cooperative and
-                // the commit block has no suspension point, so a cancel that lands after
-                // getWithDataById returned would otherwise let this block re-create a
-                // fully-populated "zombie" entry that the cancel path already removed (1b-R1).
-                // Cancel+removePageLocked are always paired atomically under [lock], so a mismatched
-                // (or absent) loadJob means this result is stale — discard it.
+                // Commit only if this load still owns the entry. A cancel landing after
+                // getWithDataById returned would otherwise let this block re-create a "zombie" entry
+                // the cancel path already removed. Cancel+removePageLocked are paired under [lock],
+                // so a mismatched (or absent) loadJob means this result is stale — discard it.
                 val entry = entries[pageId]
                 if (entry == null || entry.loadJob !== myJob) {
                     log.d("Discarding stale/cancelled load result for $pageId")
@@ -607,9 +584,8 @@ class PageDataManager @Inject constructor(
     }
 
     // Copy-on-write: build a new list and swap the reference under [lock] instead of mutating in
-    // place. A reader that took the old reference from getStrokes/getImages (which run without the
-    // lock, on the drawing thread) then iterates an immutable snapshot — no ConcurrentModification
-    // when a join-during-load appends here (1b-R2).
+    // place, so a reader that took the old reference from getStrokes/getImages (lock-free, on the
+    // drawing thread) iterates an immutable snapshot — no ConcurrentModification on join-during-load.
     private fun appendStrokesLocked(entry: PageCacheEntry, newStrokes: List<Stroke>) {
         val existing = entry.strokes
         entry.strokes = if (existing == null) newStrokes.toMutableList()
@@ -1204,7 +1180,7 @@ class PageDataManager @Inject constructor(
         return true
     }
 
-    /** Public entry point; there are currently no external callers, kept for internal/test use. */
+    /** Locking wrapper for [removePageLocked]; used by the load-cancellation path in [loadPageFromDb]. */
     fun removePage(pageId: String): Boolean = synchronized(lock) { removePageLocked(pageId) }
 
     /**
