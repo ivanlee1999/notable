@@ -8,8 +8,6 @@ import android.database.sqlite.SQLiteConstraintException
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Debug
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.BuildConfig
 import com.ethran.notable.SCREEN_HEIGHT
@@ -114,6 +112,7 @@ class PageDataManager @Inject constructor(
     private val appRepository: AppRepository,
     private val appEventBus: AppEventBus,
     private val backgroundFileWatcher: BackgroundFileWatcher,
+    private val viewport: PageViewportState,
 ) {
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -165,25 +164,9 @@ class PageDataManager @Inject constructor(
     // lock. It is called only OUTSIDE [lock] (it touches the filesystem) and never calls back in;
     // it reports page ids to invalidate through a flow, collected in [init].
 
-    // Needs to be observable by UI, for scroll bars (read during composition in ScrollIndicator).
-    // These are Compose snapshot states, but they are written from background coroutines
-    // (page loading, scroll/zoom, cache eviction). Writing a snapshot state from a non-composition
-    // thread while the recomposer is applying its own snapshot throws
-    // "Unsupported concurrent change during composition". All mutations must therefore go through
-    // [mutateUiState], which commits them inside a global mutable snapshot so they are applied
-    // atomically and coordinate with composition instead of racing it. Kept OUT of
-    // [PageCacheEntry]/[lock] on purpose: they must be readable lock-free from composition.
-    private val pageHigh = mutableStateMapOf<String, Int>()
-    private val pageScroll = mutableStateMapOf<String, Offset>()
-
-    /**
-     * Applies [block] (which mutates the UI-observable snapshot maps [pageHigh] / [pageScroll])
-     * inside a global mutable snapshot. This is required because those maps are read during
-     * composition while being written from arbitrary background threads; committing the change as
-     * its own snapshot prevents the concurrent-modification crash in the recomposer.
-     */
-    private inline fun <T> mutateUiState(block: () -> T): T =
-        Snapshot.withMutableSnapshot(block)
+    // Per-page height/scroll are Compose snapshot state owned by [PageViewportState]; this class
+    // only forwards to it, always with [lock] released. The one exception is its documented
+    // lock-safe [PageViewportState.scheduleRemoval], used when evicting.
 
     private val currentPage: String
         get() = pageFromDb?.id.orEmpty()
@@ -752,7 +735,7 @@ class PageDataManager @Inject constructor(
                     val entry = synchronized(lock) { entries[pageId] }
                     val bitmap = entry?.bitmap?.get()
                     val currentZoomLevel = entry?.zoom
-                    val currentScroll = pageScroll[pageId]
+                    val currentScroll = viewport.scroll(pageId)
 
                     if (bitmap == null || bitmap.isRecycled) {
                         log.e("Page $pageId: Bitmap is recycled/null — cannot persist it")
@@ -798,21 +781,18 @@ class PageDataManager @Inject constructor(
         getOrCreateEntryLocked(pageId).bitmap = SoftReference(bitmap)
     }
 
-    fun getPageHeight(pageId: String): Int? = pageHigh[pageId]
-    fun setPageHeight(pageId: String, height: Int) {
-        mutateUiState { pageHigh[pageId] = height }
-    }
+    fun getPageHeight(pageId: String): Int? = viewport.height(pageId)
+    fun setPageHeight(pageId: String, height: Int) = viewport.setHeight(pageId, height)
 
     fun recomputeHeight(pageId: String): Int {
-        // Compute under [lock], publish outside it: applying a Compose snapshot runs global write
-        // observers (and can wake the recomposer), which must not happen while this hot drawing-path
-        // lock is held.
+        // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
+        // snapshot, which must never run with this hot drawing-path lock held.
         val newHeight = synchronized(lock) {
             val list = entries[pageId]?.strokes
             if (list.isNullOrEmpty()) return SCREEN_HEIGHT
             max(list.maxOf { it.bottom }.plus(50).toInt(), SCREEN_HEIGHT)
         }
-        mutateUiState { pageHigh[pageId] = newHeight }
+        viewport.setHeight(pageId, newHeight)
         return newHeight
     }
 
@@ -824,16 +804,12 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    /**
-     * Returns the stored scroll for [pageId], or the page's persisted default if none is cached yet.
-     * Pure read: never mutates [pageScroll] (writing from composition would race the recomposer).
-     */
-    fun getPageScroll(pageId: String): Offset {
-        return pageScroll[pageId] ?: Offset(0f, pageFromDb?.scroll?.toFloat() ?: 0f)
-    }
+    /** Stored scroll for [pageId], falling back to the page's persisted scroll position. */
+    fun getPageScroll(pageId: String): Offset =
+        viewport.scroll(pageId) ?: Offset(0f, pageFromDb?.scroll?.toFloat() ?: 0f)
 
     fun setPageScroll(pageId: String, scroll: Offset) {
-        mutateUiState { pageScroll[pageId] = scroll }
+        viewport.setScroll(pageId, scroll)
     }
 
     fun getPageZoom(pageId: String): Float = synchronized(lock) { entries[pageId]?.zoom ?: 1f }
@@ -1160,11 +1136,9 @@ class PageDataManager @Inject constructor(
                 backgroundCache.remove(key)
             }
         }
-        // pageHigh/pageScroll are UI-observable snapshot state: remove them in a snapshot.
-        mutateUiState {
-            pageHigh.remove(pageId)
-            pageScroll.remove(pageId)
-        }
+        // Both of these are lock-safe by contract: they enqueue and return, running no Compose code
+        // and touching no filesystem inline. That is the whole reason eviction may stay under [lock].
+        viewport.scheduleRemoval(pageId)
         backgroundFileWatcher.unwatchAsync(pageId)
         assertTotalsLocked()
         return true
