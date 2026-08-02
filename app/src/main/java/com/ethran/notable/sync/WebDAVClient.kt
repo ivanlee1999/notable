@@ -7,7 +7,6 @@ import com.ethran.notable.utils.getOrNull
 import com.ethran.notable.utils.map
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
-import com.ethran.notable.utils.onSuccess
 import io.shipbook.shipbooksdk.Log
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,6 +16,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -157,7 +157,7 @@ class WebDAVClient(
             val requestBody = content.toRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
                 .header("Authorization", credentials)
-                .apply { ifMatch?.let { header("If-Match", it) } }
+                .apply { ifMatch?.let { tag -> etagHeader(tag)?.let { header("If-Match", it) } } }
                 .build()
         }) { response ->
             when {
@@ -186,7 +186,7 @@ class WebDAVClient(
             val requestBody = localFile.asRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
                 .header("Authorization", credentials)
-                .apply { ifMatch?.let { header("If-Match", it) } }
+                .apply { ifMatch?.let { tag -> etagHeader(tag)?.let { header("If-Match", it) } } }
                 .build()
         }) { response ->
             when {
@@ -215,14 +215,14 @@ class WebDAVClient(
             val requestBody = content.toRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
                 .header("Authorization", credentials)
-                .apply { ifMatch?.let { header("If-Match", it) } }
+                .apply { ifMatch?.let { tag -> etagHeader(tag)?.let { header("If-Match", it) } } }
                 .build()
         }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(response.header("ETag"))
+                response.isSuccessful -> AppResult.Success(normalizeEtag(response.header("ETag")))
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -245,14 +245,14 @@ class WebDAVClient(
             val requestBody = localFile.asRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
                 .header("Authorization", credentials)
-                .apply { ifMatch?.let { header("If-Match", it) } }
+                .apply { ifMatch?.let { tag -> etagHeader(tag)?.let { header("If-Match", it) } } }
                 .build()
         }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(response.header("ETag"))
+                response.isSuccessful -> AppResult.Success(normalizeEtag(response.header("ETag")))
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -268,7 +268,9 @@ class WebDAVClient(
         }) { response ->
             when {
                 response.isSuccessful ->
-                    AppResult.Success(DownloadedFile(response.body.bytes(), response.header("ETag")))
+                    AppResult.Success(
+                        DownloadedFile(response.body.bytes(), normalizeEtag(response.header("ETag")))
+                    )
 
                 response.code == HttpURLConnection.HTTP_NOT_FOUND ->
                     AppResult.Error(DomainError.RemoteMissing(path))
@@ -287,13 +289,15 @@ class WebDAVClient(
         execute("GET", {
             Request.Builder().url(buildUrl(path)).get()
                 .header("Authorization", credentials)
-                .header("If-None-Match", etag)
+                .apply { etagHeader(etag)?.let { header("If-None-Match", it) } }
                 .build()
         }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_MODIFIED -> AppResult.Success(null)
                 response.isSuccessful ->
-                    AppResult.Success(DownloadedFile(response.body.bytes(), response.header("ETag")))
+                    AppResult.Success(
+                        DownloadedFile(response.body.bytes(), normalizeEtag(response.header("ETag")))
+                    )
 
                 // Same typed signal as getFileWithMetadata so a vanished manifest is handled
                 // identically on both the conditional and unconditional fetch paths (P6).
@@ -304,12 +308,47 @@ class WebDAVClient(
             }
         }
 
-    fun getFile(path: String, localFile: File): AppResult<Unit, DomainError> {
-        return getFile(path).onSuccess { content ->
-            localFile.parentFile?.mkdirs()
-            localFile.writeBytes(content)
-        }.map { }
-    }
+    /**
+     * Download [path] straight to [localFile], returning the file's ETag (or `null` if the server
+     * sent none).
+     *
+     * Streams the body to disk rather than materialising it in a `ByteArray` — a synced page can
+     * hold thousands of strokes, and buffering one whole is the download-side twin of the upload
+     * OOM this client already streams around. Writes to a sibling `.part` file and renames on
+     * success, so a failed or truncated transfer never leaves a partial file behind: callers treat
+     * "the file exists locally" as "already downloaded" and would otherwise cache the fragment
+     * forever.
+     */
+    fun getFile(path: String, localFile: File): AppResult<String?, DomainError> =
+        execute("GET", {
+            Request.Builder().url(buildUrl(path)).get().header("Authorization", credentials).build()
+        }) { response ->
+            when {
+                response.isSuccessful -> {
+                    localFile.parentFile?.mkdirs()
+                    val partFile = File(localFile.parentFile, "${localFile.name}.part")
+                    try {
+                        response.body.byteStream().use { input ->
+                            partFile.outputStream().buffered().use { output -> input.copyTo(output) }
+                        }
+                        // Some filesystems refuse a rename onto an existing file; drop it and retry.
+                        val moved = partFile.renameTo(localFile) ||
+                            run { localFile.delete(); partFile.renameTo(localFile) }
+                        if (moved) AppResult.Success(normalizeEtag(response.header("ETag")))
+                        else AppResult.Error(DomainError.SyncError("Could not store download: $path"))
+                    } catch (e: IOException) {
+                        AppResult.Error(DomainError.SyncError("Download of $path failed: ${e.message}"))
+                    } finally {
+                        partFile.delete()
+                    }
+                }
+
+                response.code == HttpURLConnection.HTTP_NOT_FOUND ->
+                    AppResult.Error(DomainError.RemoteMissing(path))
+
+                else -> AppResult.Error(DomainError.SyncError("GET failed: ${response.code}"))
+            }
+        }
 
     /**
      * Move (rename) [from] to [to], overwriting the destination. On most servers this is atomic,
@@ -335,7 +374,11 @@ class WebDAVClient(
                 .header("Authorization", credentials)
                 .header("Destination", destUrl)
                 .header("Overwrite", "T")
-                .apply { ifMatchDestination?.let { header("If", "<$destUrl> ([$it])") } }
+                .apply {
+                    ifMatchDestination?.let { tag ->
+                        etagHeader(tag)?.let { header("If", "<$destUrl> ([$it])") }
+                    }
+                }
                 .build()
         }) { response ->
             when {
@@ -422,7 +465,7 @@ class WebDAVClient(
                 response.isSuccessful -> {
                     val selfName = path.trimEnd('/').substringAfterLast('/')
                     val map = WebDavXml.parseEntries(response.body.string())
-                        .map { Uri.decode(it.href.trimEnd('/').substringAfterLast('/')) to it.etag }
+                        .map { Uri.decode(it.href.trimEnd('/').substringAfterLast('/')) to normalizeEtag(it.etag) }
                         .filter { (name, _) -> name.isNotEmpty() && name != selfName }
                         .toMap()
                     AppResult.Success(map)
@@ -528,6 +571,36 @@ class WebDAVClient(
                 </D:prop>
             </D:propfind>
         """.trimIndent()
+
+        /**
+         * Canonical form of an ETag for **storage and comparison**: the opaque value alone, with
+         * the weak-validator prefix (`W/`) and the surrounding quotes stripped.
+         *
+         * Notable learns a resource's ETag from two different places — the `ETag` response header of
+         * a PUT/GET, and the `<getetag>` property of a PROPFIND — and the same server can spell the
+         * same validator differently in the two (`W/"abc"` vs `"abc"`, or with stray whitespace).
+         * Comparing those verbatim made an unchanged page look changed forever: every sync
+         * re-downloaded every page, and `If-Match` never matched. Every ETag entering this client is
+         * therefore canonicalized here, once, so all downstream equality checks compare like with
+         * like. Returns null for a missing or empty tag.
+         *
+         * Note this is a *weak* comparison (`W/"x"` and `"x"` compare equal), which is the right
+         * semantics for "has this resource's content changed since we last saw it".
+         */
+        fun normalizeEtag(raw: String?): String? {
+            val trimmed = raw?.trim().orEmpty()
+            if (trimmed.isEmpty()) return null
+            val strong = trimmed.removePrefix("W/").removePrefix("w/").trim()
+            return strong.removeSurrounding("\"").takeIf { it.isNotEmpty() }
+        }
+
+        /**
+         * Render a stored ETag back into a header value for `If-Match` / `If-None-Match`, which
+         * require the quoted form. Normalizes first, so a value stored before [normalizeEtag]
+         * existed (quotes and all) is not double-quoted here.
+         */
+        private fun etagHeader(stored: String): String? =
+            normalizeEtag(stored)?.let { "\"$it\"" }
 
         /**
          * Parse an HTTP Date header (RFC 1123 format) to epoch millis.

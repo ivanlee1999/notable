@@ -21,6 +21,7 @@ import com.ethran.notable.utils.onFailure
 import com.ethran.notable.utils.onSuccess
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.security.MessageDigest
 import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -248,7 +249,7 @@ class NotebookSyncService @Inject constructor(
                 // change to this page 412s, aborting before manifest publish (nothing committed);
                 // new pages (no row) send no If-Match.
                 val ifMatch = rowsByPageId[page.id]?.remoteEtag
-                uploadPage(page, notebookId, client, ifMatch).onSuccess { pageEtag ->
+                val uploaded = uploadPage(page, notebookId, client, ifMatch).onSuccess { pageEtag ->
                     committedPageRows.add(
                         PageSyncState(
                             pageId = page.id,
@@ -259,6 +260,13 @@ class NotebookSyncService @Inject constructor(
                         )
                     )
                 }.onError { errors.add(it) }
+                // A confirmed remote edit to one page settles the whole notebook: the manifest can
+                // no longer be published, so uploading the remaining pages would only push bytes at
+                // a commit that is already lost. Stop and let the next sync re-plan.
+                if (uploaded is AppResult.Error && uploaded.error is DomainError.SyncConflict) {
+                    log.w(TAG, "Aborting upload of ${notebook.title}: page ${page.id} changed remotely")
+                    break
+                }
             }
             // Rows for pages that left the notebook are dropped in the commit transaction.
             val departedPageIds = rowsByPageId.keys - notebook.pageIds.toSet()
@@ -377,9 +385,84 @@ class NotebookSyncService @Inject constructor(
     }
 
     /**
+     * Decide what a page-level `If-Match` 412 actually means, on **content** rather than on the
+     * ETag that just failed to match.
+     *
+     * A stale stored ETag has two benign causes, and in both the remote file already holds exactly
+     * the bytes we were about to send:
+     *  - our own earlier sync PUT this page and then failed on a later step, so its row was never
+     *    committed and still carries the pre-PUT ETag;
+     *  - the server regenerated the ETag without a content change (or spells it differently between
+     *    PUT and PROPFIND than we stored).
+     *
+     * Anything else is a real concurrent edit from another device. Blanket-overwriting (what this
+     * did before) destroys that device's page content on the server while its manifest still points
+     * at it — the manifest guard makes our *commit* fail, but the page bytes are already gone.
+     * Blanket-aborting is not safe either: cause 1 would 412 identically on every future sync and
+     * wedge the notebook forever.
+     *
+     * So: fetch the remote page (streamed to a temp file, never buffered whole) and compare.
+     *  - identical -> nothing to upload. Report success carrying the remote's own ETag, which is the
+     *    correct anchor for this page's committed row.
+     *  - different -> propagate [DomainError.SyncConflict]. The manifest is never published, nothing
+     *    is committed, and the next sync re-reads the remote so the planner can decide
+     *    download-vs-upload with fresh information.
+     *  - could not check -> propagate the conflict as well: refusing to overwrite is the safe default
+     *    when we cannot prove the remote is ours.
+     */
+    private fun resolvePageConflict(
+        pageId: String,
+        pagePath: String,
+        localCopy: File,
+        client: WebDAVClient,
+    ): AppResult<String?, DomainError> {
+        val remoteCopy = File.createTempFile("notable-page-remote-", ".json", context.cacheDir)
+        return try {
+            val remoteEtag = when (val fetched = client.getFile(pagePath, remoteCopy)) {
+                is AppResult.Success -> fetched.data
+                is AppResult.Error -> {
+                    log.w(
+                        TAG,
+                        "Page $pageId 412 and its remote copy could not be read " +
+                            "(${fetched.error.userMessage}); treating as a conflict"
+                    )
+                    return AppResult.Error(DomainError.SyncConflict)
+                }
+            }
+            if (contentsEqual(localCopy, remoteCopy)) {
+                log.i(TAG, "Page $pageId 412 but remote content is identical; adopting its ETag")
+                AppResult.Success(remoteEtag)
+            } else {
+                log.w(TAG, "Page $pageId changed remotely since our last sync; aborting upload")
+                AppResult.Error(DomainError.SyncConflict)
+            }
+        } finally {
+            remoteCopy.delete()
+        }
+    }
+
+    /** Byte equality of two files, streamed via digests so page size never bounds memory. */
+    private fun contentsEqual(a: File, b: File): Boolean =
+        a.length() == b.length() && sha256(a).contentEquals(sha256(b))
+
+    private fun sha256(file: File): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest()
+    }
+
+    /**
      * Upload one page's JSON (streamed from a temp file) plus its images/backgrounds, returning the
      * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
-     * against a concurrent remote change; pass `null` for a page with no prior sync row.
+     * against a concurrent remote change; a 412 is resolved by [resolvePageConflict]. Pass `null`
+     * for a page with no prior sync row.
      */
     private suspend fun uploadPage(
         page: Page,
@@ -402,19 +485,8 @@ class NotebookSyncService @Inject constructor(
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
             val guarded = client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch)
-            // A page-level 412 is NOT a terminal conflict in 10-I. The manifest publish's own If-Match
-            // is the real whole-notebook last-writer-wins guard; a page's stored ETag can be stale for
-            // benign reasons that must self-heal, not wedge the notebook in a permanent false conflict:
-            //  - our own prior sync PUT this page then failed on a later media upload, so the row was
-            //    never committed and still holds the pre-PUT ETag (review Risk 1);
-            //  - the server regenerated the ETag with no content change (review Risk 2 / the "harmless
-            //    re-transfer" design note).
-            // Overwrite unconditionally; a genuine concurrent *notebook* change is still caught when
-            // the manifest publish 412s, keeping page-file clobbering invisible to other devices (they
-            // stay gated on the manifest commit marker). True page-level conflict handling is 10f.
             if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict && ifMatch != null) {
-                log.w(TAG, "Page ${page.id} If-Match 412; overwriting (manifest guard still applies)")
-                client.putFileReturningEtag(pagePath, tempFile, "application/json", null)
+                resolvePageConflict(page.id, pagePath, tempFile, client)
             } else {
                 guarded
             }
@@ -548,7 +620,9 @@ class NotebookSyncService @Inject constructor(
         var fetched = 0
         for (pageId in notebook.pageIds) {
             val currentEtag = currentEtagByPageId[pageId]
-            val storedEtag = rowsByPageId[pageId]?.remoteEtag
+            // Normalized on both sides: `currentEtag` by the client, the stored one here because
+            // rows written before ETag canonicalization still hold the raw server spelling.
+            val storedEtag = WebDAVClient.normalizeEtag(rowsByPageId[pageId]?.remoteEtag)
             // Fetch when we have no committed row, when the page is missing locally, when we
             // couldn't read the remote ETag (fetch to be safe), or when the remote ETag differs
             // from what we last committed.
