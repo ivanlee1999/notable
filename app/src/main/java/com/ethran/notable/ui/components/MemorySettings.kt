@@ -585,22 +585,22 @@ private fun PreviewFrame(
 /** The ordinary case: both budgets comfortably inside their caps. */
 @Preview(showBackground = true, widthDp = 600, heightDp = 720)
 @Composable
-fun MemorySettingsPreview() = PreviewFrame(previewSnapshot())
+private fun MemorySettingsPreview() = PreviewFrame(previewSnapshot())
 
 /** Collapsed — what the Debug tab shows until you tap it. */
 @Preview(showBackground = true, widthDp = 600)
 @Composable
-fun MemorySettingsCollapsedPreview() = PreviewFrame(previewSnapshot(), expanded = false)
+private fun MemorySettingsCollapsedPreview() = PreviewFrame(previewSnapshot(), expanded = false)
 
 /** Expanded before the first sample lands. */
 @Preview(showBackground = true, widthDp = 600)
 @Composable
-fun MemorySettingsSamplingPreview() = PreviewFrame(snapshot = null)
+private fun MemorySettingsSamplingPreview() = PreviewFrame(snapshot = null)
 
 /** Nothing cached: exercises the zero-total bars and the `<none>` rows. */
 @Preview(showBackground = true, widthDp = 600, heightDp = 560)
 @Composable
-fun MemorySettingsEmptyPreview() = PreviewFrame(
+private fun MemorySettingsEmptyPreview() = PreviewFrame(
     previewSnapshot(entryMb = 0, backgroundMb = 0, pages = emptyList(), backgrounds = emptyList())
 )
 
@@ -611,7 +611,7 @@ fun MemorySettingsEmptyPreview() = PreviewFrame(
  */
 @Preview(showBackground = true, widthDp = 600, heightDp = 800)
 @Composable
-fun MemorySettingsOverBudgetPreview() = PreviewFrame(
+private fun MemorySettingsOverBudgetPreview() = PreviewFrame(
     previewSnapshot(
         usedHeapMb = 120, entryMb = 180, entryCapMb = 100,
         nativeMb = 40, backgroundMb = 96, backgroundCapMb = 64,
@@ -621,4 +621,4 @@ fun MemorySettingsOverBudgetPreview() = PreviewFrame(
 /** Copy feedback visible. */
 @Preview(showBackground = true, widthDp = 600, heightDp = 720)
 @Composable
-fun MemorySettingsCopiedPreview() = PreviewFrame(previewSnapshot(), showCopied = true)
+private fun MemorySettingsCopiedPreview() = PreviewFrame(previewSnapshot(), showCopied = true)

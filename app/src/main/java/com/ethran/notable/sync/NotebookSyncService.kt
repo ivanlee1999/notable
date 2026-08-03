@@ -656,7 +656,7 @@ class NotebookSyncService @Inject constructor(
         val departedPageIds =
             (rowsByPageId.keys - notebook.pageIds.toSet()).toList()
         return try {
-            appRepository.bookRepository.updatePreservingTimestamp(notebook)
+            appRepository.bookRepository.updateVerbatim(notebook)
             // Commit point: mark the notebook synced at the remote
             // timestamp, write the fetched pages' rows, and drop rows for departed pages -- one
             // transaction. Skipped pages keep their prior rows untouched.

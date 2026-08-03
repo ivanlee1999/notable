@@ -1280,7 +1280,7 @@ class PageDataManager @Inject constructor(
 
     /**
      * Evict unpinned pages, least-recently-used first, until the counted resident bytes fit the
-     * heap budget. Replaces the old count-based `reduceCache(20)`.
+     * heap budget.
      */
     fun trimToBudget() {
         synchronized(lock) {

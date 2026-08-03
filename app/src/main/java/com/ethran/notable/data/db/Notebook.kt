@@ -120,10 +120,10 @@ class BookRepository @Inject constructor(
     }
 
     /**
-     * Update notebook without modifying the timestamp.
-     * Used during sync when downloading from server to preserve remote timestamp.
+     * Write the notebook exactly as given, unlike [update], which stamps `updatedAt = now()`.
+     * Used during sync when downloading from server, to keep the remote timestamp.
      */
-    suspend fun updatePreservingTimestamp(notebook: Notebook) {
+    suspend fun updateVerbatim(notebook: Notebook) {
         notebookDao.update(notebook)
     }
 
