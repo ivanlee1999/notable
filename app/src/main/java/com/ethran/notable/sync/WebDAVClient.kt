@@ -331,9 +331,9 @@ class WebDAVClient(
                         response.body.byteStream().use { input ->
                             partFile.outputStream().buffered().use { output -> input.copyTo(output) }
                         }
-                        // Some filesystems refuse a rename onto an existing file; drop it and retry.
+                        // Some filesystems refuse a rename onto an existing file; retry via a backup.
                         val moved = partFile.renameTo(localFile) ||
-                            run { localFile.delete(); partFile.renameTo(localFile) }
+                            replaceViaBackup(partFile, localFile)
                         if (moved) AppResult.Success(normalizeEtag(response.header("ETag")))
                         else AppResult.Error(DomainError.SyncError("Could not store download: $path"))
                     } catch (e: IOException) {
@@ -349,6 +349,31 @@ class WebDAVClient(
                 else -> AppResult.Error(DomainError.SyncError("GET failed: ${response.code}"))
             }
         }
+
+    /**
+     * Second attempt at replacing [localFile] with [partFile], for filesystems that refuse a rename
+     * onto an existing file.
+     *
+     * Moves the original aside instead of deleting it, and puts it back if the retry also fails, so
+     * a double failure leaves the caller with the file it already had rather than with nothing.
+     * Deleting first (what this did before) could strand a caller holding neither copy — and since
+     * "the file exists locally" is how callers decide something is already downloaded, the loss is
+     * silent until the next read.
+     *
+     * @return whether [partFile] now *is* [localFile].
+     */
+    private fun replaceViaBackup(partFile: File, localFile: File): Boolean {
+        val backup = File(localFile.parentFile, "${localFile.name}.bak")
+        backup.delete()
+        // If the original can't even be moved aside, leave it alone and fail with it intact.
+        if (localFile.exists() && !localFile.renameTo(backup)) return false
+        if (partFile.renameTo(localFile)) {
+            backup.delete()
+            return true
+        }
+        backup.renameTo(localFile) // no-op when there was nothing to move aside
+        return false
+    }
 
     /**
      * Move (rename) [from] to [to], overwriting the destination. On most servers this is atomic,

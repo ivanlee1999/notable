@@ -54,20 +54,17 @@ object PageMemoryModel {
  * counted budget. Bounded against the *app heap*, never `maxMemory - totalMemory` (that is
  * GC-timing dependent and was proven the wrong signal by the reproduced OOM).
  *
- * [maxHeapBytes] is injected so tests can pin a heap size.
+ * [maxHeapBytes] is injected so tests can pin a heap size. [fraction] and [reserveBytes] have no
+ * defaults on purpose: the policy in force is the one the caller passes, and a default here would
+ * be the first thing a reader finds and the last thing that governs.
  */
 class CacheBudget(
     private val maxHeapBytes: () -> Long,
-    private val fraction: Double = DEFAULT_FRACTION,
-    private val reserveBytes: Long = DEFAULT_RESERVE_BYTES,
+    private val fraction: Double,
+    private val reserveBytes: Long,
 ) {
     fun capBytes(): Long =
         ((maxHeapBytes() * fraction).toLong() - reserveBytes).coerceAtLeast(0L)
-
-    companion object {
-        const val DEFAULT_FRACTION = 0.5
-        const val DEFAULT_RESERVE_BYTES = 32L * 1024 * 1024
-    }
 }
 
 /** One cached page's contribution to eviction decisions. */

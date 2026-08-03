@@ -385,6 +385,25 @@ class NotebookSyncService @Inject constructor(
     }
 
     /**
+     * Run [block] with a fresh temp file in the cache dir, deleting it afterwards whatever happens.
+     *
+     * Every page transfer needs a scratch file and nothing more: serialize-then-PUT
+     * ([uploadPage]), fetch-the-remote-copy to settle a 412 ([resolvePageConflict]), and — once the
+     * download path streams too — fetch-then-parse. Bounding page memory means going through disk,
+     * so this lifetime shows up once per direction; it is written here once instead.
+     *
+     * `inline` so [block] can `return` out of the calling function, which the conflict path does.
+     */
+    private inline fun <T> withPageTempFile(prefix: String, block: (File) -> T): T {
+        val file = File.createTempFile(prefix, ".json", context.cacheDir)
+        return try {
+            block(file)
+        } finally {
+            file.delete()
+        }
+    }
+
+    /**
      * Decide what a page-level `If-Match` 412 actually means, on **content** rather than on the
      * ETag that just failed to match.
      *
@@ -416,8 +435,7 @@ class NotebookSyncService @Inject constructor(
         localCopy: File,
         client: WebDAVClient,
     ): AppResult<String?, DomainError> {
-        val remoteCopy = File.createTempFile("notable-page-remote-", ".json", context.cacheDir)
-        return try {
+        return withPageTempFile("notable-page-remote-") { remoteCopy ->
             val remoteEtag = when (val fetched = client.getFile(pagePath, remoteCopy)) {
                 is AppResult.Success -> fetched.data
                 is AppResult.Error -> {
@@ -436,8 +454,6 @@ class NotebookSyncService @Inject constructor(
                 log.w(TAG, "Page $pageId changed remotely since our last sync; aborting upload")
                 AppResult.Error(DomainError.SyncConflict)
             }
-        } finally {
-            remoteCopy.delete()
         }
     }
 
@@ -478,9 +494,10 @@ class NotebookSyncService @Inject constructor(
         // to the PUT, rather than building a whole-page JSON string + toByteArray() in memory. This
         // bounds upload memory to ~one stroke regardless of page size — a 12k-stroke page otherwise
         // materialised its point data several times over and OOM'd.
-        val tempFile = File.createTempFile("notable-page-", ".json", context.cacheDir)
         val pagePath = SyncPaths.pageFile(notebookId, page.id)
-        val pageUploaded = try {
+        // The temp file must outlive the PUT: resolvePageConflict compares the remote against these
+        // same bytes, so both live inside one withPageTempFile block.
+        val pageUploaded = withPageTempFile("notable-page-") { tempFile ->
             tempFile.outputStream().buffered().use { out ->
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
@@ -490,8 +507,6 @@ class NotebookSyncService @Inject constructor(
             } else {
                 guarded
             }
-        } finally {
-            tempFile.delete()
         }
         return pageUploaded.flatMap { pageEtag ->
             val errors = ErrorAccumulator()
