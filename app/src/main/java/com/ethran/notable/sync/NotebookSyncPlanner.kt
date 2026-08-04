@@ -4,14 +4,14 @@ package com.ethran.notable.sync
  * Remote manifest facts needed to reconcile one notebook: its `updatedAt` (epoch millis, or null if
  * the manifest carried none) and its current ETag.
  */
-data class RemoteManifestInfo(val updatedAt: Long?, val etag: String?)
+data class RemoteManifestInfo(val updatedAt: Long?, val etag: ETag?)
 
 /**
  * The decision for a single notebook. Pure data — the executor turns it into WebDAV calls.
  */
 sealed interface NotebookAction {
     /** Push local up. [ifMatch] guards the manifest PUT against a concurrent remote change. */
-    data class Upload(val ifMatch: String?) : NotebookAction
+    data class Upload(val ifMatch: ETag?) : NotebookAction
 
     /** Pull remote down. */
     data object Download : NotebookAction
@@ -46,7 +46,7 @@ object NotebookSyncPlanner {
         /** `syncedLocalUpdatedAt` from the sync-state row, or null if never synced. */
         syncedLocalUpdatedAt: Long?,
         /** ETag we stored for the remote manifest at the last sync (used as `If-Match` on upload). */
-        storedEtag: String?,
+        storedEtag: ETag?,
         /**
          * Whether the remote manifest changed since [storedEtag]. `false` means the conditional GET
          * returned 304 (remote is exactly what we last synced), so [remote] is null.
@@ -75,7 +75,7 @@ object NotebookSyncPlanner {
     private fun rawDecide(
         localUpdatedAt: Long,
         syncedLocalUpdatedAt: Long?,
-        storedEtag: String?,
+        storedEtag: ETag?,
         remoteChanged: Boolean,
         remote: RemoteManifestInfo?,
         toleranceMs: Long,

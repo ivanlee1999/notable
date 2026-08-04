@@ -19,7 +19,7 @@ class NotebookSyncPlannerTest {
     ): NotebookAction = NotebookSyncPlanner.decide(
         localUpdatedAt = localUpdatedAt,
         syncedLocalUpdatedAt = syncedLocalUpdatedAt,
-        storedEtag = storedEtag,
+        storedEtag = ETag.parse(storedEtag),
         remoteChanged = remoteChanged,
         remote = remote,
         uploadOnly = uploadOnly,
@@ -48,7 +48,7 @@ class NotebookSyncPlannerTest {
             remoteChanged = false,
             remote = null,
         )
-        assertEquals(NotebookAction.Upload("etag-1"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("etag-1")), action)
     }
 
     @Test
@@ -73,7 +73,7 @@ class NotebookSyncPlannerTest {
             remoteChanged = false,
             remote = null,
         )
-        assertEquals(NotebookAction.Upload("etag-1"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("etag-1")), action)
     }
 
     // ---- remote changed ----
@@ -85,9 +85,9 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 4_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 6_000, etag = "fresh"),
+            remote = RemoteManifestInfo(updatedAt = 6_000, etag = ETag.parse("fresh")),
         )
-        assertEquals(NotebookAction.Upload("fresh"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("fresh")), action)
     }
 
     @Test
@@ -97,7 +97,7 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 6_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 10_000, etag = "fresh"),
+            remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")),
         )
         assertEquals(NotebookAction.Download, action)
     }
@@ -109,7 +109,7 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 6_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 10_000, etag = "fresh"),
+            remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")),
             uploadOnly = true,
         )
         assertEquals(NotebookAction.SkipUploadOnly, action)
@@ -122,7 +122,7 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 4_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 10_000, etag = "fresh"), // +500ms
+            remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")), // +500ms
         )
         assertEquals(NotebookAction.Skip, action)
     }
@@ -135,9 +135,9 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 5_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 12_000, etag = "fresh"),
+            remote = RemoteManifestInfo(updatedAt = 12_000, etag = ETag.parse("fresh")),
         )
-        assertEquals(NotebookAction.Upload("fresh"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("fresh")), action)
     }
 
     @Test
@@ -148,7 +148,7 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = null,
             storedEtag = null,
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = 9_000, etag = "server"),
+            remote = RemoteManifestInfo(updatedAt = 9_000, etag = ETag.parse("server")),
         )
         assertEquals(NotebookAction.Download, action)
     }
@@ -160,9 +160,9 @@ class NotebookSyncPlannerTest {
             syncedLocalUpdatedAt = 3_000,
             storedEtag = "old",
             remoteChanged = true,
-            remote = RemoteManifestInfo(updatedAt = null, etag = "fresh"),
+            remote = RemoteManifestInfo(updatedAt = null, etag = ETag.parse("fresh")),
         )
-        assertEquals(NotebookAction.Upload("fresh"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("fresh")), action)
     }
 
     @Test
@@ -174,6 +174,6 @@ class NotebookSyncPlannerTest {
             remoteChanged = true,
             remote = null,
         )
-        assertEquals(NotebookAction.Upload("old"), action)
+        assertEquals(NotebookAction.Upload(ETag.parse("old")), action)
     }
 }

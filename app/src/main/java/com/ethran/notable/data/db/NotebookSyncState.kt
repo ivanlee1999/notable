@@ -31,6 +31,7 @@ data class NotebookSyncState(
      * same local edit clock, so equality means unchanged.
      */
     val syncedLocalUpdatedAt: Date,
+    /** The manifest's server ETag, verbatim — see [PageSyncState.remoteEtag] for how to read it. */
     val remoteEtag: String? = null,
     val remoteUpdatedAt: Date? = null,
     val lastError: String? = null,

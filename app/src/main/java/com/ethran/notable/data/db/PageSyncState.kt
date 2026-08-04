@@ -27,7 +27,13 @@ import javax.inject.Inject
 data class PageSyncState(
     @PrimaryKey val pageId: String,
     @ColumnInfo(index = true) val notebookId: String,
-    /** The page file's server ETag at the last committed sync; opaque, compared for equality only. */
+    /**
+     * The page file's server ETag at the last committed sync, **in the server's own spelling**
+     * (`W/` prefix and quotes intact). Read it through `ETag.parse` and compare with `ETag.matches`,
+     * never `==`: the same validator arrives spelled differently from a PUT header and a PROPFIND,
+     * so spelling equality is not content equality. A row may also hold a bare, unquoted value,
+     * which `ETag` accepts and treats as strong.
+     */
     val remoteEtag: String? = null,
     /**
      * The **change anchor**: the value `Page.updatedAt` had at that commit. Compared against the

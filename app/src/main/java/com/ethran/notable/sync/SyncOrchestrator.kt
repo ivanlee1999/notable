@@ -283,7 +283,8 @@ class SyncOrchestrator @Inject constructor(
             settings.serverUrl, settings.username, settings.password
         )
         val manifestPath = SyncPaths.manifestFile(notebookId)
-        val storedEtag = appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag
+        val storedEtag =
+            ETag.parse(appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag)
 
         val remoteContent = if (storedEtag != null) {
             // null == 304 (unchanged) OR error -> treat as "not newer".

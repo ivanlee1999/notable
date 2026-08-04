@@ -85,7 +85,7 @@ class NotebookReconciliationService @Inject constructor(
         }
 
         val syncState = appRepository.notebookSyncStateRepository.get(notebookId)
-        val storedEtag = syncState?.remoteEtag
+        val storedEtag = ETag.parse(syncState?.remoteEtag)
         val manifestPath = SyncPaths.manifestFile(notebookId)
 
         // Fetch the remote manifest -- conditionally when we have a stored ETag, so an unchanged
@@ -141,8 +141,10 @@ class NotebookReconciliationService @Inject constructor(
         )
 
         return when (action) {
-            is NotebookAction.Upload ->
+            is NotebookAction.Upload -> {
+                reportWriteGuard(localNotebook.title, action.ifMatch)
                 notebookSyncService.uploadNotebook(localNotebook, client, action.ifMatch)
+            }
 
             NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client)
 
@@ -155,7 +157,7 @@ class NotebookReconciliationService @Inject constructor(
                     notebookId = notebookId,
                     localUpdatedAt = localNotebook.updatedAt,
                     remoteUpdatedAt = remote?.updatedAt?.let { Date(it) } ?: syncState?.remoteUpdatedAt,
-                    remoteEtag = if (remoteChanged) remote?.etag else storedEtag,
+                    remoteEtag = (if (remoteChanged) remote?.etag else storedEtag)?.raw,
                 )
                 AppResult.Success(Unit)
             }
@@ -179,7 +181,7 @@ class NotebookReconciliationService @Inject constructor(
                     notebookId = notebookId,
                     localUpdatedAt = localNotebook.updatedAt,
                     remoteUpdatedAt = remoteAtToStore,
-                    remoteEtag = etagToStore,
+                    remoteEtag = etagToStore?.raw,
                 )
                 AppResult.Success(Unit)
             }
@@ -204,6 +206,28 @@ class NotebookReconciliationService @Inject constructor(
         }
         log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; re-uploading local copy to self-heal")
         return notebookSyncService.uploadNotebook(localNotebook, client)
+    }
+
+    /**
+     * Say, once per notebook, whether this upload's commit is actually protected.
+     *
+     * An unguarded commit is last-writer-wins: a concurrent edit from another device is overwritten
+     * silently rather than rejected with a 412. That is the declared conflict policy, so it is not
+     * an error — but it is a different outcome from a guarded commit, and reporting the two alike
+     * hides it. It goes to the in-app sync log rather than a badge, since it is a property of the
+     * server that the user cannot act on. Notebook-level, because the notebook is the unit that
+     * either commits or does not.
+     *
+     * Not called for the uploads that are unguarded *by design* — a notebook new to the server, and
+     * [healMissingRemoteManifest] — where there is no remote version to guard against, so the
+     * missing guard says nothing about the server.
+     */
+    private fun reportWriteGuard(title: String, ifMatch: ETag?) {
+        val guard = ifMatch.writeGuard()
+        if (guard is WriteGuard.Unguarded) {
+            log.w(TAG, "Publishing '$title' without a concurrency guard (${guard.explain()}); " +
+                "a concurrent edit from another device would be overwritten")
+        }
     }
 
     private fun DownloadedFile.toManifestInfo(): RemoteManifestInfo {

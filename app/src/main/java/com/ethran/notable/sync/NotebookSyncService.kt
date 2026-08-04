@@ -211,7 +211,7 @@ class NotebookSyncService @Inject constructor(
     suspend fun uploadNotebook(
         notebook: Notebook,
         client: WebDAVClient,
-        manifestIfMatch: String? = null
+        manifestIfMatch: ETag? = null
     ): AppResult<Unit, DomainError> {
         val result = uploadNotebookInternal(notebook, client, manifestIfMatch)
         if (result is AppResult.Error) {
@@ -223,7 +223,7 @@ class NotebookSyncService @Inject constructor(
     private suspend fun uploadNotebookInternal(
         notebook: Notebook,
         client: WebDAVClient,
-        manifestIfMatch: String? = null
+        manifestIfMatch: ETag? = null
     ): AppResult<Unit, DomainError> {
         val notebookId = notebook.id
         log.i(TAG, "Uploading: ${notebook.title} (${notebook.pageIds.size} pages)")
@@ -248,13 +248,13 @@ class NotebookSyncService @Inject constructor(
                 // Guard the dirty-page PUT with the stored ETag. A concurrent remote
                 // change to this page 412s, aborting before manifest publish (nothing committed);
                 // new pages (no row) send no If-Match.
-                val ifMatch = rowsByPageId[page.id]?.remoteEtag
+                val ifMatch = ETag.parse(rowsByPageId[page.id]?.remoteEtag)
                 val uploaded = uploadPage(page, notebookId, client, ifMatch).onSuccess { pageEtag ->
                     committedPageRows.add(
                         PageSyncState(
                             pageId = page.id,
                             notebookId = notebookId,
-                            remoteEtag = pageEtag,
+                            remoteEtag = pageEtag?.raw,
                             syncedLocalUpdatedAt = page.updatedAt,
                             lastSyncedAt = Date(),
                         )
@@ -294,7 +294,7 @@ class NotebookSyncService @Inject constructor(
                         notebookId = notebookId,
                         localUpdatedAt = notebook.updatedAt,
                         remoteUpdatedAt = notebook.updatedAt,
-                        manifestEtag = newEtag,
+                        manifestEtag = newEtag?.raw,
                         committedPageRows = committedPageRows,
                         departedPageIds = departedPageIds.toList(),
                     )
@@ -336,7 +336,7 @@ class NotebookSyncService @Inject constructor(
         for (i in rows.indices) {
             val row = rows[i]
             if (row.remoteEtag == null) {
-                etagsByName["${row.pageId}.json"]?.let { rows[i] = row.copy(remoteEtag = it) }
+                etagsByName["${row.pageId}.json"]?.let { rows[i] = row.copy(remoteEtag = it.raw) }
             }
         }
     }
@@ -347,8 +347,14 @@ class NotebookSyncService @Inject constructor(
      * window a plain PUT leaves open — a torn PUT of the manifest itself would otherwise leave a corrupt
      * commit marker. Falls back to a direct guarded PUT when the server doesn't support MOVE.
      *
-     * A 412 during MOVE is a genuine concurrency conflict and is propagated (not retried). The tmp
-     * file is cleaned up best-effort; if left behind (interrupted before MOVE) it is simply
+     * A 412 during MOVE is a genuine concurrency conflict and is propagated (not retried) — **but
+     * only when we actually sent a precondition.** A 412 we did not ask for came from something
+     * else (a proxy, or a server precondition of its own) and must not be read as ours: the conflict
+     * branch has no fallback by design, so an unattributable 412 would abort every sync of this
+     * notebook permanently. Unguarded, we fall through to the direct PUT and its last-writer-wins,
+     * which is the policy already in force wherever there is no usable validator.
+     *
+     * The tmp file is cleaned up best-effort; if left behind (interrupted before MOVE) it is simply
      * overwritten by the next upload.
      *
      * Returns the published manifest's ETag when known. The MOVE path can't reliably report the
@@ -358,11 +364,13 @@ class NotebookSyncService @Inject constructor(
     private suspend fun publishManifest(
         notebookId: String,
         manifestBytes: ByteArray,
-        ifMatch: String?,
+        ifMatch: ETag?,
         client: WebDAVClient
-    ): AppResult<String?, DomainError> {
+    ): AppResult<ETag?, DomainError> {
         val finalPath = SyncPaths.manifestFile(notebookId)
         val tmpPath = "$finalPath.tmp"
+        // Whether we actually sent a precondition decides how to read a 412 below.
+        val guard = ifMatch.writeGuard()
 
         client.putFile(tmpPath, manifestBytes, "application/json")
             .onFailure { return AppResult.Error(it) }
@@ -371,7 +379,7 @@ class NotebookSyncService @Inject constructor(
             is AppResult.Success -> AppResult.Success(null)
             is AppResult.Error -> {
                 client.delete(tmpPath) // best-effort cleanup either way
-                if (moved.error is DomainError.SyncConflict) {
+                if (moved.error is DomainError.SyncConflict && guard is WriteGuard.Guarded) {
                     // Destination changed under us -- a real conflict, do not fall back.
                     moved
                 } else {
@@ -387,10 +395,9 @@ class NotebookSyncService @Inject constructor(
     /**
      * Run [block] with a fresh temp file in the cache dir, deleting it afterwards whatever happens.
      *
-     * Every page transfer needs a scratch file and nothing more: serialize-then-PUT
-     * ([uploadPage]), fetch-the-remote-copy to settle a 412 ([resolvePageConflict]), and — once the
-     * download path streams too — fetch-then-parse. Bounding page memory means going through disk,
-     * so this lifetime shows up once per direction; it is written here once instead.
+     * Every page transfer needs a scratch file and nothing more: serialize-then-PUT ([uploadPage])
+     * and fetch-the-remote-copy to settle a 412 ([resolvePageConflict]). Bounding page memory means
+     * going through disk, so this lifetime recurs on every path that moves a page.
      *
      * `inline` so [block] can `return` out of the calling function, which the conflict path does.
      */
@@ -414,11 +421,11 @@ class NotebookSyncService @Inject constructor(
      *  - the server regenerated the ETag without a content change (or spells it differently between
      *    PUT and PROPFIND than we stored).
      *
-     * Anything else is a real concurrent edit from another device. Blanket-overwriting (what this
-     * did before) destroys that device's page content on the server while its manifest still points
+     * Anything else is a real concurrent edit from another device. Neither blanket answer is safe.
+     * Overwriting destroys that device's page content on the server while its manifest still points
      * at it — the manifest guard makes our *commit* fail, but the page bytes are already gone.
-     * Blanket-aborting is not safe either: cause 1 would 412 identically on every future sync and
-     * wedge the notebook forever.
+     * Aborting wedges the notebook forever, because cause 1 would 412 identically on every future
+     * sync.
      *
      * So: fetch the remote page (streamed to a temp file, never buffered whole) and compare.
      *  - identical -> nothing to upload. Report success carrying the remote's own ETag, which is the
@@ -434,7 +441,7 @@ class NotebookSyncService @Inject constructor(
         pagePath: String,
         localCopy: File,
         client: WebDAVClient,
-    ): AppResult<String?, DomainError> {
+    ): AppResult<ETag?, DomainError> {
         return withPageTempFile("notable-page-remote-") { remoteCopy ->
             val remoteEtag = when (val fetched = client.getFile(pagePath, remoteCopy)) {
                 is AppResult.Success -> fetched.data
@@ -484,8 +491,8 @@ class NotebookSyncService @Inject constructor(
         page: Page,
         notebookId: String,
         client: WebDAVClient,
-        ifMatch: String? = null
-    ): AppResult<String?, DomainError> {
+        ifMatch: ETag? = null
+    ): AppResult<ETag?, DomainError> {
         val pageWithData =
             appRepository.pageRepository.getWithDataById(page.id) ?: return AppResult.Error(
                 DomainError.DatabaseError("Page data not found for page ID: ${page.id}")
@@ -609,7 +616,7 @@ class NotebookSyncService @Inject constructor(
         //    which is safe, just not economical.
         val currentEtagByPageId = client.listEtags(SyncPaths.pagesDir(notebookId)).getOrElse {
             log.w(TAG, "Page listing PROPFIND failed for ${notebook.title}; fetching all pages: ${it.userMessage}")
-            emptyMap<String, String?>()
+            emptyMap<String, ETag?>()
         }.mapNotNull { (name, etag) ->
             if (name.endsWith(".json")) name.removeSuffix(".json") to etag else null
         }.toMap()
@@ -635,16 +642,14 @@ class NotebookSyncService @Inject constructor(
         var fetched = 0
         for (pageId in notebook.pageIds) {
             val currentEtag = currentEtagByPageId[pageId]
-            // Normalized on both sides: `currentEtag` by the client, the stored one here because
-            // rows written before ETag canonicalization still hold the raw server spelling.
-            val storedEtag = WebDAVClient.normalizeEtag(rowsByPageId[pageId]?.remoteEtag)
-            // Fetch when we have no committed row, when the page is missing locally, when we
-            // couldn't read the remote ETag (fetch to be safe), or when the remote ETag differs
-            // from what we last committed.
+            val storedEtag = ETag.parse(rowsByPageId[pageId]?.remoteEtag)
+            // An unreadable remote ETag is spelled out rather than left to `matches` returning
+            // false for a null, because "we could not tell" is a different reason to fetch than
+            // "it differs" and should stay visible here.
             val needsFetch = rowsByPageId[pageId] == null ||
                 pageId !in localPageIds ||
                 currentEtag == null ||
-                storedEtag != currentEtag
+                !storedEtag.matches(currentEtag)
             if (!needsFetch) continue
             fetched++
             downloadPage(pageId, notebookId, client, attemptedBackgrounds).onSuccess { pageUpdatedAt ->
@@ -652,7 +657,7 @@ class NotebookSyncService @Inject constructor(
                     PageSyncState(
                         pageId = pageId,
                         notebookId = notebookId,
-                        remoteEtag = currentEtag,
+                        remoteEtag = currentEtag?.raw,
                         syncedLocalUpdatedAt = pageUpdatedAt,
                         lastSyncedAt = Date(),
                     )
@@ -679,7 +684,7 @@ class NotebookSyncService @Inject constructor(
                 notebookId = notebookId,
                 localUpdatedAt = notebook.updatedAt,
                 remoteUpdatedAt = notebook.updatedAt,
-                manifestEtag = remoteEtag,
+                manifestEtag = remoteEtag?.raw,
                 committedPageRows = committedPageRows,
                 departedPageIds = departedPageIds,
             )
