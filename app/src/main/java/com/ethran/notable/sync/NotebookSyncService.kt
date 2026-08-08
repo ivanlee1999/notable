@@ -101,10 +101,11 @@ class NotebookSyncService @Inject constructor(
     /**
      * Remove orphaned remote notebook directories: a `/notebooks/<id>/` that has no manifest.json
      * and that we do NOT hold locally. This is the leftover of an interrupted upload (pages-first,
-     * manifest-last) or a partial delete from *another* device, which 3a can't self-heal (3a re-uploads
-     * only the ones we own locally). Strictly time-gated by the directory's own last-modified: only
+     * manifest-last) or a partial delete from *another* device, which the re-upload self-heal can't fix
+     * (it only re-uploads notebooks we own locally). Strictly time-gated by the directory's own
+     * last-modified: only
      * dirs older than [maxAgeDays] are touched, so an in-flight upload — whose dir is recent — is
-     * never raced. Best-effort: failures are logged, never fatal to the run. (P6 cleanup / 3c)
+     * never raced. Best-effort: failures are logged, never fatal to the run.
      */
     suspend fun garbageCollectOrphanedRemotes(
         client: WebDAVClient,
@@ -118,7 +119,7 @@ class NotebookSyncService @Inject constructor(
         }
         for (entry in entries) {
             val id = entry.name
-            // Owned locally -> 3a re-uploads it to self-heal; never GC a notebook we still have.
+            // Owned locally -> the normal sync re-uploads it to self-heal; never GC one we still have.
             if (id in localNotebookIds) continue
             // Unknown age -> don't risk deleting what might be an in-flight upload.
             val lastModified = entry.lastModified ?: continue
@@ -182,7 +183,7 @@ class NotebookSyncService @Inject constructor(
         // Notebooks we previously synced but are no longer local were deleted here; don't
         // re-download them (they get tombstoned by detectAndUploadLocalDeletions instead).
         val syncedIds = appRepository.notebookSyncStateRepository.getAllIds()
-        // remoteNotebookIds is the single PROPFIND listing shared with reconciliation (5a).
+        // remoteNotebookIds is the single PROPFIND listing shared with reconciliation.
         val newNotebookIds = remoteNotebookIds
             .filter { it !in preDownloadNotebookIds }
             .filter { it !in tombstonedIds }
@@ -206,7 +207,7 @@ class NotebookSyncService @Inject constructor(
 
     /**
      * Upload a notebook, recording an ERROR sync-state row on any failure so the library shows the
-     * ERROR badge (P25). A successful upload writes the SYNCED row inside [uploadNotebookInternal].
+     * ERROR badge. A successful upload writes the SYNCED row inside [uploadNotebookInternal].
      */
     suspend fun uploadNotebook(
         notebook: Notebook,
@@ -309,13 +310,9 @@ class NotebookSyncService @Inject constructor(
 
     /**
      * Whether two manifests disagree on any authoritative notebook field that cannot be merged page by
-     * page — every serialized field except page *content* (which merges per page) and two deliberate
-     * exclusions:
-     *  - `updatedAt`: the change clock the tolerance window already reasons about, not a value to
-     *    conflict on.
-     *  - `openPageId`: device-local navigation state (which page this device last had open), not
-     *    synced content — comparing it would flag a conflict every time two devices browse to
-     *    different pages. A plain download may overwrite it, which is harmless.
+     * page — every serialized field except page *content* (which merges per page) and `updatedAt`, the
+     * change clock the tolerance window already reasons about rather than a value to conflict on.
+     * Device-local navigation state (`openPageId`) is not serialized at all, so it never enters here.
      *
      * A pure download would overwrite the local side of any of the compared fields, so a divergence
      * here is surfaced as a whole-notebook conflict rather than silently resolved.
@@ -480,13 +477,13 @@ class NotebookSyncService @Inject constructor(
 
             // 2. If any page failed, do NOT publish the manifest. Leaving the old commit marker in
             //    place keeps the notebook "not yet updated" for other devices and makes this device
-            //    re-upload on the next sync -- never a manifest pointing at missing/stale pages (P1).
+            //    re-upload on the next sync -- never a manifest pointing at missing/stale pages.
             if (errors.hasErrors) {
                 errors.asResult(Unit)
             } else {
                 // 3. All dirty pages are up: publish the manifest last. This is the atomic commit;
                 //    the If-Match guard rejects the publish if the remote changed since we read it.
-                //    Capture the new ETag so next sync can do a cheap If-None-Match check (P26).
+                //    Capture the new ETag so next sync can do a cheap If-None-Match check.
                 val manifestJson = NotebookSerializer.serializeManifest(notebook)
                 publishManifest(notebookId, manifestJson.toByteArray(), manifestIfMatch, client)
                     .onSuccess { newEtag ->
@@ -517,7 +514,7 @@ class NotebookSyncService @Inject constructor(
                     }
                     log.i(TAG, "Uploaded: ${notebook.title}")
                     // Best-effort GC: remove remote page/image/background files no longer
-                    // referenced by the manifest we just committed (P11). Never fails the upload.
+                    // referenced by the manifest we just committed. Never fails the upload.
                     //
                     // Only after a *guarded* commit. Unguarded (no/weak stored ETag) the manifest
                     // publish is last-writer-wins, so this GC could delete a page a concurrent
@@ -792,7 +789,7 @@ class NotebookSyncService @Inject constructor(
 
     /**
      * Download a notebook, recording an ERROR sync-state row on any failure so the library shows
-     * the ERROR badge (P25). A successful download writes the SYNCED row inside
+     * the ERROR badge. A successful download writes the SYNCED row inside
      * [downloadNotebookInternal].
      */
     suspend fun downloadNotebook(
@@ -813,7 +810,7 @@ class NotebookSyncService @Inject constructor(
         log.i(TAG, "Downloading notebook ID: $notebookId")
 
         // 1. Fetch manifest file with its ETag (Early Return on error). The ETag is stored at the
-        //    commit point so next sync can do a cheap If-None-Match check (P26).
+        //    commit point so next sync can do a cheap If-None-Match check.
         val manifestFile = client.getFileWithMetadata(SyncPaths.manifestFile(notebookId))
             .onFailure { return AppResult.Error(it) }
         val remoteEtag = manifestFile.etag
@@ -828,9 +825,13 @@ class NotebookSyncService @Inject constructor(
         // 3. Ensure a notebook row exists so page foreign keys resolve, but do NOT advance its
         //    commit timestamp yet. A brand-new notebook is inserted with an epoch-0 timestamp so a
         //    partial download reads as "older than remote" and re-downloads next sync instead of
-        //    being skipped as in-sync (P1 download half). An existing notebook keeps its current
+        //    being skipped as in-sync. An existing notebook keeps its current
         //    (older) timestamp untouched.
-        val isNew = appRepository.bookRepository.getById(notebookId) == null
+        // openPageId is device-local navigation state and is not carried in the manifest, so the
+        // deserialized notebook has none. Preserve whatever this device last had open across the
+        // download instead of resetting it.
+        val existingBook = appRepository.bookRepository.getById(notebookId)
+        val isNew = existingBook == null
         if (isNew) {
             try {
                 appRepository.bookRepository.createEmpty(notebook.copy(updatedAt = Date(0)))
@@ -905,7 +906,7 @@ class NotebookSyncService @Inject constructor(
         val departedPageIds =
             (rowsByPageId.keys - notebook.pageIds.toSet()).toList()
         return try {
-            appRepository.bookRepository.updateVerbatim(notebook)
+            appRepository.bookRepository.updateVerbatim(notebook.copy(openPageId = existingBook?.openPageId))
             // Commit point: mark the notebook synced at the remote
             // timestamp, write the fetched pages' rows, and drop rows for departed pages -- one
             // transaction. Skipped pages keep their prior rows untouched.
@@ -917,7 +918,7 @@ class NotebookSyncService @Inject constructor(
                 committedPageRows = committedPageRows,
                 departedPageIds = departedPageIds,
             )
-            // Best-effort GC: delete local pages that are no longer in the downloaded manifest (P11).
+            // Best-effort GC: delete local pages that are no longer in the downloaded manifest.
             pruneLocalOrphanPages(notebook)
             log.i(TAG, "Downloaded: ${notebook.title}")
             AppResult.Success(Unit)
@@ -996,7 +997,7 @@ class NotebookSyncService @Inject constructor(
         }
 
         // 5. Persist the page atomically: delete-old + update + insert-new run in one transaction,
-        //    so a crash can't leave the page with old strokes gone and new ones not yet written (P5).
+        //    so a crash can't leave the page with old strokes gone and new ones not yet written.
         try {
             appRepository.replaceDownloadedPage(page, strokes, updatedImages)
         } catch (e: Exception) {

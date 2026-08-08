@@ -56,7 +56,7 @@ class SyncForceService @Inject constructor(
 
         // 3. Upload all local notebooks first. Uploads are upserts, so there is no need to wipe the
         //    server beforehand -- doing so risked losing server data before the local copy is
-        //    safely up (P3).
+        //    safely up.
         val notebooks = appRepository.bookRepository.getAll()
         val localIds = notebooks.map { it.id }.toSet()
         log.i(TAG, "Uploading ${notebooks.size} local notebooks...")
@@ -100,7 +100,7 @@ class SyncForceService @Inject constructor(
 
         // 1. Verify the server is reachable and actually has notebooks BEFORE touching local data.
         //    Deleting local first and only then discovering the server is unreachable or empty was
-        //    a total-loss path (P3). We refuse to wipe unless the server has content to restore.
+        //    a total-loss path. We refuse to wipe unless the server has content to restore.
         val notebooksDirExists =
             client.exists(SyncPaths.notebooksDir()).onFailure { return AppResult.Error(it) }
         if (!notebooksDirExists) {

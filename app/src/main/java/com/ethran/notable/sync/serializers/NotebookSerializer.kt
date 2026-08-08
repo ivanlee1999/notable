@@ -53,7 +53,6 @@ object NotebookSerializer {
             notebookId = notebook.id,
             title = notebook.title,
             pageIds = notebook.pageIds,
-            openPageId = notebook.openPageId,
             parentFolderId = notebook.parentFolderId,
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
@@ -85,7 +84,6 @@ object NotebookSerializer {
                 Notebook(
                     id = manifestDto.notebookId,
                     title = manifestDto.title,
-                    openPageId = manifestDto.openPageId,
                     pageIds = manifestDto.pageIds,
                     parentFolderId = manifestDto.parentFolderId,
                     defaultBackground = manifestDto.defaultBackground,
@@ -322,7 +320,6 @@ object NotebookSerializer {
         val notebookId: String,
         val title: String,
         val pageIds: List<String>,
-        val openPageId: String?,
         val parentFolderId: String?,
         val defaultBackground: String,
         val defaultBackgroundType: String,

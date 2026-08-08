@@ -26,8 +26,8 @@ class NotebookReconciliationService @Inject constructor(
      * Reconcile every local notebook against the server.
      *
      * [remoteNotebookIds] is the single `PROPFIND` listing of `/notebooks/` fetched once by the
-     * orchestrator, so existence is a set lookup instead of a `HEAD` per notebook (5a). Preflight
-     * (wifi + clock skew) is done once by the orchestrator, not here (5c).
+     * orchestrator, so existence is a set lookup instead of a `HEAD` per notebook. Preflight
+     * (wifi + clock skew) is done once by the orchestrator, not here.
      */
     suspend fun syncExistingNotebooks(
         client: WebDAVClient,
@@ -67,7 +67,7 @@ class NotebookReconciliationService @Inject constructor(
     ): AppResult<Unit, DomainError> {
         log.i(TAG, "Syncing notebook: $notebookId")
         // If we cannot determine whether the remote manifest exists (e.g. transient network error),
-        // abort this notebook rather than fall through to an unguarded upload (P2).
+        // abort this notebook rather than fall through to an unguarded upload.
         val remotePresent = client.exists(SyncPaths.manifestFile(notebookId))
             .onFailure { return AppResult.Error(it) }
         return reconcileNotebook(
@@ -97,12 +97,12 @@ class NotebookReconciliationService @Inject constructor(
         val manifestPath = SyncPaths.manifestFile(notebookId)
 
         // Fetch the remote manifest -- conditionally when we have a stored ETag, so an unchanged
-        // notebook comes back as a cheap, bodyless 304 (5a).
+        // notebook comes back as a cheap, bodyless 304.
         //
         // The directory `/notebooks/<id>/` was listed (remotePresent==true) but its manifest.json
         // can still be missing: an interrupted upload (pages-first, manifest-last) or a partial
         // delete leaves a dir-without-manifest shell. A 404 here (RemoteMissing) must NOT fail the
-        // run — treat the remote as absent and self-heal by re-uploading the local copy (P6/3a).
+        // run — treat the remote as absent and self-heal by re-uploading the local copy.
         val remoteChanged: Boolean
         val remote: RemoteManifestInfo?
         // The parsed remote manifest, kept for reconciliation so a within-tolerance tie can compare
@@ -167,7 +167,7 @@ class NotebookReconciliationService @Inject constructor(
 
             NotebookAction.SkipUploadOnly -> {
                 // Upload-only mode: remote is newer but we never pull. This is a planned no-op, not
-                // an error (6a/6b). Record REMOTE_AHEAD so the library shows a "newer on server"
+                // an error. Record REMOTE_AHEAD so the library shows a "newer on server"
                 // badge instead of a misleading SYNCED.
                 log.i(TAG, "↑ Upload-only: leaving newer server copy of ${localNotebook.title}")
                 appRepository.notebookSyncStateRepository.markRemoteAhead(
@@ -182,7 +182,7 @@ class NotebookReconciliationService @Inject constructor(
             NotebookAction.SkipDownloadOnly -> {
                 // Download-only mode: local is newer but we never push. Planned no-op; deliberately
                 // do NOT markSynced, so the notebook keeps its NOT_SYNCED badge (local changes are
-                // genuinely not on the server) (8g-2).
+                // genuinely not on the server).
                 log.i(TAG, "↓ Download-only: not pushing local changes of ${localNotebook.title}")
                 AppResult.Success(Unit)
             }
@@ -271,7 +271,7 @@ class NotebookReconciliationService @Inject constructor(
      * interrupted upload or partial delete. Don't fail the run and don't route it to download
      * (there is nothing coherent to download). Since we hold the notebook locally, self-heal by
      * re-uploading our copy, which rewrites the manifest and completes the commit. In download-only
-     * mode we can't push, so skip it (the owning device heals it on its next full sync). (P6/3a)
+     * mode we can't push, so skip it (the owning device heals it on its next full sync).
      */
     private suspend fun healMissingRemoteManifest(
         localNotebook: Notebook,

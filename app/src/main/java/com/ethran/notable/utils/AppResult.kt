@@ -55,6 +55,15 @@ sealed class DomainError(
     data object SyncConflict : DomainError("Conflict detected during sync.")
 
     /**
+     * A conflict cannot be resolved while sync is restricted to one direction: resolving a conflict
+     * has to move a version against that direction (e.g. "keep mine" uploads while download-only), so
+     * we refuse instead of silently violating the mode. The notebook keeps its CONFLICT badge until
+     * the user switches back to two-way sync and resolves it.
+     */
+    data object SyncDirectionalConflict :
+        DomainError("Switch to two-way sync to resolve conflicts — upload-only and download-only can't move both versions.")
+
+    /**
      * A resource was not found on the server (HTTP 404) — a *permanent* absence, as opposed to a
      * transient [NetworkError]. Lets callers treat missing media as skippable instead of retrying it
      * forever. Not recoverable (retrying a 404 won't help).

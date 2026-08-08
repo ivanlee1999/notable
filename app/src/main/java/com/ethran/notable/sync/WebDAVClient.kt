@@ -119,7 +119,7 @@ class WebDAVClient(
      * Tri-state: `Success(true)` when present, `Success(false)` on a 404, and `Error` when the
      * check could not be completed (network failure or an unexpected status). Callers must NOT
      * treat "could not determine" as "absent" -- doing so previously let a transient network error
-     * trigger an unguarded upload over a possibly-newer remote (P2).
+     * trigger an unguarded upload over a possibly-newer remote.
      */
     fun exists(path: String): AppResult<Boolean, DomainError> =
         execute("HEAD", {
@@ -211,8 +211,8 @@ class WebDAVClient(
     /**
      * Upload a file and return the server's new ETag for it (from the PUT response `ETag` header),
      * or `null` if the server did not send one. Used for the manifest so the notebook's stored ETag
-     * matches the just-published version, enabling cheap `If-None-Match` change detection next sync
-     * (P26). Returns [DomainError.SyncConflict] on a 412 like [putFile].
+     * matches the just-published version, enabling cheap `If-None-Match` change detection next sync.
+     * Returns [DomainError.SyncConflict] on a 412 like [putFile].
      */
     fun putFileReturningEtag(
         path: String,
@@ -293,7 +293,7 @@ class WebDAVClient(
     /**
      * Conditional GET: fetch a file only if its ETag differs from [etag].
      * Returns `Success(null)` when the server replies `304 Not Modified` (the resource is unchanged
-     * since we stored [etag]) — a cheap, bodyless "no change" answer that avoids clock math (5a).
+     * since we stored [etag]) — a cheap, bodyless "no change" answer that avoids clock math.
      * Otherwise returns the fetched file with its current ETag.
      *
      * Takes a non-null [ETag] because a conditional read with no validator is just a read — the
@@ -316,7 +316,7 @@ class WebDAVClient(
                     )
 
                 // Same typed signal as getFileWithMetadata so a vanished manifest is handled
-                // identically on both the conditional and unconditional fetch paths (P6).
+                // identically on both the conditional and unconditional fetch paths.
                 response.code == HttpURLConnection.HTTP_NOT_FOUND ->
                     AppResult.Error(DomainError.RemoteMissing(path))
 
