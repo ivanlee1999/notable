@@ -36,7 +36,10 @@ sealed class DomainError(
 
     data class NotFound(val resource: String) : DomainError("$resource was not found.")
 
-    data class UnexpectedState(val message: String) : DomainError(message)
+    data class UnexpectedState(
+        val message: String,
+        override val recoverable: Boolean = true
+    ) : DomainError(message, recoverable)
 
     data class NetworkError(val message: String) : DomainError(message)
 
@@ -78,7 +81,10 @@ sealed class DomainError(
 
 
     data class MultipleErrors(val errors: List<DomainError>) : DomainError(
-        userMessage = errors.joinToString(separator = "\n") { "• ${it.userMessage}" }
+        userMessage = errors.joinToString(separator = "\n") { "• ${it.userMessage}" },
+        // Recoverable only if every member is: a batch that contains a permanent failure (e.g. a
+        // corrupt page that will never parse) can never fully succeed, so retrying it is pointless.
+        recoverable = errors.all { it.recoverable }
     )
 }
 

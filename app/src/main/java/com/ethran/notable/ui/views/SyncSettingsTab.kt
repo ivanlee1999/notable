@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
@@ -66,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
 import com.ethran.notable.sync.ConnectionTestResult
+import com.ethran.notable.sync.ServerCapabilities
 import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.sync.SyncState
@@ -243,6 +245,93 @@ private fun ConnectionSection(
             Spacer(modifier = Modifier.height(8.dp))
             ConnectionStatusText(it)
         }
+
+        state.capabilities?.let { caps ->
+            Spacer(modifier = Modifier.height(8.dp))
+            CapabilityReport(
+                caps = caps,
+                clockSkewMs = (state.connectionStatus as? AppResult.Success)?.data?.clockSkewMs
+            )
+        }
+    }
+}
+
+/**
+ * The per-check breakdown of what Test Connection measured on this server: clock offset, the ETag
+ * diagnostics, and the two fast-path capabilities, each marked supported/not, with a plain-language
+ * summary of whether fast change detection ends up on.
+ */
+@Composable
+private fun CapabilityReport(caps: ServerCapabilities, clockSkewMs: Long?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                EInkFieldBorderWidth,
+                MaterialTheme.colors.onSurface.copy(alpha = 0.4f),
+                EInkFieldShape
+            )
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.sync_capabilities_title),
+            style = MaterialTheme.typography.overline,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colors.onSurface
+        )
+
+        clockSkewMs?.let { skew ->
+            val seconds = skew / 1000
+            val withinTolerance = kotlin.math.abs(skew) <= 30_000
+            CapabilityCheckRow(
+                label = if (seconds == 0L) {
+                    stringResource(R.string.sync_cap_clock_in_sync)
+                } else {
+                    stringResource(R.string.sync_cap_clock_offset, seconds)
+                },
+                ok = withinTolerance
+            )
+        }
+        CapabilityCheckRow(stringResource(R.string.sync_cap_etag_on_put), caps.issuesEtagOnPut)
+        CapabilityCheckRow(stringResource(R.string.sync_cap_strong_etags), caps.issuesStrongEtags)
+        CapabilityCheckRow(
+            stringResource(R.string.sync_cap_collection_propagation),
+            caps.collectionEtagPropagates
+        )
+        CapabilityCheckRow(stringResource(R.string.sync_cap_move_preserves), caps.movePreservesEtag)
+
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = if (caps.collectionEtagPropagates) {
+                stringResource(R.string.sync_fast_supported)
+            } else {
+                stringResource(R.string.sync_fast_unsupported)
+            },
+            style = MaterialTheme.typography.caption,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colors.onSurface
+        )
+    }
+}
+
+@Composable
+private fun CapabilityCheckRow(label: String, ok: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = if (ok) Icons.Default.CheckCircle else Icons.Default.Close,
+            contentDescription = stringResource(
+                if (ok) R.string.sync_cap_passed else R.string.sync_cap_failed
+            ),
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colors.onSurface.copy(alpha = if (ok) 1f else 0.45f)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(alpha = if (ok) 1f else 0.7f)
+        )
     }
 }
 
@@ -289,6 +378,17 @@ private fun SyncBehaviorSection(
                 label = stringResource(R.string.sync_check_on_open_label),
                 value = state.syncSettings.checkOnOpen,
                 onToggle = { onUpdate(state.syncSettings.copy(checkOnOpen = it), true) }
+            )
+            SettingToggleRow(
+                label = stringResource(R.string.sync_fast_sync_label),
+                value = state.syncSettings.fastSyncEnabled,
+                onToggle = { onUpdate(state.syncSettings.copy(fastSyncEnabled = it), true) }
+            )
+            Text(
+                text = stringResource(R.string.sync_fast_sync_hint),
+                style = MaterialTheme.typography.caption,
+                color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp, start = 4.dp, end = 4.dp)
             )
             SettingToggleRow(
                 label = stringResource(R.string.sync_wifi_only_label),
@@ -1046,6 +1146,15 @@ fun SyncSettingsContentPreview() {
                             serverUrl = "https://webdav.example.com",
                             username = "demo",
                             password = "secret"
+                        ),
+                        connectionStatus = AppResult.Success(ConnectionTestResult(clockSkewMs = 2000L)),
+                        capabilities = ServerCapabilities(
+                            serverKey = "preview",
+                            probedAt = 0L,
+                            collectionEtagPropagates = true,
+                            movePreservesEtag = true,
+                            issuesEtagOnPut = true,
+                            issuesStrongEtags = false
                         )
                     ), callbacks = SyncSettingsCallbacks()
                 )

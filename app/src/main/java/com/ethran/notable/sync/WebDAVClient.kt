@@ -392,8 +392,13 @@ class WebDAVClient(
     }
 
     /**
-     * Move (rename) [from] to [to], overwriting the destination. On most servers this is atomic,
-     * which is what makes it safe as the final "publish" step for the manifest commit marker.
+     * Move (rename) [from] to [to]. On most servers this is atomic, which is what makes it safe as
+     * the final "publish" step for the manifest commit marker.
+     *
+     * [overwrite] maps to the WebDAV `Overwrite` header. The default `true` replaces any existing
+     * destination. `false` sends `Overwrite: F`, so the server rejects the move (412) when the
+     * destination already exists — a create-only publish that lets a concurrent create surface as a
+     * conflict instead of being clobbered.
      *
      * When [ifMatchDestination] is given and can guard a write, an `If` header makes the server
      * reject the move with 412 if the destination's current ETag differs. A weak tag guards
@@ -401,14 +406,15 @@ class WebDAVClient(
      * checking [writeGuard] — as `NotebookSyncService.publishManifest` does.
      *
      * Distinguishes three failures so the caller can react: [DomainError.SyncConflict] on 412 (a
-     * real concurrent change — do not retry blindly), a `recoverable` [DomainError.SyncError] on
-     * 405/501 (server doesn't support MOVE — caller may fall back to a direct PUT), and a plain
-     * error otherwise.
+     * real concurrent change, or an existing destination under `Overwrite: F` — do not retry
+     * blindly), a `recoverable` [DomainError.SyncError] on 405/501 (server doesn't support MOVE —
+     * caller may fall back to a direct PUT), and a plain error otherwise.
      */
     fun move(
         from: String,
         to: String,
-        ifMatchDestination: ETag? = null
+        ifMatchDestination: ETag? = null,
+        overwrite: Boolean = true
     ): AppResult<Unit, DomainError> =
         execute("MOVE", {
             val destUrl = buildUrl(to)
@@ -416,7 +422,7 @@ class WebDAVClient(
                 .method("MOVE", null)
                 .header("Authorization", credentials)
                 .header("Destination", destUrl)
-                .header("Overwrite", "T")
+                .header("Overwrite", if (overwrite) "T" else "F")
                 .apply {
                     val guard = ifMatchDestination.writeGuard()
                     if (guard is WriteGuard.Guarded) header("If", "<$destUrl> ([${guard.header}])")
@@ -541,6 +547,22 @@ class WebDAVClient(
         }
 
     /**
+     * The ETag of a single resource or collection, via `PROPFIND Depth: 0`. `Success(null)` when the
+     * server omits `getetag` for it — collection ETags are optional in RFC 4918. Used by
+     * [CapabilityProbeService] to watch a collection's own ETag move (or not) as its descendants
+     * change.
+     */
+    fun resourceEtag(path: String): AppResult<ETag?, DomainError> =
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP, depth = "0") }) { response ->
+            if (response.isSuccessful) {
+                val self = WebDavXml.parseEntries(response.body.string()).firstOrNull()
+                AppResult.Success(ETag.parse(self?.etag))
+            } else {
+                AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
+            }
+        }
+
+    /**
      * Ensure parent directories exist, creating them if necessary.
      * @param path File path (will create parent directories)
      */
@@ -604,10 +626,10 @@ class WebDAVClient(
         if (createOnly) header("If-None-Match", "*") else applyWriteGuard(ifMatch)
     }
 
-    private fun propfindRequest(path: String, body: String): Request {
+    private fun propfindRequest(path: String, body: String, depth: String = "1"): Request {
         val requestBody = body.toRequestBody("application/xml".toMediaType())
         return Request.Builder().url(buildUrl(path)).method("PROPFIND", requestBody)
-            .header("Authorization", credentials).header("Depth", "1").build()
+            .header("Authorization", credentials).header("Depth", depth).build()
     }
 
     /**

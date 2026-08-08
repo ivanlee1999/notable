@@ -23,6 +23,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
 import java.util.Date
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -701,15 +702,97 @@ class NotebookSyncService @Inject constructor(
     }
 
     /**
-     * Upload one page's JSON (streamed from a temp file) plus its images/backgrounds, returning the
-     * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
-     * against a concurrent remote change; a 412 is resolved by [resolvePageConflict]. Pass `null`
-     * for a page with no prior sync row.
+     * Publish one page atomically: PUT to a per-attempt staging sibling (a full write that never
+     * becomes visible at the live page name), then MOVE it over `<pageId>.json`. A plain PUT straight
+     * to the final name can be torn by an interrupted transfer, leaving a truncated page file that
+     * every device then fails to parse — the same window the manifest closes with .tmp+MOVE
+     * ([publishManifest]).
      *
-     * [createOnly] sends an `If-None-Match: *` create guard for a page we believe is absent on the
-     * server: a concurrent create by another device then 412s and is surfaced as
-     * [DomainError.SyncConflict] (never content-resolved, since there is no stored ETag to trust),
-     * so the caller aborts and re-plans instead of overwriting that device's page.
+     * The staging name carries a random suffix so two devices publishing the same page never share a
+     * source file. A shared staging path is a data-loss race: device B could overwrite the bytes A
+     * staged, then A MOVEs B's content while its *destination* guard still matches, records the move
+     * as its own upload, and backfills the server's (B's) ETag — leaving A permanently "synced" to
+     * content it never wrote. A unique source means each device only ever MOVEs its own bytes; the
+     * loser's MOVE 412s on the now-changed destination and routes to [resolvePageConflict].
+     *
+     * The [ifMatch] guard rides the MOVE's destination precondition. A 412 there is a genuine
+     * concurrent remote change and is settled by [resolvePageConflict] (byte-compare of our copy
+     * against the remote) — but only when we actually sent a precondition; an unattributable 412
+     * (weak/absent validator) falls through instead of being read as ours. When MOVE is unsupported
+     * (405/501) or fails transiently, fall back to the direct guarded PUT (atomicity lost, ordering
+     * preserved); its own 412 is resolved the same way.
+     *
+     * [createOnly] publishes a page believed absent: the MOVE is sent non-overwriting (`Overwrite: F`)
+     * and unguarded, so a page another device created in the meantime makes the server reject the
+     * publish. That rejection is a genuine concurrent create and is surfaced as
+     * [DomainError.SyncConflict] — never content-resolved, since with no stored ETag there is nothing
+     * to trust — so the caller aborts and re-plans. The MOVE-unsupported fallback carries [createOnly]
+     * into the direct PUT's `If-None-Match: *` guard, preserving the same semantics.
+     *
+     * The MOVE path returns a null ETag — the destination's post-move ETag isn't reliably reported —
+     * which [backfillMissingPageEtags] fills in with one PROPFIND so the skip path stays effective.
+     * The staging file is deleted best-effort on failure; a MOVE consumes it on success, and any
+     * leftover (hard crash before MOVE) is swept by the next upload's [garbageCollectRemote], which
+     * deletes every pages-dir entry the committed manifest doesn't reference.
+     */
+    private fun publishPage(
+        pageId: String,
+        pagePath: String,
+        localCopy: File,
+        ifMatch: ETag?,
+        createOnly: Boolean,
+        client: WebDAVClient,
+    ): AppResult<ETag?, DomainError> {
+        val tmpPath = "$pagePath.${UUID.randomUUID()}.tmp"
+        // Whether we actually sent an update precondition decides how to read a 412 below.
+        val guard = ifMatch.writeGuard()
+
+        client.putFile(tmpPath, localCopy, "application/json")
+            .onFailure { return AppResult.Error(it) }
+
+        val moved = client.move(
+            tmpPath, pagePath, ifMatchDestination = ifMatch, overwrite = !createOnly
+        )
+        return when (moved) {
+            is AppResult.Success -> AppResult.Success(null)
+            is AppResult.Error -> {
+                client.delete(tmpPath) // best-effort cleanup either way
+                when {
+                    // Guarded update whose destination changed under us: settle it on content.
+                    moved.error is DomainError.SyncConflict && guard is WriteGuard.Guarded ->
+                        resolvePageConflict(pageId, pagePath, localCopy, client)
+
+                    // Non-overwriting create rejected because the page now exists (another device
+                    // created it first): a real conflict, never content-resolved. Surface it as-is.
+                    moved.error is DomainError.SyncConflict && createOnly -> moved
+
+                    else -> {
+                        // MOVE unsupported or transient: fall back to a direct PUT carrying the same
+                        // guard/create precondition, and resolve its update-412 the same way.
+                        log.w(TAG, "MOVE publish failed for page $pageId (${moved.error.userMessage}); direct PUT fallback")
+                        val guarded = client.putFileReturningEtag(
+                            pagePath, localCopy, "application/json", ifMatch, createOnly
+                        )
+                        if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict &&
+                            guard is WriteGuard.Guarded
+                        ) {
+                            resolvePageConflict(pageId, pagePath, localCopy, client)
+                        } else {
+                            guarded
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Upload one page's JSON plus its images/backgrounds, returning the page file's new server ETag
+     * (or `null` when the atomic publish couldn't report one — see [publishPage]). The page is
+     * published atomically via [publishPage]; [ifMatch] guards it against a concurrent remote change
+     * and a 412 is resolved by [resolvePageConflict]. Pass `null` for a page with no prior sync row.
+     * [createOnly] publishes a page believed absent with a create guard; a concurrent create surfaces
+     * as [DomainError.SyncConflict] so the caller aborts and re-plans (see [publishPage]).
      */
     private suspend fun uploadPage(
         page: Page,
@@ -733,13 +816,7 @@ class NotebookSyncService @Inject constructor(
             tempFile.outputStream().buffered().use { out ->
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
-            val guarded =
-                client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch, createOnly)
-            if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict && ifMatch != null) {
-                resolvePageConflict(page.id, pagePath, tempFile, client)
-            } else {
-                guarded
-            }
+            publishPage(page.id, pagePath, tempFile, ifMatch, createOnly, client)
         }
         return pageUploaded.flatMap { pageEtag ->
             val errors = ErrorAccumulator()
