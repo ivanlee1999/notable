@@ -342,21 +342,40 @@ class SyncOrchestrator @Inject constructor(
             }
         }
 
-    suspend fun forceUploadAll(): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+    suspend fun forceUploadAll(): AppResult<Unit, DomainError> =
+        runForce("Uploading all notebooks...") { syncForceService.forceUploadAll() }
+
+    suspend fun forceDownloadAll(): AppResult<Unit, DomainError> =
+        runForce("Downloading all notebooks...") { syncForceService.forceDownloadAll() }
+
+    /**
+     * Shared wrapper for the force operations. Beyond holding [syncMutex] it drives the same
+     * [reporter] a normal sync does, so the "Sync now" button disables and the progress panel shows
+     * while a force run is in flight -- otherwise the reporter stayed Idle and the button, thinking
+     * nothing was running, funnelled a tap into [syncAllNotebooks] whose [syncMutex.tryLock] then
+     * failed with SyncInProgress. The terminal state is set only after the lock is actually held, so
+     * a contended run (another sync active) returns SyncInProgress without clobbering its state.
+     */
+    private suspend fun runForce(
+        details: String,
+        block: suspend () -> AppResult<Unit, DomainError>
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
         if (!syncMutex.tryLock()) return@withContext AppResult.Error(DomainError.SyncInProgress)
         try {
-            syncForceService.forceUploadAll()
+            reporter.beginStep(SyncStep.SYNCING_NOTEBOOKS, PROGRESS_SYNCING_NOTEBOOKS, details)
+            block().also { result ->
+                when (result) {
+                    is AppResult.Success -> reporter.finishSuccess(SyncSummary(0, 0, 0, 0))
+                    is AppResult.Error -> reporter.finishError(result.error, false)
+                }
+            }
         } finally {
             syncMutex.unlock()
         }
-    }
-
-    suspend fun forceDownloadAll(): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
-        if (!syncMutex.tryLock()) return@withContext AppResult.Error(DomainError.SyncInProgress)
-        try {
-            syncForceService.forceDownloadAll()
-        } finally {
-            syncMutex.unlock()
+    }.also { result ->
+        if (result is AppResult.Success) appScope.launch {
+            delay(SUCCESS_STATE_AUTO_RESET_MS)
+            if (reporter.state.value is SyncState.Success) reporter.reset()
         }
     }
 

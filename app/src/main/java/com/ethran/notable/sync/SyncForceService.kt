@@ -19,7 +19,8 @@ class SyncForceService @Inject constructor(
     private val kvProxy: KvProxy,
     private val syncPreflightService: SyncPreflightService,
     private val notebookSyncService: NotebookSyncService,
-    private val webDavClientFactory: WebDavClientFactoryPort
+    private val webDavClientFactory: WebDavClientFactoryPort,
+    private val reporter: SyncProgressReporter
 ) {
     private val folderSerializer = FolderSerializer
     private val log = SyncLogger
@@ -60,13 +61,15 @@ class SyncForceService @Inject constructor(
         val notebooks = appRepository.bookRepository.getAll()
         val localIds = notebooks.map { it.id }.toSet()
         log.i(TAG, "Uploading ${notebooks.size} local notebooks...")
-        notebooks.forEach { notebook ->
+        notebooks.forEachIndexed { index, notebook ->
+            reporter.beginItem(index + 1, notebooks.size, notebook.title, notebook.id)
             notebookSyncService.uploadNotebook(notebook, client).onSuccess {
                 log.i(TAG, "Uploaded: ${notebook.title}")
             }.onError { error ->
                 log.e(TAG, "Failed to upload ${notebook.title}: ${error.userMessage}")
                 errors.add(error)
             }
+            reporter.endItem()
         }
 
         // 4. Delete server notebooks that no longer exist locally, so the server ends up == local.
@@ -151,13 +154,15 @@ class SyncForceService @Inject constructor(
 
         // 4. Download notebooks (list already fetched in step 1).
         log.i(TAG, "Found ${serverNotebookDirs.size} notebook(s) on server")
-        serverNotebookDirs.forEach { notebookDir ->
+        serverNotebookDirs.forEachIndexed { index, notebookDir ->
             val notebookId = notebookDir.trimEnd('/')
+            reporter.beginItem(index + 1, serverNotebookDirs.size, notebookId, notebookId)
             notebookSyncService.downloadNotebook(notebookId, client)
                 .onError { error ->
                     log.e(TAG, "Failed to download $notebookDir: ${error.userMessage}")
                     errors.add(error)
                 }
+            reporter.endItem()
         }
 
         // Sync-state rows are written per notebook by downloadNotebook on each committed download.
