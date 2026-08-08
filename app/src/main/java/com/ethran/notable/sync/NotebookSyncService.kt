@@ -195,6 +195,13 @@ class NotebookSyncService @Inject constructor(
             .filter { it !in preDownloadNotebookIds }
             .filter { it !in tombstonedIds }
             .filter { it !in syncedIds }
+        // Breakdown so a "0 new" is diagnosable: a short remote listing looks nothing like a full
+        // one whose entries were all filtered out by the local/synced/tombstone sets.
+        log.i(
+            TAG,
+            "New-notebook scan: remote=${remoteNotebookIds.size}, local=${preDownloadNotebookIds.size}, " +
+                "synced=${syncedIds.size}, tombstoned=${tombstonedIds.size} -> ${newNotebookIds.size} new"
+        )
 
         val errors = ErrorAccumulator()
         if (newNotebookIds.isNotEmpty()) {

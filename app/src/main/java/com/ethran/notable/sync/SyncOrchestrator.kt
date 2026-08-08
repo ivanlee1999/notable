@@ -91,6 +91,11 @@ class SyncOrchestrator @Inject constructor(
                 .onFailure { return@withContext failStep(it) }
             val remoteNotebookIds = remoteEntries.mapTo(mutableSetOf()) { it.name }
             val dirEtags: Map<String, ETag?> = remoteEntries.associate { it.name to it.etag }
+            log.i(
+                TAG,
+                "Remote listing: ${remoteNotebookIds.size} notebook dir(s), " +
+                    "${dirEtags.values.count { it != null }} with an ETag"
+            )
 
             // Snapshot the measured capability once for the whole pass, bound to this client's server
             // identity. A read/decode failure is treated as "no capability" (fast path off) rather

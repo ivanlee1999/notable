@@ -818,11 +818,34 @@ fun ManualSyncButton(
         }
 
         if (syncState is SyncState.Error) {
-            Text(
-                text = syncState.error.userMessage,
-                style = MaterialTheme.typography.caption,
-                color = MaterialTheme.colors.onSurface
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colors.onSurface
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = stringResource(R.string.sync_failed),
+                        style = MaterialTheme.typography.body2,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colors.onSurface
+                    )
+                    Text(
+                        text = syncState.error.userMessage,
+                        style = MaterialTheme.typography.caption,
+                        color = MaterialTheme.colors.onSurface
+                    )
+                }
+            }
         }
 
         Button(

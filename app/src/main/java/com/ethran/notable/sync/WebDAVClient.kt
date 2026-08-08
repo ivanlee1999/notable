@@ -17,10 +17,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Date
+import javax.net.ssl.SSLException
 
 /**
  * A remote WebDAV collection entry with its name, last-modified timestamp, and — for a child
@@ -506,9 +511,14 @@ class WebDAVClient(
         execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             if (response.isSuccessful) {
                 val hrefs = WebDavXml.parseHrefs(response.body.string())
-                AppResult.Success(hrefs.filter { it != path && !it.endsWith("/$path") }
+                val kept = hrefs.filter { it != path && !it.endsWith("/$path") }
                     .map { Uri.decode(it.trimEnd('/').substringAfterLast('/')) }
-                    .filter { WebDavXml.isValidUuid(it) })
+                    .filter { WebDavXml.isValidUuid(it) }
+                SyncLogger.i(
+                    TAG,
+                    "PROPFIND $path: ${hrefs.size} raw href(s) -> ${kept.size} notebook dir(s)"
+                )
+                AppResult.Success(kept)
             } else {
                 AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
             }
@@ -573,13 +583,21 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
                     val entries = WebDavXml.parseEntries(response.body.string())
-                    AppResult.Success(entries.filter { it.href != path && !it.href.endsWith("/$path") }
+                    val kept = entries.filter { it.href != path && !it.href.endsWith("/$path") }
                         .mapNotNull { entry ->
                             val name = Uri.decode(entry.href.trimEnd('/').substringAfterLast('/'))
                             if (WebDavXml.isValidUuid(name))
                                 RemoteEntry(name, entry.lastModified, ETag.parse(entry.etag))
                             else null
-                        })
+                        }
+                    // If these two counts diverge sharply, the server sent plenty but the UUID
+                    // filter dropped them (href shape); if both are tiny, the server itself listed
+                    // little. That distinction is otherwise invisible from the logs.
+                    SyncLogger.i(
+                        TAG,
+                        "PROPFIND $path: ${entries.size} raw entr(ies) -> ${kept.size} notebook dir(s)"
+                    )
+                    AppResult.Success(kept)
                 }
 
                 else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
@@ -675,8 +693,32 @@ class WebDAVClient(
         return try {
             client.newCall(buildRequest()).execute().use { response -> map(response) }
         } catch (e: Exception) {
-            AppResult.Error(DomainError.NetworkError(e.message ?: "$errorLabel failed"))
+            // Keep the raw exception in the log for diagnosis; show the user a message that says
+            // what went wrong instead of OkHttp's terse "timeout".
+            SyncLogger.w(TAG, "$errorLabel failed: ${e.javaClass.simpleName}: ${e.message}")
+            AppResult.Error(DomainError.NetworkError(humanizeNetworkError(errorLabel, e)))
         }
+    }
+
+    /**
+     * Turn a low-level networking exception into a message a user can act on. OkHttp surfaces a bare
+     * "timeout" / "Read timed out" and similarly cryptic strings; this names the actual failure and
+     * suggests the next step. The technical detail is still logged at the call site above.
+     */
+    private fun humanizeNetworkError(errorLabel: String, e: Exception): String = when (e) {
+        // SocketTimeoutException is a subclass of InterruptedIOException, so it is matched first;
+        // OkHttp's overall call timeout throws a bare InterruptedIOException("timeout").
+        is SocketTimeoutException, is InterruptedIOException ->
+            "The server took too long to respond (timed out). Check your connection and try again."
+        is UnknownHostException ->
+            "Can't reach the server. Check the server address and your internet connection."
+        is ConnectException ->
+            "Couldn't connect to the server. It may be offline or blocked by the network."
+        is SSLException ->
+            "Secure connection to the server failed (TLS/certificate error)."
+        is IOException ->
+            "Network error while ${errorLabel.lowercase()}: ${e.message ?: "connection interrupted"}."
+        else -> e.message ?: "$errorLabel failed"
     }
 
     /**
