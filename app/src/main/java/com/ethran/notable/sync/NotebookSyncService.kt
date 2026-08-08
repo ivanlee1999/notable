@@ -23,6 +23,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
 import java.util.Date
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -482,10 +483,75 @@ class NotebookSyncService @Inject constructor(
     }
 
     /**
-     * Upload one page's JSON (streamed from a temp file) plus its images/backgrounds, returning the
-     * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
-     * against a concurrent remote change; a 412 is resolved by [resolvePageConflict]. Pass `null`
-     * for a page with no prior sync row.
+     * Publish one page atomically: PUT to a per-attempt staging sibling (a full write that never
+     * becomes visible at the live page name), then MOVE it over `<pageId>.json`. A plain PUT straight
+     * to the final name can be torn by an interrupted transfer, leaving a truncated page file that
+     * every device then fails to parse — the same window the manifest closes with .tmp+MOVE
+     * ([publishManifest]).
+     *
+     * The staging name carries a random suffix so two devices publishing the same page never share a
+     * source file. A shared staging path is a data-loss race: device B could overwrite the bytes A
+     * staged, then A MOVEs B's content while its *destination* guard still matches, records the move
+     * as its own upload, and backfills the server's (B's) ETag — leaving A permanently "synced" to
+     * content it never wrote. A unique source means each device only ever MOVEs its own bytes; the
+     * loser's MOVE 412s on the now-changed destination and routes to [resolvePageConflict].
+     *
+     * The [ifMatch] guard rides the MOVE's destination precondition. A 412 there is a genuine
+     * concurrent remote change and is settled by [resolvePageConflict] (byte-compare of our copy
+     * against the remote) — but only when we actually sent a precondition; an unattributable 412
+     * (weak/absent validator) falls through instead of being read as ours. When MOVE is unsupported
+     * (405/501) or fails transiently, fall back to the direct guarded PUT (atomicity lost, ordering
+     * preserved); its own 412 is resolved the same way.
+     *
+     * The MOVE path returns a null ETag — the destination's post-move ETag isn't reliably reported —
+     * which [backfillMissingPageEtags] fills in with one PROPFIND so the skip path stays effective.
+     * The staging file is deleted best-effort on failure; a MOVE consumes it on success, and any
+     * leftover (hard crash before MOVE) is swept by the next upload's [garbageCollectRemote], which
+     * deletes every pages-dir entry the committed manifest doesn't reference.
+     */
+    private fun publishPage(
+        pageId: String,
+        pagePath: String,
+        localCopy: File,
+        ifMatch: ETag?,
+        client: WebDAVClient,
+    ): AppResult<ETag?, DomainError> {
+        val tmpPath = "$pagePath.${UUID.randomUUID()}.tmp"
+        // Whether we actually sent a precondition decides how to read a 412 below.
+        val guard = ifMatch.writeGuard()
+
+        client.putFile(tmpPath, localCopy, "application/json")
+            .onFailure { return AppResult.Error(it) }
+
+        return when (val moved = client.move(tmpPath, pagePath, ifMatchDestination = ifMatch)) {
+            is AppResult.Success -> AppResult.Success(null)
+            is AppResult.Error -> {
+                client.delete(tmpPath) // best-effort cleanup either way
+                if (moved.error is DomainError.SyncConflict && guard is WriteGuard.Guarded) {
+                    // Destination changed under us — a real concurrent edit, settle it on content.
+                    resolvePageConflict(pageId, pagePath, localCopy, client)
+                } else {
+                    // MOVE unsupported or transient: fall back to a direct guarded PUT and resolve
+                    // its 412 the same way (the guard survives when MOVE simply isn't supported).
+                    log.w(TAG, "MOVE publish failed for page $pageId (${moved.error.userMessage}); direct PUT fallback")
+                    val guarded = client.putFileReturningEtag(pagePath, localCopy, "application/json", ifMatch)
+                    if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict &&
+                        guard is WriteGuard.Guarded
+                    ) {
+                        resolvePageConflict(pageId, pagePath, localCopy, client)
+                    } else {
+                        guarded
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Upload one page's JSON plus its images/backgrounds, returning the page file's new server ETag
+     * (or `null` when the atomic publish couldn't report one — see [publishPage]). The page is
+     * published atomically via [publishPage]; [ifMatch] guards it against a concurrent remote change
+     * and a 412 is resolved by [resolvePageConflict]. Pass `null` for a page with no prior sync row.
      */
     private suspend fun uploadPage(
         page: Page,
@@ -508,12 +574,7 @@ class NotebookSyncService @Inject constructor(
             tempFile.outputStream().buffered().use { out ->
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
-            val guarded = client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch)
-            if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict && ifMatch != null) {
-                resolvePageConflict(page.id, pagePath, tempFile, client)
-            } else {
-                guarded
-            }
+            publishPage(page.id, pagePath, tempFile, ifMatch, client)
         }
         return pageUploaded.flatMap { pageEtag ->
             val errors = ErrorAccumulator()

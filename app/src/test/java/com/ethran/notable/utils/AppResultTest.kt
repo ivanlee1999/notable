@@ -101,6 +101,19 @@ class AppResultTest {
     }
 
     @Test
+    fun multipleErrors_is_recoverable_only_when_every_member_is() {
+        // All-recoverable batch stays recoverable (the worker may retry the transient members).
+        val allRecoverable = DomainError.NetworkError("a") + DomainError.SyncError("b")
+        assertTrue(allRecoverable.recoverable)
+
+        // A single permanent failure (e.g. a corrupt page) poisons the batch: retrying it can never
+        // fully succeed, so the combined error must report non-recoverable and stop the retry loop.
+        val withPermanent =
+            DomainError.NetworkError("a") + DomainError.UnexpectedState("corrupt", recoverable = false)
+        assertEquals(false, withPermanent.recoverable)
+    }
+
+    @Test
     fun extendMessage_appends_only_when_extra_is_non_blank() {
         val err = DomainError.NotFound("notebook")
         assertEquals("notebook was not found.", err.extendMessage(""))

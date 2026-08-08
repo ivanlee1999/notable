@@ -256,13 +256,33 @@ class NotebookSerializerPageTest {
         val err = (result as AppResult.Error).error
         assertTrue(err is DomainError.UnexpectedState)
         assertTrue(err.userMessage.contains("corrupted", ignoreCase = true))
+        // A deterministic parse failure must not be retried: identical bytes fail identically.
+        assertEquals(false, err.recoverable)
     }
 
     @Test
     fun deserializePage_returns_error_for_malformed_json() {
         val result = NotebookSerializer.deserializePage("{ not json")
         assertTrue(result is AppResult.Error)
-        assertTrue((result as AppResult.Error).error is DomainError.UnexpectedState)
+        val err = (result as AppResult.Error).error
+        assertTrue(err is DomainError.UnexpectedState)
+        // Truncated/garbled JSON is deterministic — non-recoverable, so it can't drive a retry loop.
+        assertEquals(false, err.recoverable)
+    }
+
+    @Test
+    fun deserializePage_truncated_json_is_non_recoverable() {
+        // The exact production failure: a page cut off mid-stroke (torn upload). It must surface as
+        // a non-recoverable error so the worker stops retrying the same poisoned bytes.
+        val page = samplePage()
+        val json = NotebookSerializer.serializePage(page, listOf(sampleStroke()), emptyList())
+        val truncated = json.substring(0, json.length - 10)
+
+        val result = NotebookSerializer.deserializePage(truncated)
+        assertTrue("expected Error, got $result", result is AppResult.Error)
+        val err = (result as AppResult.Error).error
+        assertTrue(err is DomainError.UnexpectedState)
+        assertEquals(false, err.recoverable)
     }
 
     @Test
