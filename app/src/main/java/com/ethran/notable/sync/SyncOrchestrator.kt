@@ -84,10 +84,29 @@ class SyncOrchestrator @Inject constructor(
             }
 
             // One PROPFIND for the whole remote notebook set, shared by reconciliation (existence
-            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes.
-            val remoteNotebookIds = client.listCollection(SyncPaths.notebooksDir())
+            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes. The
+            // per-directory ETags it also carries drive bulk change detection: a matching baseline
+            // lets a notebook skip its manifest GET entirely.
+            val remoteEntries = client.listCollectionWithMetadata(SyncPaths.notebooksDir())
                 .onFailure { return@withContext failStep(it) }
-                .toSet()
+            val remoteNotebookIds = remoteEntries.mapTo(mutableSetOf()) { it.name }
+            val dirEtags: Map<String, ETag?> = remoteEntries.associate { it.name to it.etag }
+
+            // Snapshot the measured capability once for the whole pass, bound to this client's server
+            // identity. A read/decode failure is treated as "no capability" (fast path off) rather
+            // than failing the sync -- optimization state must never break a functional sync.
+            val currentServerKey = client.serverKey
+            val capabilities = try {
+                kvProxy.getServerCapabilities()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.w(TAG, "Could not read server capabilities; bulk detection off: ${e.message}")
+                null
+            }
+            val bulkEnabled = settings.fastSyncEnabled && capabilities?.let {
+                it.serverKey == currentServerKey && it.collectionEtagPropagates
+            } == true
 
             reporter.beginStep(
                 SyncStep.SYNCING_FOLDERS,
@@ -117,7 +136,10 @@ class SyncOrchestrator @Inject constructor(
             )
             val localIdsSnapshot = appRepository.bookRepository.getAll().map { it.id }.toSet()
             val preDownloadIds = when (
-                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly)
+                val syncResult = notebookReconciliationService.syncExistingNotebooks(
+                    client, remoteNotebookIds, uploadOnly, downloadOnly,
+                    bulkEnabled, currentServerKey, dirEtags
+                )
             ) {
                 is AppResult.Success -> syncResult.data
                 // Per-notebook failures are NON-CRITICAL: each failed notebook was marked ERROR
@@ -142,7 +164,10 @@ class SyncOrchestrator @Inject constructor(
                     client,
                     tombstonedIds,
                     preDownloadIds,
-                    remoteNotebookIds
+                    remoteNotebookIds,
+                    bulkEnabled,
+                    currentServerKey,
+                    dirEtags
                 ).onFailure { return@withContext failStep(it) }
             }
 

@@ -172,4 +172,55 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 36 -> 37 adds the two nullable bulk-detection baseline columns
+     * (`remoteDirEtag`, `remoteDirServerKey`) to `notebook_sync_state`. It is purely additive: existing
+     * rows must be preserved untouched and the new columns must initialize to NULL, so a device that
+     * upgrades mid-life keeps every notebook's sync anchor and simply has no directory baseline yet.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate36To37_addsDirBaselineColumnsAsNull() {
+        val dbName = "migration-test-37"
+
+        // 1. Create the v36 schema and seed a synced row (no baseline columns exist yet).
+        val oldDb = helper.createDatabase(dbName, 36)
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook_sync_state
+                (notebookId, state, lastSyncedAt, syncedLocalUpdatedAt, remoteEtag, remoteUpdatedAt, lastError)
+            VALUES ('notebook1', 'SYNCED', 1620000000001, 1620000000000, '"nb-etag"', 1620000000002, NULL)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        // 2. Reopen at the latest version to trigger the 36 -> 37 auto-migration.
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // 3. The existing row survives and the two new columns are present and NULL.
+        migratedDb.query(
+            "SELECT remoteEtag, remoteDirEtag, remoteDirServerKey FROM notebook_sync_state WHERE notebookId = 'notebook1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("\"nb-etag\"", it.getString(it.getColumnIndexOrThrow("remoteEtag")))
+            assertTrue(it.isNull(it.getColumnIndexOrThrow("remoteDirEtag")))
+            assertTrue(it.isNull(it.getColumnIndexOrThrow("remoteDirServerKey")))
+        }
+
+        // 4. The new columns are writable.
+        migratedDb.execSQL(
+            "UPDATE notebook_sync_state SET remoteDirEtag = '\"dir-etag\"', remoteDirServerKey = 'srv' WHERE notebookId = 'notebook1'"
+        )
+        migratedDb.query(
+            "SELECT remoteDirEtag, remoteDirServerKey FROM notebook_sync_state WHERE notebookId = 'notebook1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("\"dir-etag\"", it.getString(it.getColumnIndexOrThrow("remoteDirEtag")))
+            assertEquals("srv", it.getString(it.getColumnIndexOrThrow("remoteDirServerKey")))
+        }
+
+        roomDb.close()
+    }
 }

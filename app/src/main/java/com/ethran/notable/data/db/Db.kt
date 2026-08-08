@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class],
-    version = 36,
+    version = 37,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -73,7 +73,9 @@ class Converters {
         AutoMigration(33, 34),
         AutoMigration(34, 35),
         // Adds the `page_sync_state` table and renames the notebook sync anchor column.
-        AutoMigration(35, 36, spec = AutoMigration35to36::class)
+        AutoMigration(35, 36, spec = AutoMigration35to36::class),
+        // Adds the nullable `remoteDirEtag` / `remoteDirServerKey` bulk-detection baseline columns.
+        AutoMigration(36, 37)
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

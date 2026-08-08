@@ -181,7 +181,10 @@ class NotebookSyncService @Inject constructor(
         client: WebDAVClient,
         tombstonedIds: Set<String>,
         preDownloadNotebookIds: Set<String>,
-        remoteNotebookIds: Set<String>
+        remoteNotebookIds: Set<String>,
+        bulkEnabled: Boolean = false,
+        currentServerKey: String? = null,
+        dirEtags: Map<String, ETag?> = emptyMap(),
     ): AppResult<Int, DomainError> {
         log.i(TAG, "Checking server for new notebooks...")
         // Notebooks we previously synced but are no longer local were deleted here; don't
@@ -199,7 +202,17 @@ class NotebookSyncService @Inject constructor(
             val total = newNotebookIds.size
             newNotebookIds.forEachIndexed { i, notebookId ->
                 reporter.beginItem(index = i + 1, total = total, name = notebookId, id = notebookId)
-                downloadNotebook(notebookId, client).onError { errors.add(it) }
+                downloadNotebook(notebookId, client).onError { errors.add(it) }.onSuccess {
+                    // Establish the directory baseline for a freshly downloaded notebook so the next
+                    // sync's fast path can skip its manifest GET. The listing ETag is the converged
+                    // directory here; a null one just means no baseline yet.
+                    val listingEtag = dirEtags[notebookId]
+                    if (bulkEnabled && currentServerKey != null && listingEtag != null) {
+                        safelyStoreDirectoryBaseline(
+                            notebookId, listingEtag, currentServerKey
+                        )
+                    }
+                }
             }
             reporter.endItem()
         } else {
@@ -207,6 +220,22 @@ class NotebookSyncService @Inject constructor(
         }
 
         return errors.asResult(newNotebookIds.size)
+    }
+
+    /** Baselines accelerate later syncs; failure to persist one must leave this download successful. */
+    private suspend fun safelyStoreDirectoryBaseline(
+        notebookId: String,
+        etag: ETag,
+        serverKey: String,
+    ) {
+        try {
+            appRepository.notebookSyncStateRepository
+                .updateRemoteDirBaseline(notebookId, etag.raw, serverKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.w(TAG, "Could not store directory baseline for $notebookId: ${e.message}")
+        }
     }
 
     /**

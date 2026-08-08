@@ -23,9 +23,12 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 
 /**
- * A remote WebDAV collection entry with its name and last-modified timestamp.
+ * A remote WebDAV collection entry with its name, last-modified timestamp, and — for a child
+ * collection in a `Depth: 1` listing — that subdirectory's own ETag. The ETag defaults to null so
+ * existing metadata/tombstone call sites are unaffected; a null on a notebook directory simply means
+ * the bulk fast path falls back to a manifest check for it, never an error.
  */
-data class RemoteEntry(val name: String, val lastModified: Date?)
+data class RemoteEntry(val name: String, val lastModified: Date?, val etag: ETag? = null)
 
 /**
  * Result of the collapsed preflight PROPFIND on the sync root — one request that answers "which of
@@ -565,7 +568,7 @@ class WebDAVClient(
      * @return List of RemoteEntry objects; empty if collection doesn't exist
      */
     fun listCollectionWithMetadata(path: String): AppResult<List<RemoteEntry>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_LASTMODIFIED) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
@@ -573,7 +576,9 @@ class WebDAVClient(
                     AppResult.Success(entries.filter { it.href != path && !it.href.endsWith("/$path") }
                         .mapNotNull { entry ->
                             val name = Uri.decode(entry.href.trimEnd('/').substringAfterLast('/'))
-                            if (WebDavXml.isValidUuid(name)) RemoteEntry(name, entry.lastModified) else null
+                            if (WebDavXml.isValidUuid(name))
+                                RemoteEntry(name, entry.lastModified, ETag.parse(entry.etag))
+                            else null
                         })
                 }
 
@@ -744,15 +749,6 @@ class WebDAVClient(
                     <D:getetag/>
                     <D:getlastmodified/>
                     <D:resourcetype/>
-                </D:prop>
-            </D:propfind>
-        """.trimIndent()
-
-        private val PROPFIND_LASTMODIFIED = """
-            <?xml version="1.0" encoding="utf-8"?>
-            <D:propfind xmlns:D="DAV:">
-                <D:prop>
-                    <D:getlastmodified/>
                 </D:prop>
             </D:propfind>
         """.trimIndent()

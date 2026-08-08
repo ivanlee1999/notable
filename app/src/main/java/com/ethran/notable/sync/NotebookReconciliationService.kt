@@ -2,6 +2,7 @@ package com.ethran.notable.sync
 
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.SyncStateValue
 import com.ethran.notable.sync.serializers.NotebookSerializer
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
@@ -10,6 +11,7 @@ import com.ethran.notable.utils.getOrElse
 import com.ethran.notable.utils.getOrNull
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
+import kotlinx.coroutines.CancellationException
 import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +36,9 @@ class NotebookReconciliationService @Inject constructor(
         remoteNotebookIds: Set<String>,
         uploadOnly: Boolean,
         downloadOnly: Boolean,
+        bulkEnabled: Boolean = false,
+        currentServerKey: String? = null,
+        dirEtags: Map<String, ETag?> = emptyMap(),
     ): AppResult<Set<String>, DomainError> {
         val localNotebooks = appRepository.bookRepository.getAll()
         val preDownloadNotebookIds = localNotebooks.map { it.id }.toSet()
@@ -45,7 +50,10 @@ class NotebookReconciliationService @Inject constructor(
             // Individual notebook sync failures are non-fatal for the whole process.
             reconcileNotebook(
                 notebook.id, client, remoteNotebookIds.contains(notebook.id),
-                uploadOnly, downloadOnly
+                uploadOnly, downloadOnly,
+                bulkEnabled = bulkEnabled,
+                currentServerKey = currentServerKey,
+                listingEtag = dirEtags[notebook.id],
             ).onError { errors.add(it) }
         }
         reporter.endItem()
@@ -79,19 +87,40 @@ class NotebookReconciliationService @Inject constructor(
         remotePresent: Boolean,
         uploadOnly: Boolean,
         downloadOnly: Boolean,
+        bulkEnabled: Boolean = false,
+        currentServerKey: String? = null,
+        listingEtag: ETag? = null,
     ): AppResult<Unit, DomainError> {
         val localNotebook = appRepository.bookRepository.getById(notebookId)
             ?: return AppResult.Error(DomainError.NotFound("Notebook $notebookId"))
 
         // Remote absent -> straight upload (new to the server), no If-Match -- unless download-only.
         if (!remotePresent) {
-            return if (downloadOnly) AppResult.Success(Unit)
-            else notebookSyncService.uploadNotebook(localNotebook, client)
+            if (downloadOnly) return AppResult.Success(Unit)
+            // No directory baseline after an upload: our own write changed the directory ETag, and
+            // re-reading it could capture a *concurrent* writer's ETag that local never converged
+            // with -- which would false-skip that notebook next sync. The following sync establishes
+            // the baseline from the listing instead, but only after a manifest 304 confirms
+            // convergence. One extra manifest GET on the sync after an upload; uploads are rare.
+            return notebookSyncService.uploadNotebook(localNotebook, client)
         }
 
         val syncState = appRepository.notebookSyncStateRepository.get(notebookId)
         val storedEtag = ETag.parse(syncState?.remoteEtag)
         val manifestPath = SyncPaths.manifestFile(notebookId)
+
+        // Bulk fast path: when the notebook's directory ETag matches the baseline captured at the last
+        // converged sync (on this same server), the remote is known unchanged -- skip the manifest GET
+        // and let the planner decide on local movement alone. All other inputs falling through to the
+        // conditional/full fetch below keeps the standard behavior verbatim.
+        val knownRemoteUnchanged = knownRemoteUnchanged(
+            bulkEnabled = bulkEnabled,
+            currentServerKey = currentServerKey,
+            listingEtag = listingEtag,
+            state = syncState?.state,
+            remoteDirServerKey = syncState?.remoteDirServerKey,
+            remoteDirEtag = syncState?.remoteDirEtag,
+        )
 
         // Fetch the remote manifest -- conditionally when we have a stored ETag, so an unchanged
         // notebook comes back as a cheap, bodyless 304.
@@ -105,7 +134,12 @@ class NotebookReconciliationService @Inject constructor(
         // The parsed remote manifest, kept for reconciliation so a within-tolerance tie can compare
         // structure without a second fetch. Null when the remote is unchanged (304).
         val remoteNotebook: Notebook?
-        if (storedEtag != null) {
+        if (knownRemoteUnchanged) {
+            // Directory baseline matched the listing: the remote is exactly what we last committed.
+            remoteChanged = false
+            remote = null
+            remoteNotebook = null
+        } else if (storedEtag != null) {
             when (val fetched = client.getFileIfNoneMatch(manifestPath, storedEtag)) {
                 is AppResult.Error -> {
                     if (fetched.error is DomainError.RemoteMissing)
@@ -154,13 +188,25 @@ class NotebookReconciliationService @Inject constructor(
         return when (action) {
             is NotebookAction.Upload -> {
                 reportWriteGuard(localNotebook.title, action.ifMatch)
+                // No baseline after an upload -- see the remote-absent branch above; the next sync
+                // establishes it from the listing once a manifest 304 confirms convergence.
                 notebookSyncService.uploadNotebook(localNotebook, client, action.ifMatch)
             }
 
-            NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client)
+            NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client).also {
+                if (it is AppResult.Success)
+                    storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
+            }
 
-            NotebookAction.Reconcile ->
-                reconcileConcurrentEdits(notebookId, localNotebook, remoteNotebook, client)
+            NotebookAction.Reconcile -> reconcileConcurrentEdits(
+                notebookId = notebookId,
+                localNotebook = localNotebook,
+                remoteNotebook = remoteNotebook,
+                client = client,
+                bulkEnabled = bulkEnabled,
+                currentServerKey = currentServerKey,
+                listingEtag = listingEtag,
+            )
 
             NotebookAction.SkipUploadOnly -> {
                 // Upload-only mode: remote is newer but we never pull. This is a planned no-op, not
@@ -197,8 +243,44 @@ class NotebookReconciliationService @Inject constructor(
                     remoteUpdatedAt = remoteAtToStore,
                     remoteEtag = etagToStore?.raw,
                 )
+                // markSynced reset the baseline columns; re-establish this converged directory
+                // baseline so the next sync's fast path can skip this notebook's manifest GET.
+                storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
                 AppResult.Success(Unit)
             }
+        }
+    }
+
+    /**
+     * Store [listingEtag] as [notebookId]'s converged directory baseline, tagged with [serverKey].
+     * A no-op unless bulk detection is active and both values are present — so the single-notebook and
+     * capability-off paths never touch the baseline. Used after a download or a genuine skip, where
+     * the pre-sync listing ETag already reflects the converged directory (no remote write of our own).
+     */
+    private suspend fun storeListingBaseline(
+        notebookId: String,
+        bulkEnabled: Boolean,
+        serverKey: String?,
+        listingEtag: ETag?,
+    ) {
+        if (bulkEnabled && serverKey != null && listingEtag != null) {
+            safelyStoreBaseline(notebookId, listingEtag, serverKey)
+        }
+    }
+
+    /** Optional optimization state must never turn a completed transfer into a failed sync. */
+    private suspend fun safelyStoreBaseline(
+        notebookId: String,
+        etag: ETag,
+        serverKey: String,
+    ) {
+        try {
+            appRepository.notebookSyncStateRepository
+                .updateRemoteDirBaseline(notebookId, etag.raw, serverKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.w(TAG, "Could not store directory baseline for $notebookId: ${e.message}")
         }
     }
 
@@ -226,6 +308,9 @@ class NotebookReconciliationService @Inject constructor(
         localNotebook: Notebook,
         remoteNotebook: Notebook?,
         client: WebDAVClient,
+        bulkEnabled: Boolean,
+        currentServerKey: String?,
+        listingEtag: ETag?,
     ): AppResult<Unit, DomainError> {
         val pageConflicts = notebookSyncService.detectPageConflicts(localNotebook, client)
             .getOrElse { return AppResult.Error(it) }
@@ -250,8 +335,12 @@ class NotebookReconciliationService @Inject constructor(
         return if (notebookSyncService.hasLocallyDirtyPages(refreshed)) {
             val storedAfter =
                 ETag.parse(appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag)
+            // The merge pushed local pages, changing the directory ETag; no baseline here (see the
+            // Upload branch -- the next sync establishes it after a manifest 304).
             notebookSyncService.uploadNotebook(refreshed, client, storedAfter)
         } else {
+            // A download-only merge did not write, so the listing ETag is a valid converged baseline.
+            storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
             AppResult.Success(Unit)
         }
     }
@@ -266,13 +355,14 @@ class NotebookReconciliationService @Inject constructor(
     private suspend fun healMissingRemoteManifest(
         localNotebook: Notebook,
         client: WebDAVClient,
-        downloadOnly: Boolean
+        downloadOnly: Boolean,
     ): AppResult<Unit, DomainError> {
         if (downloadOnly) {
             log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; skipping (download-only)")
             return AppResult.Success(Unit)
         }
         log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; re-uploading local copy to self-heal")
+        // No baseline after the self-heal upload (see the Upload branch); the next sync establishes it.
         return notebookSyncService.uploadNotebook(localNotebook, client)
     }
 
@@ -311,3 +401,24 @@ class NotebookReconciliationService @Inject constructor(
         private const val TAG = "NotebookReconciliationService"
     }
 }
+
+/**
+ * Pure bulk fast-path gate, extracted so its server-key / state / ETag conditions are pinned by unit
+ * tests. Returns true only when the notebook's directory [listingEtag] weakly matches the baseline
+ * ([remoteDirEtag]) recorded for the **current** server ([currentServerKey]) at a `SYNCED` commit —
+ * the sole case where the remote is known unchanged without a manifest GET. Any missing or mismatched
+ * input is false, which routes the notebook to the ordinary conditional/full fetch.
+ */
+internal fun knownRemoteUnchanged(
+    bulkEnabled: Boolean,
+    currentServerKey: String?,
+    listingEtag: ETag?,
+    state: String?,
+    remoteDirServerKey: String?,
+    remoteDirEtag: String?,
+): Boolean = bulkEnabled &&
+    currentServerKey != null &&
+    listingEtag != null &&
+    state == SyncStateValue.SYNCED &&
+    remoteDirServerKey == currentServerKey &&
+    ETag.parse(remoteDirEtag).matches(listingEtag)
