@@ -539,6 +539,22 @@ class WebDAVClient(
         }
 
     /**
+     * The ETag of a single resource or collection, via `PROPFIND Depth: 0`. `Success(null)` when the
+     * server omits `getetag` for it — collection ETags are optional in RFC 4918. Used by
+     * [CapabilityProbeService] to watch a collection's own ETag move (or not) as its descendants
+     * change.
+     */
+    fun resourceEtag(path: String): AppResult<ETag?, DomainError> =
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP, depth = "0") }) { response ->
+            if (response.isSuccessful) {
+                val self = WebDavXml.parseEntries(response.body.string()).firstOrNull()
+                AppResult.Success(ETag.parse(self?.etag))
+            } else {
+                AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
+            }
+        }
+
+    /**
      * Ensure parent directories exist, creating them if necessary.
      * @param path File path (will create parent directories)
      */
@@ -589,10 +605,10 @@ class WebDAVClient(
         if (guard is WriteGuard.Guarded) header("If-Match", guard.header)
     }
 
-    private fun propfindRequest(path: String, body: String): Request {
+    private fun propfindRequest(path: String, body: String, depth: String = "1"): Request {
         val requestBody = body.toRequestBody("application/xml".toMediaType())
         return Request.Builder().url(buildUrl(path)).method("PROPFIND", requestBody)
-            .header("Authorization", credentials).header("Depth", "1").build()
+            .header("Authorization", credentials).header("Depth", depth).build()
     }
 
     /**

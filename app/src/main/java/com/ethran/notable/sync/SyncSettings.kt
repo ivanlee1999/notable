@@ -22,4 +22,9 @@ data class SyncSettings(
     val uploadOnly: Boolean = false,
     /** Only pull from the server; never push local changes/deletions (mirror of [uploadOnly]). */
     val downloadOnly: Boolean = false,
+    /**
+     * User off-switch for bulk change detection. Default on; the optimization runs only when this is
+     * true *and* the server was measured to support it ([ServerCapabilities.collectionEtagPropagates]).
+     */
+    val fastSyncEnabled: Boolean = true,
 )

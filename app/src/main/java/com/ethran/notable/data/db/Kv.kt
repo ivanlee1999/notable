@@ -11,7 +11,9 @@ import androidx.room.Query
 import com.ethran.notable.APP_SETTINGS_KEY
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.GlobalAppSettings
+import com.ethran.notable.sync.SYNC_SERVER_CAPABILITIES_KEY
 import com.ethran.notable.sync.SYNC_SETTINGS_KEY
+import com.ethran.notable.sync.ServerCapabilities
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.hasFilePermission
@@ -173,5 +175,16 @@ class KvProxy @Inject constructor(
             SyncSettings.serializer()
         )
     }
+
+    // Measured server capabilities. A separate KV entry, not a field on SyncSettings: it is a fact
+    // about the server, not a user preference, and callers must check its serverKey before trusting
+    // it (a record for a different server is stale). getOrDefault(null) can't express "absent", so
+    // reads go through get() and a decode failure surfaces rather than silently masking a bad row.
+
+    suspend fun getServerCapabilities(): ServerCapabilities? =
+        get(SYNC_SERVER_CAPABILITIES_KEY, ServerCapabilities.serializer())
+
+    suspend fun setServerCapabilities(value: ServerCapabilities) =
+        setKv(SYNC_SERVER_CAPABILITIES_KEY, value, ServerCapabilities.serializer())
 
 }
