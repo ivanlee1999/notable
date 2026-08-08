@@ -213,6 +213,15 @@ fun drawTitleBox(canvas: Canvas) {
 }
 
 
+// Backgrounds are rendered oversampled (see loadBackgroundBitmap's resolutionModifier) and drawn
+// downscaled onto the screen canvas. Bilinear filtering + dithering makes that downscale crisp
+// instead of aliased, and the dither maps grey edges cleanly onto e-ink. Costs no extra memory.
+private val bgBitmapPaint = Paint().apply {
+    isFilterBitmap = true
+    isAntiAlias = true
+    isDither = true
+}
+
 fun drawBitmapToCanvas(
     canvas: Canvas, imageBitmap: Bitmap, scroll: Offset, scale: Float, repeat: Boolean
 ) {
@@ -244,7 +253,7 @@ fun drawBitmapToCanvas(
 
     var filledHeight = 0
     if (repeat || scroll.y < canvasHeight) {
-        canvas.drawBitmap(imageBitmap, rectOnImage, rectOnCanvas, null)
+        canvas.drawBitmap(imageBitmap, rectOnImage, rectOnCanvas, bgBitmapPaint)
         filledHeight = rectOnCanvas.bottom
     }
     // TODO: Should we also repeat horizontally?
@@ -260,7 +269,7 @@ fun drawBitmapToCanvas(
                 widthOnCanvas - scroll.x.toInt(),
                 currentTop + scaledHeight
             )
-            canvas.drawBitmap(imageBitmap, srcRect, dstRect, null)
+            canvas.drawBitmap(imageBitmap, srcRect, dstRect, bgBitmapPaint)
             currentTop += scaledHeight
         }
     }

@@ -24,6 +24,9 @@ enum class SyncBadge {
     /** Server has a newer version that was not pulled (upload-only mode). */
     REMOTE_AHEAD,
 
+    /** A page was edited both locally and on the server; the user must resolve it. */
+    CONFLICT,
+
     /** The last sync of this notebook failed. */
     ERROR,
 }
@@ -52,9 +55,12 @@ class NotebookSyncStatusStore @Inject constructor(
             val base = when {
                 row == null -> SyncBadge.NOT_SYNCED
                 row.state == SyncStateValue.ERROR -> SyncBadge.ERROR
+                // A conflict outranks the plain "edited locally" badge: local IS edited (that's half
+                // the conflict), but the actionable fact is that it collides with the server.
+                row.state == SyncStateValue.CONFLICT -> SyncBadge.CONFLICT
                 // Local edited since its last committed sync -> pending upload (supersedes a stale
                 // REMOTE_AHEAD: once you edit locally, the badge is about your unsynced change).
-                nb.updatedAt.time - row.localUpdatedAtAtSync.time > TOLERANCE_MS -> SyncBadge.NOT_SYNCED
+                nb.updatedAt.time - row.syncedLocalUpdatedAt.time > TOLERANCE_MS -> SyncBadge.NOT_SYNCED
                 row.state == SyncStateValue.REMOTE_AHEAD -> SyncBadge.REMOTE_AHEAD
                 else -> SyncBadge.SYNCED
             }

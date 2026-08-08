@@ -12,7 +12,9 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.events.AppEventBus
 import com.ethran.notable.di.ApplicationScope
+import com.ethran.notable.sync.CapabilityProbeService
 import com.ethran.notable.sync.ConnectionTestResult
+import com.ethran.notable.sync.ServerCapabilities
 import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncProgressReporter
 import com.ethran.notable.sync.SyncRequest
@@ -45,6 +47,8 @@ data class SyncSettingsUiState(
     val passwordVisible: Boolean = false,
     val testingConnection: Boolean = false,
     val connectionStatus: AppResult<ConnectionTestResult, DomainError>? = null,
+    /** Capabilities measured by the last successful Test Connection; null until one runs. */
+    val capabilities: ServerCapabilities? = null,
     val syncLogs: List<SyncLogger.LogEntry> = emptyList(),
     val syncState: SyncState = SyncState.Idle,
     val showForceUploadConfirm: Boolean = false,
@@ -63,6 +67,7 @@ class SettingsViewModel @Inject constructor(
     private val syncProgressReporter: SyncProgressReporter,
     private val syncScheduler: SyncScheduler,
     private val webDavClientFactory: WebDavClientFactoryPort,
+    private val capabilityProbeService: CapabilityProbeService,
     private val snackDispatcher: SnackDispatcher,
     private val appEventBus: AppEventBus,
     @param:ApplicationScope private val appScope: CoroutineScope
@@ -200,7 +205,8 @@ class SettingsViewModel @Inject constructor(
         val settings = syncUiState.syncSettings
         if (settings.serverUrl.isBlank() || settings.username.isBlank()) return
 
-        syncUiState = syncUiState.copy(testingConnection = true, connectionStatus = null)
+        syncUiState =
+            syncUiState.copy(testingConnection = true, connectionStatus = null, capabilities = null)
         viewModelScope.launch(Dispatchers.IO) {
             val password =
                 settings.password.ifBlank {
@@ -210,8 +216,22 @@ class SettingsViewModel @Inject constructor(
             val client = webDavClientFactory.create(settings.serverUrl, settings.username, password)
             val result = client.testConnection()
 
+            // Only probe once the server answered: the probe writes and reads a scratch tree, which
+            // is pointless (and noisy) against a server we couldn't even reach or authenticate to.
+            val capabilities = if (result is AppResult.Success) {
+                capabilityProbeService
+                    .probe(client, settings.serverUrl, settings.username, System.currentTimeMillis())
+                    .also { kvProxy.setServerCapabilities(it) }
+            } else {
+                null
+            }
+
             withContext(Dispatchers.Main) {
-                syncUiState = syncUiState.copy(testingConnection = false, connectionStatus = result)
+                syncUiState = syncUiState.copy(
+                    testingConnection = false,
+                    connectionStatus = result,
+                    capabilities = capabilities
+                )
             }
         }
     }

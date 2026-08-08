@@ -114,4 +114,62 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 35 -> 36 does two things: adds the `page_sync_state` table, and renames
+     * `notebook_sync_state.localUpdatedAtAtSync` to `syncedLocalUpdatedAt`.
+     *
+     * The rename must **carry the value over** — Room recreates the table and copies rows, and a
+     * silently dropped anchor would reset every notebook to "dirty" and re-upload the whole library
+     * on the next sync. So this asserts the stored anchor, not just the column name.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate35To36_addsPageSyncStateAndRenamesSyncAnchor() {
+        val dbName = "migration-test-36"
+
+        // 1. Create the v35 schema (page_sync_state does not exist yet) and seed a sync-state row
+        //    using the pre-rename column name.
+        val oldDb = helper.createDatabase(dbName, 35)
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook_sync_state
+                (notebookId, state, lastSyncedAt, localUpdatedAtAtSync, remoteEtag, remoteUpdatedAt, lastError)
+            VALUES ('notebook1', 'SYNCED', 1620000000001, 1620000000000, '"nb-etag"', 1620000000002, NULL)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        // 2. Reopen at the latest version to trigger the 35 -> 36 auto-migration.
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // 3. The renamed anchor is readable under the new name, with its original value.
+        migratedDb.query(
+            "SELECT syncedLocalUpdatedAt, lastSyncedAt, remoteEtag FROM notebook_sync_state WHERE notebookId = 'notebook1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1620000000000L, it.getLong(it.getColumnIndexOrThrow("syncedLocalUpdatedAt")))
+            // lastSyncedAt is a separate column and must not be confused with the anchor.
+            assertEquals(1620000000001L, it.getLong(it.getColumnIndexOrThrow("lastSyncedAt")))
+            assertEquals("\"nb-etag\"", it.getString(it.getColumnIndexOrThrow("remoteEtag")))
+        }
+
+        // 4. The new table exists and accepts a row with the expected columns.
+        migratedDb.execSQL(
+            """
+            INSERT INTO page_sync_state (pageId, notebookId, remoteEtag, syncedLocalUpdatedAt, lastSyncedAt)
+            VALUES ('page1', 'notebook1', '"etag-1"', 1620000000010, 1620000000011)
+            """.trimIndent()
+        )
+        migratedDb.query(
+            "SELECT remoteEtag, syncedLocalUpdatedAt FROM page_sync_state WHERE pageId = 'page1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("\"etag-1\"", it.getString(it.getColumnIndexOrThrow("remoteEtag")))
+            assertEquals(1620000000010L, it.getLong(it.getColumnIndexOrThrow("syncedLocalUpdatedAt")))
+        }
+
+        roomDb.close()
+    }
 }

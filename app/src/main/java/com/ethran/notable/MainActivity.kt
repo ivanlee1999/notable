@@ -186,7 +186,7 @@ class MainActivity : ComponentActivity() {
     /**
      * If startup detected a likely crash loop, show one dismissible snack with a "Copy logs" action
      * that copies the local crash files to the clipboard. Simplest possible surface — the full
-     * viewer lives in Settings → Debug (Phase 8e-2). Returns whether a loop was detected (so a test
+     * viewer lives in Settings → Debug. Returns whether a loop was detected (so a test
      * harness can crash only on the non-recovery launch).
      */
     private fun maybeShowCrashLoopHint(): Boolean {

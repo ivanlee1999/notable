@@ -1,64 +1,41 @@
 package com.ethran.notable.editor
 
 import android.content.Context
-import android.os.Looper
-import androidx.compose.material.Text
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
-import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.ethran.notable.data.AppRepository
-import com.ethran.notable.data.PageDataManager
-import com.ethran.notable.data.datastore.EditorSettingCacheManager
+import androidx.test.platform.app.InstrumentationRegistry
 import com.ethran.notable.data.db.AppDatabase
-import com.ethran.notable.data.db.BookRepository
-import com.ethran.notable.data.db.CryptoHelper
-import com.ethran.notable.data.db.FolderRepository
-import com.ethran.notable.data.db.ImageRepository
-import com.ethran.notable.data.db.KvProxy
-import com.ethran.notable.data.db.KvRepository
-import com.ethran.notable.data.db.NotebookSyncStateRepository
-import com.ethran.notable.data.db.PageRepository
-import com.ethran.notable.data.db.Stroke
-import com.ethran.notable.data.db.StrokePoint
-import com.ethran.notable.data.db.StrokeRepository
-import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.PlacementMode
-import com.ethran.notable.editor.state.SelectionState
-import com.ethran.notable.editor.utils.Pen
-import com.ethran.notable.io.ExportEngine
-import com.ethran.notable.sync.SyncOrchestrator
 import com.ethran.notable.testing.TestDatabaseFactory
 import com.ethran.notable.testing.TestNotebookSeeder
-import com.ethran.notable.ui.SnackDispatcher
-import io.mockk.coEvery
-import io.mockk.every
-import io.mockk.mockk
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import com.ethran.notable.testing.createEditorViewModelForTest
+import com.ethran.notable.testing.dummyStroke
+import com.ethran.notable.testing.observeOffMainThreadWrites
+import com.ethran.notable.testing.waitForCondition
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.UUID
-import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
- * Regression tests for the crash:
+ * Regression test for the crash:
  *
  *   java.lang.IllegalStateException: Unsupported concurrent change during composition
+ *
+ * Device-independent variant: it deliberately does NOT use a Compose test rule, so it runs on every
+ * device — including ones where the Compose UI-test harness wedges (Redmi Note 9 Pro / LineageOS; see
+ * [com.ethran.notable.testing.ComposeUiTestSupport]). The real assertion — that no [com.ethran.notable.editor.state.SelectionState]
+ * snapshot write happens off the main thread during a page switch — is caught by
+ * `Snapshot.registerGlobalWriteObserver`, which needs no running composition.
+ *
+ * The stronger, composition-backed reproduction lives in [EditorUnsupportedConcurrentChangeComposeTests],
+ * which is skipped on devices whose Compose harness wedges.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorUnsupportedConcurrentChangeTests {
-
-    @get:Rule
-    val composeRule = createComposeRule()
 
     private lateinit var db: AppDatabase
 
@@ -76,14 +53,16 @@ class EditorUnsupportedConcurrentChangeTests {
     }
 
     /**
-     * Assertion with a real composition running that reads both the toolbar state
-     * and the selection state — this is the closest reproduction of the original crash.
+     * Drives a real page switch through the ViewModel and asserts that no [com.ethran.notable.editor.state.SelectionState] snapshot
+     * write happens off the main thread — the root of the "Unsupported concurrent change during
+     * composition" crash. Uses `Snapshot.registerGlobalWriteObserver` (no composition needed).
      */
     @Test(timeout = 60_000)
-    fun selectionState_isNotWrittenOffMainThread_duringPageSwitch_compose() {
+    fun selectionState_isNotWrittenOffMainThread_duringPageSwitch() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
         android.util.Log.i(
             "EditorTest",
-            "Starting test: selectionState_isNotWrittenOffMainThread_duringPageSwitch_compose"
+            "Starting test: selectionState_isNotWrittenOffMainThread_duringPageSwitch"
         )
         val seeded = runBlocking {
             android.util.Log.i("EditorTest", "Seeding notebook...")
@@ -96,31 +75,20 @@ class EditorUnsupportedConcurrentChangeTests {
             db = db,
         )
 
-        android.util.Log.i("EditorTest", "Setting compose content...")
-        composeRule.setContent {
-            val state by viewModel.toolbarState.collectAsState()
-            val selectionActive = viewModel.selectionState.isNonEmpty()
-            Text(text = "${state.pageId.orEmpty()}-$selectionActive")
-        }
-
-        composeRule.runOnUiThread {
-            runBlocking {
-                android.util.Log.i("EditorTest", "Loading initial toolbar state...")
-                viewModel.loadToolbarState(seeded.notebookId, seeded.pageIds.first())
-            }
+        // Load initial toolbar state (suspend Room I/O; runs on this test thread, off the main thread).
+        runBlocking {
+            android.util.Log.i("EditorTest", "Loading initial toolbar state...")
+            viewModel.loadToolbarState(seeded.notebookId, seeded.pageIds.first())
         }
         android.util.Log.i("EditorTest", "Initial state loaded")
 
-        android.util.Log.i("EditorTest", "Seeding selection on UI thread...")
-        composeRule.runOnUiThread {
-            try {
-                viewModel.selectionState.selectedStrokes =
-                    listOf(dummyStroke(pageId = seeded.pageIds.first()))
-                viewModel.selectionState.placementMode = PlacementMode.Move
-                Snapshot.sendApplyNotifications()
-            } catch (e: Throwable) {
-                android.util.Log.e("EditorTest", "Error during selection seeding", e)
-            }
+        // Seed a selection ON the main thread (as the real app always does).
+        android.util.Log.i("EditorTest", "Seeding selection on main thread...")
+        instrumentation.runOnMainSync {
+            viewModel.selectionState.selectedStrokes =
+                listOf(dummyStroke(pageId = seeded.pageIds.first()))
+            viewModel.selectionState.placementMode = PlacementMode.Move
+            Snapshot.sendApplyNotifications()
         }
         android.util.Log.i("EditorTest", "Selection seeded")
 
@@ -129,16 +97,20 @@ class EditorUnsupportedConcurrentChangeTests {
             android.util.Log.i("EditorTest", "Triggering goToNextPage...")
             viewModel.goToNextPage()
 
+            // Poll from this (instrumentation) thread; the main looper stays free to run the
+            // ViewModel's `withContext(Dispatchers.Main.immediate) { selectionState.reset() }`.
             android.util.Log.i("EditorTest", "Awaiting toolbar page change...")
-            composeRule.waitUntil(15_000) {
+            val pageChanged = waitForCondition(15_000) {
                 viewModel.toolbarState.value.pageId == seeded.pageIds[1]
             }
+            assertTrue("Toolbar page did not change to the next page in time", pageChanged)
 
             android.util.Log.i("EditorTest", "Toolbar page changed, awaiting selection reset...")
-            composeRule.waitUntil(10_000) {
+            val selectionReset = waitForCondition(10_000) {
                 viewModel.selectionState.selectedStrokes == null &&
                         viewModel.selectionState.placementMode == null
             }
+            assertTrue("SelectionState was not reset in time", selectionReset)
             android.util.Log.i("EditorTest", "Selection reset completed")
 
             assertTrue(
@@ -149,121 +121,5 @@ class EditorUnsupportedConcurrentChangeTests {
             android.util.Log.i("EditorTest", "Disposing violations observer")
             violations.dispose()
         }
-    }
-
-    // --------------------------------------------------------
-    // Helpers
-    // --------------------------------------------------------
-
-    private class WriteObserver(
-        val queue: ConcurrentLinkedQueue<String>,
-        private val onDispose: () -> Unit,
-    ) {
-        fun dispose() = onDispose()
-    }
-
-    private fun observeOffMainThreadWrites(selectionState: SelectionState): WriteObserver {
-        val mainThread = Looper.getMainLooper().thread
-        val watchedStates = selectionState.snapshotDelegateStatesForTest()
-        val violations = ConcurrentLinkedQueue<String>()
-        val handle = Snapshot.registerGlobalWriteObserver { stateObject ->
-            if (stateObject in watchedStates && Thread.currentThread() != mainThread) {
-                violations.add("write on ${Thread.currentThread().name}")
-            }
-        }
-        return WriteObserver(violations) { handle.dispose() }
-    }
-
-    private fun createEditorViewModelForTest(context: Context, db: AppDatabase): EditorViewModel {
-        val bookRepository = BookRepository(db.notebookDao(), db.pageDao())
-        val pageRepository = PageRepository(db.pageDao())
-        val strokeRepository = StrokeRepository(db.strokeDao())
-        val imageRepository = ImageRepository(db.ImageDao())
-        val folderRepository = FolderRepository(db.folderDao())
-
-        val kvRepository = KvRepository(db.kvDao(), context)
-        val kvProxy = KvProxy(kvRepository, CryptoHelper())
-
-        val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
-        val appRepository = AppRepository(
-            bookRepository = bookRepository,
-            pageRepository = pageRepository,
-            strokeRepository = strokeRepository,
-            imageRepository = imageRepository,
-            folderRepository = folderRepository,
-            notebookSyncStateRepository = notebookSyncStateRepository,
-            kvProxy = kvProxy,
-            db = db,
-        )
-
-        val editorSettingCacheManager = EditorSettingCacheManager(kvRepository)
-
-        val exportEngine = mockk<ExportEngine>(relaxed = true)
-        val pageDataManager = mockk<PageDataManager>(relaxed = true)
-        val syncOrchestrator = mockk<SyncOrchestrator>(relaxed = true).also {
-            coEvery { it.syncFromPageId(any()) } returns Unit
-        }
-        val snackDispatcher = mockk<SnackDispatcher>(relaxed = true)
-
-        val historyFactory = mockk<History.Factory>().also {
-            every { it.create(any()) } returns mockk(relaxed = true)
-        }
-
-        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-        return EditorViewModel(
-            context = context,
-            appRepository = appRepository,
-            editorSettingCacheManager = editorSettingCacheManager,
-            exportEngine = exportEngine,
-            pageDataManager = pageDataManager,
-            syncOrchestrator = syncOrchestrator,
-            snackDispatcher = snackDispatcher,
-            historyFactory = historyFactory,
-            appScope = appScope,
-        )
-    }
-
-    private fun dummyStroke(pageId: String): Stroke {
-        val points = listOf(
-            StrokePoint(x = 10f, y = 10f, pressure = 1000f),
-            StrokePoint(x = 20f, y = 12f, pressure = 1000f),
-            StrokePoint(x = 30f, y = 14f, pressure = 1000f),
-        )
-        return Stroke(
-            id = UUID.randomUUID().toString(),
-            size = 5f,
-            pen = Pen.BALLPEN,
-            top = 10f,
-            bottom = 14f,
-            left = 10f,
-            right = 30f,
-            points = points,
-            pageId = pageId,
-        )
-    }
-}
-
-private fun SelectionState.snapshotDelegateStatesForTest(): Set<Any> {
-    return setOf(
-        delegate("firstPageCut\$delegate"),
-        delegate("secondPageCut\$delegate"),
-        delegate("selectedStrokes\$delegate"),
-        delegate("selectedImages\$delegate"),
-        delegate("selectedBitmap\$delegate"),
-        delegate("selectionStartOffset\$delegate"),
-        delegate("selectionDisplaceOffset\$delegate"),
-        delegate("selectionRect\$delegate"),
-        delegate("placementMode\$delegate"),
-    ).filterNotNull().toSet()
-}
-
-private fun SelectionState.delegate(fieldName: String): Any? {
-    return try {
-        val field = javaClass.getDeclaredField(fieldName).apply { isAccessible = true }
-        field.get(this)
-    } catch (e: Exception) {
-        android.util.Log.e("EditorTest", "Could not find delegate field: $fieldName", e)
-        null
     }
 }

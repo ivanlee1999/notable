@@ -30,8 +30,11 @@ class FolderSyncService @Inject constructor(
         val remoteExists = client.exists(remotePath).onFailure { return AppResult.Error(it) }
         if (remoteExists) {
             return client.getFileWithMetadata(remotePath).flatMap { remoteFile ->
+                // Null when the server issues no ETag: the PUT below then goes out unguarded rather
+                // than failing. Failing would abort the whole run (SyncOrchestrator treats folder
+                // sync as fatal) over the one write that can least afford to be guarded — the merge
+                // below is a union, so an unguarded write can never drop a remote folder.
                 val remoteEtag = remoteFile.etag
-                    ?: return@flatMap AppResult.Error(DomainError.SyncError("Missing ETag for $remotePath"))
 
                 val remoteFoldersJson = remoteFile.content.decodeToString()
                 val remoteFolders = folderSerializer.deserializeFolders(remoteFoldersJson)

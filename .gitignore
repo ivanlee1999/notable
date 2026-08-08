@@ -10,3 +10,12 @@
 local.properties
 .claude-context.md
 comments.md
+.claude
+CLAUDE.md
+.artifacts
+app/libs
+
+
+
+# Kotlin build-session scratch
+.kotlin/

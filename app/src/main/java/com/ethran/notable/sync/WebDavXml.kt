@@ -7,6 +7,12 @@ import java.io.StringReader
 import java.util.Date
 
 /**
+ * One `<response>` block from a PROPFIND: the resource's href plus the properties Notable reads —
+ * its last-modified date and its ETag (either may be null if the server omitted it).
+ */
+data class DavEntry(val href: String, val lastModified: Date?, val etag: String?)
+
+/**
  * Parsing helpers for WebDAV PROPFIND XML responses.
  *
  * Split out of [WebDAVClient], which is otherwise concerned only with issuing HTTP requests and
@@ -39,15 +45,17 @@ internal object WebDavXml {
     }
 
     /**
-     * Parse `<response>` blocks from a PROPFIND XML response, returning each resource's href
-     * paired with its last-modified date (null if absent).
+     * Parse `<response>` blocks from a PROPFIND XML response, returning each resource's href with
+     * its last-modified date and ETag (either null if the server omitted it). An `allprop` request
+     * yields both; a narrower request yields only what it asked for.
      */
-    fun parseEntries(xml: String): List<Pair<String, Date?>> {
+    fun parseEntries(xml: String): List<DavEntry> {
         return try {
             val parser = newParser(xml)
-            val entries = mutableListOf<Pair<String, Date?>>()
+            val entries = mutableListOf<DavEntry>()
             var currentHref: String? = null
             var currentLastModified: Date? = null
+            var currentEtag: String? = null
             var inResponse = false
 
             var eventType = parser.eventType
@@ -55,7 +63,8 @@ internal object WebDavXml {
                 when (eventType) {
                     XmlPullParser.START_TAG -> when (parser.name.lowercase()) {
                         "response" -> {
-                            inResponse = true; currentHref = null; currentLastModified = null
+                            inResponse = true
+                            currentHref = null; currentLastModified = null; currentEtag = null
                         }
 
                         "href" -> if (inResponse && parser.next() == XmlPullParser.TEXT) currentHref =
@@ -65,10 +74,16 @@ internal object WebDavXml {
                             currentLastModified =
                                 WebDAVClient.parseHttpDate(parser.text.trim())?.let { Date(it) }
                         }
+
+                        "getetag" -> if (inResponse && parser.next() == XmlPullParser.TEXT) {
+                            currentEtag = parser.text.trim().takeIf { it.isNotEmpty() }
+                        }
                     }
 
                     XmlPullParser.END_TAG -> if (parser.name.lowercase() == "response" && inResponse) {
-                        currentHref?.let { entries.add(it to currentLastModified) }
+                        currentHref?.let {
+                            entries.add(DavEntry(it, currentLastModified, currentEtag))
+                        }
                         inResponse = false
                     }
                 }

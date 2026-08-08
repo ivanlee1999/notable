@@ -59,7 +59,7 @@ interface NotebookDao {
 
     // Nullable: Room emits null when the row is absent (e.g. the notebook was deleted while a
     // screen still observes it) and re-emits on every write to the table. Typing it non-null let
-    // collectors dereference a null and NPE — Crash #5.
+    // collectors dereference a null and NPE.
     @Query("SELECT * FROM notebook WHERE id = (:notebookId)")
     fun getByIdLive(notebookId: String): LiveData<Notebook?>
 
@@ -69,8 +69,10 @@ interface NotebookDao {
     @Query("UPDATE notebook SET openPageId=:pageId WHERE id=:notebookId")
     suspend fun setOpenPageId(notebookId: String, pageId: String)
 
-    @Query("UPDATE notebook SET pageIds=:pageIds WHERE id=:id")
-    suspend fun setPageIds(id: String, pageIds: List<String>)
+    // Advances updatedAt alongside pageIds so a structural change (add/remove/reorder) marks the
+    // notebook dirty for sync — otherwise the change would not be detected and could be lost.
+    @Query("UPDATE notebook SET pageIds=:pageIds, updatedAt=:updatedAt WHERE id=:id")
+    suspend fun setPageIds(id: String, pageIds: List<String>, updatedAt: Date)
 
     @Insert
     suspend fun create(notebook: Notebook): Long
@@ -105,7 +107,7 @@ class BookRepository @Inject constructor(
         )
         pageDao.create(page)
 
-        notebookDao.setPageIds(notebook.id, listOf(page.id))
+        notebookDao.setPageIds(notebook.id, listOf(page.id), Date())
         notebookDao.setOpenPageId(notebook.id, page.id)
     }
 
@@ -120,10 +122,10 @@ class BookRepository @Inject constructor(
     }
 
     /**
-     * Update notebook without modifying the timestamp.
-     * Used during sync when downloading from server to preserve remote timestamp.
+     * Write the notebook exactly as given, unlike [update], which stamps `updatedAt = now()`.
+     * Used during sync when downloading from server, to keep the remote timestamp.
      */
-    suspend fun updatePreservingTimestamp(notebook: Notebook) {
+    suspend fun updateVerbatim(notebook: Notebook) {
         notebookDao.update(notebook)
     }
 
@@ -148,7 +150,7 @@ class BookRepository @Inject constructor(
         val pageIds = notebook.pageIds.toMutableList()
         if (index != null) pageIds.add(index, pageId)
         else pageIds.add(pageId)
-        notebookDao.setPageIds(bookId, pageIds)
+        notebookDao.setPageIds(bookId, pageIds, Date())
     }
 
     suspend fun removePage(id: String, pageId: String) {
@@ -157,7 +159,9 @@ class BookRepository @Inject constructor(
             // remove the page
             pageIds = notebook.pageIds.filterNot { it == pageId },
             // remove the "open page" if it's the one
-            openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId
+            openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId,
+            // a structural change marks the notebook dirty for sync
+            updatedAt = Date()
         )
         notebookDao.update(updatedNotebook)
         log.i("Cleaned $id $pageId")
@@ -172,7 +176,7 @@ class BookRepository @Inject constructor(
 
         pageIds.remove(pageId)
         pageIds.add(correctedIndex, pageId)
-        notebookDao.setPageIds(id, pageIds)
+        notebookDao.setPageIds(id, pageIds, Date())
     }
 
     suspend fun getPageIndex(id: String, pageId: String): Int? {

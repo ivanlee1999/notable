@@ -52,6 +52,19 @@ class AutoMigration30to31 : AutoMigrationSpec
 )
 class AutoMigration31to32 : AutoMigrationSpec
 
+// `localUpdatedAtAtSync` read as a typo. Only `notebook_sync_state` is renamed: `page_sync_state` is
+// created by this same migration, so it is simply created with the right name. Room recreates the
+// table and copies the rows, so the stored anchors survive and no notebook is re-uploaded because
+// its anchor went missing.
+@RenameColumn.Entries(
+    RenameColumn(
+        tableName = "notebook_sync_state",
+        fromColumnName = "localUpdatedAtAtSync",
+        toColumnName = "syncedLocalUpdatedAt"
+    )
+)
+class AutoMigration35to36 : AutoMigrationSpec
+
 
 
 // Migration 32 -> 33:

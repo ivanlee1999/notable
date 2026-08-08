@@ -36,7 +36,10 @@ sealed class DomainError(
 
     data class NotFound(val resource: String) : DomainError("$resource was not found.")
 
-    data class UnexpectedState(val message: String) : DomainError(message)
+    data class UnexpectedState(
+        val message: String,
+        override val recoverable: Boolean = true
+    ) : DomainError(message, recoverable)
 
     data class NetworkError(val message: String) : DomainError(message)
 
@@ -55,6 +58,15 @@ sealed class DomainError(
     data object SyncConflict : DomainError("Conflict detected during sync.")
 
     /**
+     * A conflict cannot be resolved while sync is restricted to one direction: resolving a conflict
+     * has to move a version against that direction (e.g. "keep mine" uploads while download-only), so
+     * we refuse instead of silently violating the mode. The notebook keeps its CONFLICT badge until
+     * the user switches back to two-way sync and resolves it.
+     */
+    data object SyncDirectionalConflict :
+        DomainError("Switch to two-way sync to resolve conflicts — upload-only and download-only can't move both versions.")
+
+    /**
      * A resource was not found on the server (HTTP 404) — a *permanent* absence, as opposed to a
      * transient [NetworkError]. Lets callers treat missing media as skippable instead of retrying it
      * forever. Not recoverable (retrying a 404 won't help).
@@ -69,7 +81,10 @@ sealed class DomainError(
 
 
     data class MultipleErrors(val errors: List<DomainError>) : DomainError(
-        userMessage = errors.joinToString(separator = "\n") { "• ${it.userMessage}" }
+        userMessage = errors.joinToString(separator = "\n") { "• ${it.userMessage}" },
+        // Recoverable only if every member is: a batch that contains a permanent failure (e.g. a
+        // corrupt page that will never parse) can never fully succeed, so retrying it is pointless.
+        recoverable = errors.all { it.recoverable }
     )
 }
 

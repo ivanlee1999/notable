@@ -15,7 +15,6 @@ import kotlinx.serialization.encoding.Encoder
  * or a build that had a pen we no longer ship — e.g. the field-reported "NEO_PENCIL") decodes to
  * [Pen.BALLPEN] via [Pen.fromString] instead of throwing and taking the whole `AppSettings` decode
  * down with it. The stored value is treated as an untrusted token resolved at the boundary.
- * See docs/crash-handling-plan.md, Crash #2.
  */
 object PenSerializer : KSerializer<Pen> {
     override val descriptor: SerialDescriptor =

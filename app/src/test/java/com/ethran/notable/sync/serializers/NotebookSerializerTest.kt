@@ -52,7 +52,9 @@ class NotebookSerializerTest {
 
         assertEquals(original.id, restored.id)
         assertEquals(original.title, restored.title)
-        assertEquals(original.openPageId, restored.openPageId)
+        // openPageId is device-local navigation state and is deliberately NOT on the wire, so a
+        // restored notebook never carries it, whatever the original had.
+        assertNull(restored.openPageId)
         assertEquals(original.pageIds, restored.pageIds)
         assertEquals(original.parentFolderId, restored.parentFolderId)
         assertEquals(original.defaultBackground, restored.defaultBackground)

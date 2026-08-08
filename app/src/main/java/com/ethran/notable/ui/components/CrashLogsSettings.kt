@@ -42,7 +42,7 @@ private data class CrashLog(val name: String, val content: String)
  * Debug-tab section that surfaces the local crash files ([NotableApp] writes one per crash) so a
  * user can read and **share** them when asked, instead of them being reachable only over adb.
  * ShipBook is the automatic remote channel; this is the fallback for the cases ShipBook can't cover
- * (network/heap dead, or a crash before ShipBook starts). Plan Phase 8e-1.
+ * (network/heap dead, or a crash before ShipBook starts).
  */
 @Composable
 fun CrashLogsSettings() {

@@ -53,7 +53,6 @@ object NotebookSerializer {
             notebookId = notebook.id,
             title = notebook.title,
             pageIds = notebook.pageIds,
-            openPageId = notebook.openPageId,
             parentFolderId = notebook.parentFolderId,
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
@@ -78,14 +77,15 @@ object NotebookSerializer {
             val updatedAt = parseIso8601(manifestDto.updatedAt)
 
             if (createdAt == null || updatedAt == null) {
-                return AppResult.Error(DomainError.UnexpectedState("Manifest contains corrupted timestamps"))
+                return AppResult.Error(
+                    DomainError.UnexpectedState("Manifest contains corrupted timestamps", recoverable = false)
+                )
             }
 
             AppResult.Success(
                 Notebook(
                     id = manifestDto.notebookId,
                     title = manifestDto.title,
-                    openPageId = manifestDto.openPageId,
                     pageIds = manifestDto.pageIds,
                     parentFolderId = manifestDto.parentFolderId,
                     defaultBackground = manifestDto.defaultBackground,
@@ -96,9 +96,15 @@ object NotebookSerializer {
                 )
             )
         } catch (e: SerializationException) {
-            AppResult.Error(DomainError.UnexpectedState("Failed to decode manifest JSON: ${e.message}"))
+            AppResult.Error(
+                DomainError.UnexpectedState("Failed to decode manifest JSON: ${e.message}", recoverable = false)
+            )
         } catch (e: Exception) {
-            AppResult.Error(DomainError.UnexpectedState("Unexpected error during manifest deserialization: ${e.message}"))
+            AppResult.Error(
+                DomainError.UnexpectedState(
+                    "Unexpected error during manifest deserialization: ${e.message}", recoverable = false
+                )
+            )
         }
     }
 
@@ -192,7 +198,9 @@ object NotebookSerializer {
             val pageUpdated = parseIso8601(pageDto.updatedAt)
 
             if (pageCreated == null || pageUpdated == null) {
-                return AppResult.Error(DomainError.UnexpectedState("Page contains corrupted timestamps"))
+                return AppResult.Error(
+                    DomainError.UnexpectedState("Page contains corrupted timestamps", recoverable = false)
+                )
             }
 
             val page = Page(
@@ -269,9 +277,17 @@ object NotebookSerializer {
 
             AppResult.Success(Triple(page, strokes, images))
         } catch (e: SerializationException) {
-            AppResult.Error(DomainError.UnexpectedState("Failed to decode page JSON: ${e.message}"))
+            // A parse failure is deterministic: the same server bytes will fail identically every
+            // time (e.g. a truncated page from a torn upload), so it must not drive a retry loop.
+            AppResult.Error(
+                DomainError.UnexpectedState("Failed to decode page JSON: ${e.message}", recoverable = false)
+            )
         } catch (e: Exception) {
-            AppResult.Error(DomainError.UnexpectedState("Unexpected error during page deserialization: ${e.message}"))
+            AppResult.Error(
+                DomainError.UnexpectedState(
+                    "Unexpected error during page deserialization: ${e.message}", recoverable = false
+                )
+            )
         }
     }
 
@@ -322,7 +338,6 @@ object NotebookSerializer {
         val notebookId: String,
         val title: String,
         val pageIds: List<String>,
-        val openPageId: String?,
         val parentFolderId: String?,
         val defaultBackground: String,
         val defaultBackgroundType: String,

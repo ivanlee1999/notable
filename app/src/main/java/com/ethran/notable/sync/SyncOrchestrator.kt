@@ -86,7 +86,7 @@ class SyncOrchestrator @Inject constructor(
             }
 
             // One PROPFIND for the whole remote notebook set, shared by reconciliation (existence
-            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes (5a/P13).
+            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes.
             val remoteNotebookIds = client.listCollection(SyncPaths.notebooksDir())
                 .onFailure { return@withContext failStep(it) }
                 .toSet()
@@ -125,7 +125,7 @@ class SyncOrchestrator @Inject constructor(
                 // Per-notebook failures are NON-CRITICAL: each failed notebook was marked ERROR
                 // (its badge shows it) and the run continues so the healthy notebooks still finalize.
                 // Aborting here previously left the reporter stuck in Syncing forever -- so every
-                // notebook's badge froze on SCHEDULED/SYNCING when one big notebook failed (P25).
+                // notebook's badge froze on SCHEDULED/SYNCING when one big notebook failed.
                 is AppResult.Error -> {
                     nonCriticalError = syncResult.error
                     localIdsSnapshot
@@ -166,9 +166,9 @@ class SyncOrchestrator @Inject constructor(
             // point (upload/download success), and deletions dropped their rows above.
 
             // Best-effort cleanup of dead remote data (dir with no manifest, not held locally, older
-            // than a week) — an abandoned half-upload from another device that 3a can't self-heal.
+            // than a week) — an abandoned half-upload from another device the re-upload self-heal misses.
             // Full bidirectional mode only: it deletes remotely (skip in download-only) and needs the
-            // remote scan (skip in upload-only). Never fails the run. (3c)
+            // remote scan (skip in upload-only). Never fails the run.
             if (!uploadOnly && !downloadOnly) {
                 val currentLocalIds = appRepository.bookRepository.getAll().map { it.id }.toSet()
                 notebookSyncService.garbageCollectOrphanedRemotes(
@@ -184,7 +184,7 @@ class SyncOrchestrator @Inject constructor(
             )
             finalizeSyncResult(reporter, summary, nonCriticalError).onSuccess {
                 // Persist the last successful full-sync time so the settings "Last synced" line
-                // reflects background/periodic syncs too, not just manual ones (P8).
+                // reflects background/periodic syncs too, not just manual ones.
                 kvProxy.setSyncSettings(
                     kvProxy.getSyncSettings().copy(lastSyncTime = System.currentTimeMillis())
                 )
@@ -193,7 +193,7 @@ class SyncOrchestrator @Inject constructor(
         } catch (e: CancellationException) {
             // The worker was cancelled (e.g. schedule disabled mid-run). Don't leave the reporter
             // stuck in Syncing/Error (which wedged the Sync-now button) -- reset to Idle and let the
-            // cancellation propagate normally (8h-1).
+            // cancellation propagate normally.
             reporter.reset()
             throw e
         } catch (e: Exception) {
@@ -220,39 +220,40 @@ class SyncOrchestrator @Inject constructor(
     suspend fun syncNotebook(notebookId: String): AppResult<Unit, DomainError> =
         withContext(ioDispatcher) {
             // Actually hold the mutex for the whole operation. A bare isLocked check is
-            // check-then-act: it let a sync-on-close race a full/periodic sync (P4). Skip-if-busy
+            // check-then-act: it let a sync-on-close race a full/periodic sync. Skip-if-busy
             // is still the right behavior for a single-notebook sync, so a failed tryLock succeeds.
             if (!syncMutex.tryLock()) return@withContext AppResult.Success(Unit)
             try {
-                val settings = kvProxy.getSyncSettings()
-                if (!settings.syncEnabled) return@withContext AppResult.Success(Unit)
-
-                syncPreflightService.checkWifiConstraint().onSuccess {
-                    if (settings.username.isBlank() || settings.password.isBlank()) {
-                        return@withContext AppResult.Error(DomainError.SyncAuthError)
-                    }
-                    val client = webDavClientFactory.create(
-                        settings.serverUrl,
-                        settings.username,
-                        settings.password
-                    )
-                    // Preflight the clock once here: reconciliation no longer checks skew per
-                    // notebook (5c), so the single-notebook path must gate on it itself.
-                    syncPreflightService.checkClockSkew(client).onFailure {
-                        return@withContext AppResult.Error(it)
-                    }
-                    return@withContext notebookReconciliationService.syncNotebook(
-                        notebookId,
-                        client,
-                        settings.uploadOnly,
-                        settings.downloadOnly
-                    )
-                }
-                AppResult.Success(Unit)
+                runSingleNotebookSync(notebookId)
             } finally {
                 syncMutex.unlock()
             }
         }
+
+    /**
+     * The single-notebook sync body — preflight then reconcile — WITHOUT touching [syncMutex]. The
+     * caller owns the mutex around it: [syncNotebook] via a skip-if-busy `tryLock`, and the
+     * conflict-resolution entry points by *waiting* for it so an explicit user choice is applied for
+     * real rather than dropped on contention. Reconciliation no longer checks clock skew per
+     * notebook, so this gates on it itself.
+     */
+    private suspend fun runSingleNotebookSync(notebookId: String): AppResult<Unit, DomainError> {
+        val settings = kvProxy.getSyncSettings()
+        if (!settings.syncEnabled) return AppResult.Success(Unit)
+        // Wifi constraint not satisfied -> planned no-op, the same policy as any other sync.
+        if (syncPreflightService.checkWifiConstraint() is AppResult.Error) return AppResult.Success(Unit)
+        if (settings.username.isBlank() || settings.password.isBlank()) {
+            return AppResult.Error(DomainError.SyncAuthError)
+        }
+        val client = webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+        syncPreflightService.checkClockSkew(client).onFailure { return AppResult.Error(it) }
+        return notebookReconciliationService.syncNotebook(
+            notebookId,
+            client,
+            settings.uploadOnly,
+            settings.downloadOnly
+        )
+    }
 
     suspend fun syncFromPageId(pageId: String) {
         val settings = kvProxy.getSyncSettings()
@@ -266,7 +267,7 @@ class SyncOrchestrator @Inject constructor(
     }
 
     /**
-     * Read-only check for the check-on-open hint (P22): is the server's copy of [notebookId] newer
+     * Read-only check for the check-on-open hint: is the server's copy of [notebookId] newer
      * than ours? Uses the stored ETag for a cheap conditional GET (a 304 means "not newer"). Never
      * mutates anything and never holds the sync mutex — it is a best-effort hint, so any error or
      * ambiguity returns false.
@@ -283,7 +284,8 @@ class SyncOrchestrator @Inject constructor(
             settings.serverUrl, settings.username, settings.password
         )
         val manifestPath = SyncPaths.manifestFile(notebookId)
-        val storedEtag = appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag
+        val storedEtag =
+            ETag.parse(appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag)
 
         val remoteContent = if (storedEtag != null) {
             // null == 304 (unchanged) OR error -> treat as "not newer".
@@ -329,8 +331,9 @@ class SyncOrchestrator @Inject constructor(
                 when (val tombstoneResult =
                     client.putFile(SyncPaths.tombstone(notebookId), ByteArray(0))) {
                     is AppResult.Success -> {
-                        // Deletion propagated -- drop the sync-state row.
+                        // Deletion propagated -- drop the sync-state rows (notebook + per-page).
                         appRepository.notebookSyncStateRepository.delete(notebookId)
+                        appRepository.pageSyncStateRepository.deleteByNotebook(notebookId)
                         AppResult.Success(Unit)
                     }
 
@@ -356,6 +359,124 @@ class SyncOrchestrator @Inject constructor(
             syncMutex.unlock()
         }
     }
+
+    /**
+     * The full conflict picture for [notebookId] — the pages edited on both sides plus whether the
+     * manifests diverge structurally. For the resolution UI: read-only, holds no sync mutex. Returns
+     * an empty [NotebookConflict] when sync is off/unconfigured or the notebook is gone.
+     */
+    suspend fun notebookConflict(notebookId: String): AppResult<NotebookConflict, DomainError> =
+        withContext(ioDispatcher) {
+            val settings = kvProxy.getSyncSettings()
+            if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+                return@withContext AppResult.Success(NotebookConflict(emptyList(), structural = false))
+            }
+            val notebook = appRepository.bookRepository.getById(notebookId)
+                ?: return@withContext AppResult.Success(NotebookConflict(emptyList(), structural = false))
+            val client =
+                webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+            notebookSyncService.detectConflicts(notebook, client)
+        }
+
+    /**
+     * Apply the user's [resolution] to one conflicted page and transfer it, then — once the last
+     * conflict is resolved — the CONFLICT badge clears. [PageConflictResolution.SKIP] changes nothing.
+     *
+     * Everything below runs while *holding* [syncMutex] (waiting for it, not skip-if-busy), so the
+     * rebaseline and its transfer are one operation a concurrent sync can neither drop nor observe
+     * half-done. [resolutionPreflight] refuses upload-only / download-only mode first, so an explicit
+     * choice is only ever acknowledged when the notebook can actually be transferred both ways.
+     */
+    suspend fun resolvePageConflict(
+        notebookId: String,
+        pageId: String,
+        resolution: PageConflictResolution
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+        // SKIP mutates nothing and needs no transfer, so it need not wait for the mutex.
+        if (resolution == PageConflictResolution.SKIP) return@withContext AppResult.Success(Unit)
+        syncMutex.lock()
+        try {
+            val settings = kvProxy.getSyncSettings()
+            val client = resolutionPreflight(settings)
+                .getOrElse { return@withContext AppResult.Error(it) }
+            notebookSyncService.resolveConflictedPage(notebookId, pageId, resolution, client)
+                .onFailure { return@withContext AppResult.Error(it) }
+            runResolutionTransfer(notebookId, client)
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    /**
+     * Apply a whole-notebook [resolution] for a structural conflict. TAKE_SERVER downloads the server
+     * copy (which commits as synced); KEEP_LOCAL adopts the server ETags as our base and then uploads
+     * the local copy over the server. Either way the CONFLICT badge clears once it completes.
+     *
+     * Runs while *holding* [syncMutex] (waiting for it, not skip-if-busy) so the rebaseline and its
+     * transfer are atomic against other syncs. [resolutionPreflight] refuses upload-only / download-only
+     * mode and an unmet Wi-Fi constraint up front, so KEEP_LOCAL is never acknowledged while the server's
+     * other version would in fact be kept.
+     */
+    suspend fun resolveNotebookConflict(
+        notebookId: String,
+        resolution: NotebookConflictResolution
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+        syncMutex.lock()
+        try {
+            val settings = kvProxy.getSyncSettings()
+            val client = resolutionPreflight(settings)
+                .getOrElse { return@withContext AppResult.Error(it) }
+            // TAKE_SERVER downloads inline (its own committed transfer); KEEP_LOCAL only rebaselines
+            // here and needs the upload half below.
+            notebookSyncService.resolveNotebookConflict(notebookId, resolution, client)
+                .onFailure { return@withContext AppResult.Error(it) }
+            if (resolution == NotebookConflictResolution.TAKE_SERVER) AppResult.Success(Unit)
+            else runResolutionTransfer(notebookId, client)
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    /**
+     * Strict preflight for an explicit user resolution, returning the [WebDAVClient] to use. Unlike
+     * background sync — where disabled sync or an unmet Wi-Fi constraint is a planned no-op that
+     * returns success — a resolution is about to change the sync baseline, so a silent no-op would
+     * acknowledge a choice we never transfer. Every gate here fails with an error instead.
+     *
+     * Upload-only / download-only is refused outright: resolving a conflict has to move a version in
+     * whichever direction the choice needs, which a one-directional mode cannot honor without either
+     * violating the mode or dropping the choice. The notebook keeps its CONFLICT badge and the user
+     * resolves it once back on two-way sync.
+     */
+    private suspend fun resolutionPreflight(
+        settings: SyncSettings
+    ): AppResult<WebDAVClient, DomainError> {
+        if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+            return AppResult.Error(DomainError.SyncConfigError)
+        }
+        if (settings.uploadOnly || settings.downloadOnly) {
+            return AppResult.Error(DomainError.SyncDirectionalConflict)
+        }
+        val client =
+            webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+        syncPreflightService.checkWifiConstraint().onFailure { return AppResult.Error(it) }
+        syncPreflightService.checkClockSkew(client).onFailure { return AppResult.Error(it) }
+        return AppResult.Success(client)
+    }
+
+    /**
+     * The transfer half of a resolution: a bidirectional reconcile that picks up the rebaselined rows.
+     * [resolutionPreflight] has already refused upload-only / download-only, so the notebook is on
+     * two-way sync here and a whole-notebook reconcile stays within the user's chosen direction. Runs
+     * under the caller's held [syncMutex]; on failure the rebaselined row is left as a pending state
+     * the next sync completes, and the caller surfaces the error.
+     */
+    private suspend fun runResolutionTransfer(
+        notebookId: String,
+        client: WebDAVClient
+    ): AppResult<Unit, DomainError> = notebookReconciliationService.syncNotebook(
+        notebookId, client, uploadOnly = false, downloadOnly = false
+    )
 
     /** Report [error] as the terminal state of the current sync and return it as a failure. */
     private fun failStep(error: DomainError): AppResult<Unit, DomainError> {
@@ -385,7 +506,7 @@ internal fun finalizeSyncResult(
     summary: SyncSummary,
     nonCriticalError: DomainError?
 ): AppResult<Unit, DomainError> {
-    // Upload-only skips are ordinary planned no-ops now (6b), so the only thing that reaches here
+    // Upload-only skips are ordinary planned no-ops now, so the only thing that reaches here
     // as a nonCriticalError is a genuine per-notebook failure.
     if (nonCriticalError != null) {
         reporter.finishError(nonCriticalError, false)

@@ -3,7 +3,7 @@
 The editor toolbar is **data-driven**: what appears, in what order, and in which zone is a
 serialized layout the user edits, not code. Adding a tool means adding a registry entry (and,
 for pens, a stroke style) — never editing the render loop. This document describes the shipped
-design; open risks live in [`toolbar-known-issues.md`](toolbar-known-issues.md).
+design.
 
 ---
 

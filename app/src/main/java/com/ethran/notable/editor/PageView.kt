@@ -50,7 +50,6 @@ import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,6 +61,10 @@ import kotlin.math.min
 import kotlin.system.measureTimeMillis
 
 const val OVERLAP = 2
+
+// Backgrounds are rendered this much larger than the current zoom so a small zoom-in reuses the
+// cached bitmap instead of re-rendering (trades a little memory/render cost for fewer reloads).
+private const val BACKGROUND_ZOOM_HEADROOM = 1.2f
 
 data class PageCutMoveResult(
     val previousStrokes: List<Stroke>,
@@ -106,9 +109,6 @@ class PageView(
     var strokes: List<Stroke>
         get() = pageDataManager.getStrokes(currentPageId)
         set(value) = pageDataManager.setStrokes(currentPageId, value)
-
-    val strokesById: HashMap<String, Stroke>
-        get() = pageDataManager.getStrokesById(currentPageId)
 
     var images: List<Image>
         get() = pageDataManager.getImages(currentPageId)
@@ -160,8 +160,11 @@ class PageView(
             log.i("Background bitmap (cached): ${cached.bitmap}")
             return cached.bitmap
         }
-        // 0.1 to avoid constant rerender on zoom.
-        val newBackground = CachedBackground(filePath, pageNumber, scale + 0.1f)
+        // Render a little larger than requested so small zoom-in steps reuse this bitmap instead of
+        // forcing a re-render (matches() accepts any cached scale >= requested). Multiplicative so
+        // the headroom stays proportional as you zoom; floored to the old additive margin near 1x.
+        val renderScale = (scale * BACKGROUND_ZOOM_HEADROOM).coerceAtLeast(scale + 0.1f)
+        val newBackground = CachedBackground(filePath, pageNumber, renderScale)
         currentBackground = newBackground
         log.i("Background bitmap: ${newBackground.bitmap}")
         return newBackground.bitmap
@@ -302,9 +305,11 @@ class PageView(
                 logCache.d("Loaded page from persistent layer $currentPageId")
                 if (!pageDataManager.validatePageDataLoaded(currentPageId))
                     logCache.e("Page should be loaded, but it is not. $currentPageId")
+                // Admission control already evicts to fit before this load, so this trim is only a
+                // safety net for an under-estimate (actual > estimate); run it at load completion,
+                // not after a magic delay. Then prefetch neighbors into whatever budget is left.
                 coroutineScope.launch(Dispatchers.Default) {
-                    delay(10)
-                    pageDataManager.reduceCache(20)
+                    pageDataManager.trimToBudget()
                     pageDataManager.cacheNeighbors()
                 }
 //                sleep(10000)
@@ -325,7 +330,6 @@ class PageView(
         updateHeightForChange(strokesToAdd)
 
         saveStrokesToPersistLayer(strokesToAdd)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -367,14 +371,12 @@ class PageView(
         }
         updateHeightForChange(strokesToUpdate)
         pageDataManager.updateStrokesInDb(strokesToUpdate)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
 //        persistBitmapDebounced()
     }
 
     fun removeStrokes(strokeIds: List<String>) {
         strokes = strokes.filter { s -> !strokeIds.contains(s.id) }
         removeStrokesFromPersistLayer(strokeIds)
-        pageDataManager.indexStrokes(coroutineScope, currentPageId)
         pageDataManager.recomputeHeight(currentPageId)
 
 //        persistBitmapDebounced()
@@ -404,7 +406,6 @@ class PageView(
         if (bottomPlusPadding > height) height = bottomPlusPadding
 
         saveImagesToPersistLayer(listOf(imageToAdd))
-        pageDataManager.indexImages(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -416,7 +417,6 @@ class PageView(
             if (bottomPlusPadding > height) height = bottomPlusPadding
         }
         saveImagesToPersistLayer(imageToAdd)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -424,7 +424,6 @@ class PageView(
     fun removeImages(imageIds: List<String>) {
         images = images.filter { s -> !imageIds.contains(s.id) }
         removeImagesFromPersistLayer(imageIds)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
         pageDataManager.recomputeHeight(currentPageId)
 //        persistBitmapDebounced()
     }
@@ -439,10 +438,8 @@ class PageView(
             if (bottomPlusPadding > height) height = bottomPlusPadding
         }
         pageDataManager.updateImagesInDb(imagesToUpdate)
-        pageDataManager.indexImages(coroutineScope, currentPageId)
     }
 
-    fun getImage(imageId: String): Image? = pageDataManager.getImage(imageId, currentPageId)
     fun getImages(imageIds: List<String>): List<Image?> =
         pageDataManager.getImages(imageIds, currentPageId)
 

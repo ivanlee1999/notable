@@ -15,6 +15,7 @@ import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.KvRepository
 import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.PageRepository
+import com.ethran.notable.data.db.PageSyncStateRepository
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Mode
@@ -70,6 +71,7 @@ class EditorSimpleStateTests {
         val kvProxy = KvProxy(kvRepository, CryptoHelper())
 
         val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
+        val pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao())
         val appRepository = AppRepository(
             bookRepository = bookRepository,
             pageRepository = pageRepository,
@@ -77,6 +79,7 @@ class EditorSimpleStateTests {
             imageRepository = imageRepository,
             folderRepository = folderRepository,
             notebookSyncStateRepository = notebookSyncStateRepository,
+            pageSyncStateRepository = pageSyncStateRepository,
             kvProxy = kvProxy,
             db = db,
         )
