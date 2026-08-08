@@ -1,7 +1,10 @@
 package com.ethran.notable.sync
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.KvProxy
+import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.SyncStateValue
 import com.ethran.notable.sync.serializers.FolderSerializer
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
@@ -80,14 +83,19 @@ class SyncForceService @Inject constructor(
         client.listCollection(SyncPaths.notebooksDir()).onSuccess { serverDirs ->
             serverDirs.map { it.trimEnd('/') }.filter { it !in localIds }.forEach { extra ->
                 log.i(TAG, "Deleting server notebook not present locally: $extra")
-                client.delete(SyncPaths.notebookDir(extra)).onError { errors.add(it) }
+                val deleted = client.delete(SyncPaths.notebookDir(extra))
+                    .onError { errors.add(it) } is AppResult.Success
                 client.putFile(
                     SyncPaths.tombstone(extra), ByteArray(0), "application/octet-stream"
                 ).onSuccess {
-                    // Gone on both sides -- drop any leftover sync-state rows so a later regular
-                    // sync doesn't re-detect and re-tombstone it.
-                    appRepository.notebookSyncStateRepository.delete(extra)
-                    appRepository.pageSyncStateRepository.deleteByNotebook(extra)
+                    if (deleted) {
+                        // Gone on both sides -- drop any leftover sync-state rows so a later regular
+                        // sync doesn't re-detect and re-tombstone it. If DELETE failed, retain them
+                        // so normal deletion detection retries instead of eventually resurrecting
+                        // the stale server notebook after tombstone pruning.
+                        appRepository.notebookSyncStateRepository.delete(extra)
+                        appRepository.pageSyncStateRepository.deleteByNotebook(extra)
+                    }
                 }.onError { error ->
                     log.e(TAG, "Failed to upload tombstone for $extra: ${error.userMessage}")
                     errors.add(error)
@@ -102,7 +110,7 @@ class SyncForceService @Inject constructor(
     }
 
     suspend fun forceDownloadAll(): AppResult<Unit, DomainError> {
-        log.i(TAG, "FORCE DOWNLOAD: Replacing local with server data")
+        log.i(TAG, "FORCE DOWNLOAD: Replacing local with server data (incremental)")
         val settings = kvProxy.getSyncSettings()
         if (settings.username.isBlank() || settings.password.isBlank()) {
             return AppResult.Error(DomainError.SyncAuthError)
@@ -133,57 +141,151 @@ class SyncForceService @Inject constructor(
                 DomainError.SyncError("Server has no notebooks; refusing to wipe local data")
             )
         }
+        val serverNotebookIds = serverNotebookDirs.map { it.trimEnd('/') }
 
-        // 2. Now safe to clear local data (including the sync-state table -- we are replacing the
-        //    whole local set, so old rows must not linger and be mis-read as deletions).
-        try {
-            val localFolders = appRepository.folderRepository.getAll()
-            localFolders.forEach { appRepository.folderRepository.delete(it.id) }
-
-            val localNotebooks = appRepository.bookRepository.getAll()
-            localNotebooks.forEach { appRepository.bookRepository.delete(it.id) }
-            appRepository.notebookSyncStateRepository.deleteAll()
-
-            log.i(
-                TAG,
-                "Deleted ${localFolders.size} folders and ${localNotebooks.size} local notebooks"
-            )
-        } catch (e: Exception) {
-            val error = DomainError.DatabaseError("Failed to clear local data: ${e.message}")
-            return AppResult.Error(error)
-        }
-
-        // 3. Download folders.
+        // 2. Reconcile folders in place (create missing, update changed) BEFORE notebooks, so their
+        //    parentFolderId foreign keys resolve on insert. Folders are NOT wiped-and-recreated:
+        //    Notebook->Folder is ON DELETE CASCADE, so deleting every folder would cascade-delete
+        //    every foldered notebook and force it to re-download -- exactly the from-scratch cost we
+        //    are removing. Extra local folders are pruned in step 4, after their notebooks have been
+        //    re-parented under a server folder, so that CASCADE only ever reaches non-server data.
+        var serverFolderIds: Set<String>? = null
         if (client.exists(SyncPaths.foldersFile()).onError { errors.add(it) }.getOrElse { false }) {
             client.getFile(SyncPaths.foldersFile()).onSuccess { foldersBytes ->
-                val foldersJson = foldersBytes.decodeToString()
                 try {
-                    val folders = folderSerializer.deserializeFolders(foldersJson)
-                    folders.forEach { appRepository.folderRepository.create(it) }
-                    log.i(TAG, "Downloaded ${folders.size} folders from server")
+                    val folders = folderSerializer.deserializeFolders(foldersBytes.decodeToString())
+                    reconcileFolders(folders)
+                    serverFolderIds = folders.map { it.id }.toSet()
+                    log.i(TAG, "Reconciled ${folders.size} folder(s) from server")
                 } catch (e: Exception) {
                     errors.add(DomainError.SyncError("Failed to process folders: ${e.message}"))
                 }
             }.onError { errors.add(it) }
         }
 
-        // 4. Download notebooks (list already fetched in step 1).
-        log.i(TAG, "Found ${serverNotebookDirs.size} notebook(s) on server")
-        serverNotebookDirs.forEachIndexed { index, notebookDir ->
-            val notebookId = notebookDir.trimEnd('/')
-            reporter.beginItem(index + 1, serverNotebookDirs.size, notebookId, notebookId)
-            notebookSyncService.downloadNotebook(notebookId, client)
-                .onError { error ->
-                    log.e(TAG, "Failed to download $notebookDir: ${error.userMessage}")
-                    errors.add(error)
+        // 3. Download each server notebook, skipping ones already committed as an exact mirror of the
+        //    server's current manifest -- this is what makes an interrupted run resume instead of
+        //    re-fetching everything (downloads commit per notebook and those rows survive a restart).
+        //    A notebook with local edits has its page sync rows dropped so downloadNotebook re-fetches
+        //    every page and overwrites them ("replace local with server"); a clean-but-stale notebook
+        //    keeps its rows so only the changed pages are fetched.
+        log.i(TAG, "Found ${serverNotebookIds.size} notebook(s) on server")
+        serverNotebookIds.forEachIndexed { index, notebookId ->
+            reporter.beginItem(index + 1, serverNotebookIds.size, notebookId, notebookId)
+            val book = appRepository.bookRepository.getById(notebookId)
+            val hasDirtyPages = book != null && notebookSyncService.hasLocallyDirtyPages(book)
+            val alreadyMirror = book != null && !hasDirtyPages &&
+                isCommittedMirror(book, client)
+            if (alreadyMirror) {
+                log.i(TAG, "Skipping already-mirrored notebook: $notebookId")
+            } else {
+                if (hasDirtyPages) {
+                    appRepository.pageSyncStateRepository.deleteByNotebook(notebookId)
                 }
+                notebookSyncService.downloadNotebook(notebookId, client)
+                    .onError { error ->
+                        log.e(TAG, "Failed to download $notebookId: ${error.userMessage}")
+                        errors.add(error)
+                    }
+            }
             reporter.endItem()
         }
 
-        // Sync-state rows are written per notebook by downloadNotebook on each committed download.
+        // 4. Now that every server notebook is present and re-parented, remove local data the server
+        //    no longer has so local ends up == server: notebooks first (with their sync rows), then
+        //    extra folders. Folder pruning is skipped when the server had no folders.json -- refusing
+        //    to destroy the local folder tree on missing data, consistent with the guards above.
+        val serverIdSet = serverNotebookIds.toSet()
+        appRepository.bookRepository.getAll().filter { it.id !in serverIdSet }.forEach { extra ->
+            log.i(TAG, "Deleting local notebook not on server: ${extra.title}")
+            try {
+                appRepository.bookRepository.delete(extra.id)
+                appRepository.notebookSyncStateRepository.delete(extra.id)
+                appRepository.pageSyncStateRepository.deleteByNotebook(extra.id)
+            } catch (e: Exception) {
+                errors.add(DomainError.DatabaseError("Failed to delete local notebook ${extra.id}: ${e.message}"))
+            }
+        }
+        serverFolderIds?.let { keep ->
+            appRepository.folderRepository.getAll().filter { it.id !in keep }.forEach { extra ->
+                log.i(TAG, "Deleting local folder not on server: ${extra.id}")
+                try {
+                    appRepository.folderRepository.delete(extra.id)
+                } catch (e: Exception) {
+                    errors.add(DomainError.DatabaseError("Failed to delete local folder ${extra.id}: ${e.message}"))
+                }
+            }
+        }
+
         return errors.asResult(Unit).onSuccess {
             log.i(TAG, "FORCE DOWNLOAD complete")
         }
+    }
+
+    /**
+     * Apply the server's folder set to the local DB in place. The serialized list has no ordering
+     * contract, so validate and order it parent-first before writing; this also handles hierarchy
+     * rearrangements without transient foreign-key failures. Deletion of local-only folders is left
+     * to the caller, after notebooks have been re-parented, so a folder's ON DELETE CASCADE never
+     * takes a notebook that still exists on the server.
+     */
+    private suspend fun reconcileFolders(serverFolders: List<Folder>) {
+        val serverById = serverFolders.associateBy { it.id }
+        require(serverById.size == serverFolders.size) { "Duplicate folder IDs in folders.json" }
+
+        val ordered = mutableListOf<Folder>()
+        val visiting = mutableSetOf<String>()
+        val visited = mutableSetOf<String>()
+        fun visit(folder: Folder) {
+            if (folder.id in visited) return
+            require(visiting.add(folder.id)) { "Folder cycle in folders.json at ${folder.id}" }
+            folder.parentFolderId?.let { parentId ->
+                val parent = serverById[parentId]
+                    ?: error("Folder ${folder.id} references missing parent $parentId")
+                visit(parent)
+            }
+            visiting.remove(folder.id)
+            visited.add(folder.id)
+            ordered.add(folder)
+        }
+        serverFolders.forEach(::visit)
+
+        val localById = appRepository.folderRepository.getAll().associateBy { it.id }
+        for (folder in ordered) {
+            val local = localById[folder.id]
+            when {
+                local == null -> appRepository.folderRepository.create(folder)
+                local != folder -> appRepository.folderRepository.update(folder)
+            }
+        }
+    }
+
+    /**
+     * Whether [notebook] is committed SYNCED against the server's *current* manifest ETag. Used by
+     * the force download to skip a notebook that is already an exact mirror, so a resumed run does not
+     * re-fetch it. False when the row is missing/ERROR, has no stored ETag, or the server ETag can't
+     * be read or differs -- all of which route to a (re-)download, which is safe if not economical.
+     * The caller pairs this with a dirty-pages check so a local edit still overwrites the server copy.
+     */
+    private suspend fun isCommittedMirror(
+        notebook: Notebook,
+        client: WebDAVClient
+    ): Boolean {
+        val state = appRepository.notebookSyncStateRepository.get(notebook.id) ?: return false
+        if (state.state != SyncStateValue.SYNCED) return false
+        // A matching server ETag proves only that the remote is unchanged. Require the local
+        // manifest anchor too, otherwise metadata-only edits (title, folder, page order, defaults)
+        // would be skipped instead of replaced by the forced download.
+        if (notebook.updatedAt != state.syncedLocalUpdatedAt) return false
+        // A sync row is not proof that the page row still exists (for example after restoring an
+        // inconsistent backup). Let downloadNotebook repair any hole instead of skipping forever.
+        val localPageIds = appRepository.pageRepository.getByIds(notebook.pageIds)
+            .mapTo(mutableSetOf()) { it.id }
+        if (!localPageIds.containsAll(notebook.pageIds)) return false
+        val storedEtag = ETag.parse(state.remoteEtag) ?: return false
+        val serverEtag = client.resourceEtag(SyncPaths.manifestFile(notebook.id))
+            .getOrElse { return false }
+        return storedEtag.matches(serverEtag)
     }
 
     companion object {
