@@ -46,8 +46,8 @@ internal object WebDavXml {
 
     /**
      * Parse `<response>` blocks from a PROPFIND XML response, returning each resource's href with
-     * its last-modified date and ETag (either null if the server omitted it). An `allprop` request
-     * yields both; a narrower request yields only what it asked for.
+     * its last-modified date and ETag (either null if the request didn't ask for it or the server
+     * omitted it).
      */
     fun parseEntries(xml: String): List<DavEntry> {
         return try {

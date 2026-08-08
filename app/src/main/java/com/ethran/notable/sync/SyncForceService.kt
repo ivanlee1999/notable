@@ -73,10 +73,25 @@ class SyncForceService @Inject constructor(
         }
 
         // 4. Delete server notebooks that no longer exist locally, so the server ends up == local.
+        //    Each removal also drops a tombstone so the deletion propagates to other devices
+        //    (notably download-only mirrors) instead of being a silent server-side hard delete they
+        //    never learn about -- which otherwise left them showing a stale SYNCED badge for a
+        //    notebook whose server copy was gone.
         client.listCollection(SyncPaths.notebooksDir()).onSuccess { serverDirs ->
             serverDirs.map { it.trimEnd('/') }.filter { it !in localIds }.forEach { extra ->
                 log.i(TAG, "Deleting server notebook not present locally: $extra")
                 client.delete(SyncPaths.notebookDir(extra)).onError { errors.add(it) }
+                client.putFile(
+                    SyncPaths.tombstone(extra), ByteArray(0), "application/octet-stream"
+                ).onSuccess {
+                    // Gone on both sides -- drop any leftover sync-state rows so a later regular
+                    // sync doesn't re-detect and re-tombstone it.
+                    appRepository.notebookSyncStateRepository.delete(extra)
+                    appRepository.pageSyncStateRepository.deleteByNotebook(extra)
+                }.onError { error ->
+                    log.e(TAG, "Failed to upload tombstone for $extra: ${error.userMessage}")
+                    errors.add(error)
+                }
             }
         }.onError { errors.add(it) }
 

@@ -231,7 +231,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(ETag.parse(response.header("ETag")))
+                response.isSuccessful -> AppResult.Success(response.etag())
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -263,7 +263,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(ETag.parse(response.header("ETag")))
+                response.isSuccessful -> AppResult.Success(response.etag())
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -280,7 +280,7 @@ class WebDAVClient(
             when {
                 response.isSuccessful ->
                     AppResult.Success(
-                        DownloadedFile(response.body.bytes(), ETag.parse(response.header("ETag")))
+                        DownloadedFile(response.body.bytes(), response.etag())
                     )
 
                 response.code == HttpURLConnection.HTTP_NOT_FOUND ->
@@ -312,7 +312,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_NOT_MODIFIED -> AppResult.Success(null)
                 response.isSuccessful ->
                     AppResult.Success(
-                        DownloadedFile(response.body.bytes(), ETag.parse(response.header("ETag")))
+                        DownloadedFile(response.body.bytes(), response.etag())
                     )
 
                 // Same typed signal as getFileWithMetadata so a vanished manifest is handled
@@ -350,7 +350,7 @@ class WebDAVClient(
                         // Some filesystems refuse a rename onto an existing file; retry via a backup.
                         val moved = partFile.renameTo(localFile) ||
                             replaceViaBackup(partFile, localFile)
-                        if (moved) AppResult.Success(ETag.parse(response.header("ETag")))
+                        if (moved) AppResult.Success(response.etag())
                         else AppResult.Error(DomainError.SyncError("Could not store download: $path"))
                     } catch (e: IOException) {
                         AppResult.Error(DomainError.SyncError("Download of $path failed: ${e.message}"))
@@ -465,7 +465,7 @@ class WebDAVClient(
      * @return List of UUID resource names in the collection
      */
     fun listCollection(path: String): AppResult<List<String>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             if (response.isSuccessful) {
                 val hrefs = WebDavXml.parseHrefs(response.body.string())
                 AppResult.Success(hrefs.filter { it != path && !it.endsWith("/$path") }
@@ -483,7 +483,7 @@ class WebDAVClient(
      * Returns an empty list when the collection does not exist (404).
      */
     fun listNames(path: String): AppResult<List<String>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
@@ -507,7 +507,7 @@ class WebDAVClient(
      * to `null`.
      */
     fun listEtags(path: String): AppResult<Map<String, ETag?>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyMap())
                 response.isSuccessful -> {
@@ -553,7 +553,7 @@ class WebDAVClient(
      * change.
      */
     fun resourceEtag(path: String): AppResult<ETag?, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP, depth = "0") }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS, depth = "0") }) { response ->
             if (response.isSuccessful) {
                 val self = WebDavXml.parseEntries(response.body.string()).firstOrNull()
                 AppResult.Success(ETag.parse(self?.etag))
@@ -633,6 +633,14 @@ class WebDAVClient(
     }
 
     /**
+     * The validator a response advertises, falling back to Nextcloud/ownCloud's `OC-ETag` when the
+     * standard `ETag` header is absent -- some setups send only the OC- variant (e.g. behind a proxy
+     * that strips `ETag`, or on chunked uploads). Both carry the same opaque value there, so either
+     * is a valid anchor for a later If-Match/If-None-Match.
+     */
+    private fun Response.etag(): ETag? = ETag.parse(header("ETag") ?: header("OC-ETag"))
+
+    /**
      * Build full URL from server URL and path.
      */
     private fun buildUrl(path: String): String {
@@ -648,10 +656,19 @@ class WebDAVClient(
     companion object {
         private const val TAG = "WebDAVClient"
 
-        private val PROPFIND_ALLPROP = """
+        // Enumerate the props we actually read rather than asking for <allprop/>. Nextcloud/ownCloud
+        // do NOT return <getetag> (among others) for an <allprop/> request -- the ETag is only sent
+        // when it is named explicitly in a <prop>. Relying on allprop left resourceEtag/listEtags
+        // reading a null validator on those servers, so every commit degraded to unguarded
+        // last-writer-wins ("server issued no ETag") even though the server does issue ETags.
+        private val PROPFIND_PROPS = """
             <?xml version="1.0" encoding="utf-8"?>
             <D:propfind xmlns:D="DAV:">
-                <D:allprop/>
+                <D:prop>
+                    <D:getetag/>
+                    <D:getlastmodified/>
+                    <D:resourcetype/>
+                </D:prop>
             </D:propfind>
         """.trimIndent()
 

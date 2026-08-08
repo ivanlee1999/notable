@@ -596,7 +596,18 @@ class NotebookSyncService @Inject constructor(
             .onFailure { return AppResult.Error(it) }
 
         return when (val moved = client.move(tmpPath, finalPath, ifMatchDestination = ifMatch)) {
-            is AppResult.Success -> AppResult.Success(null)
+            is AppResult.Success -> {
+                // MOVE carries no ETag for its destination (RFC 4918), so read the manifest's ETag
+                // back with a cheap PROPFIND Depth:0. Without this the row committed unguarded (null
+                // ETag) even on servers that DO issue ETags (e.g. Nextcloud) -- forfeiting next
+                // sync's conditional-304 skip and the guarded remote GC. A failed readback degrades
+                // to null (unguarded, but the MOVE already succeeded), never failing the publish.
+                val readback = client.resourceEtag(finalPath).getOrElse { null }
+                if (readback == null) {
+                    log.w(TAG, "Manifest ETag readback empty for $notebookId; commit will be unguarded")
+                }
+                AppResult.Success(readback)
+            }
             is AppResult.Error -> {
                 client.delete(tmpPath) // best-effort cleanup either way
                 if (moved.error is DomainError.SyncConflict && guard is WriteGuard.Guarded) {
