@@ -77,11 +77,9 @@ class SyncOrchestrator @Inject constructor(
                 settings.password
             )
 
-            syncPreflightService.checkClockSkew(client).onFailure {
-                return@withContext failStep(it)
-            }
-
-            syncPreflightService.ensureServerDirectories(client).onFailure {
+            // One root PROPFIND collapses the three directory-existence HEADs and (when the server
+            // sends a usable Date header) the dedicated clock-skew HEAD into a single request.
+            syncPreflightService.ensureServerReady(client).onFailure {
                 return@withContext failStep(it)
             }
 

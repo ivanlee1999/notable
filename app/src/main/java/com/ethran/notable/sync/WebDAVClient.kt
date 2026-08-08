@@ -28,6 +28,38 @@ import java.util.Date
 data class RemoteEntry(val name: String, val lastModified: Date?)
 
 /**
+ * Result of the collapsed preflight PROPFIND on the sync root — one request that answers "which of
+ * the expected directories exist?" and, opportunistically, "what is the server's clock?".
+ *
+ * @property rootExists false when the root collection itself returned 404 (both children are then
+ *   known-absent without any further request).
+ * @property childNames decoded names of the root's immediate children, with the root's own entry
+ *   removed. Membership answers each directory-existence question.
+ * @property serverTimeMs the server clock parsed from the response `Date` header, or null when the
+ *   server omitted or corrupted it — the caller then falls back to the dedicated clock-skew HEAD.
+ * @property localMidpointMs the local time midway between issuing the request and reading the
+ *   response, the best single-sample estimate of "now" to compare against [serverTimeMs].
+ */
+data class RootProbe(
+    val rootExists: Boolean,
+    val childNames: Set<String>,
+    val serverTimeMs: Long?,
+    val localMidpointMs: Long,
+)
+
+/**
+ * Validate a decoded Depth-1 root listing and remove its mandatory self-entry. A successful HTTP
+ * response without the requested collection is not trustworthy WebDAV data (for example, an HTML
+ * login page reached through a redirect), so callers must fail closed instead of treating it as an
+ * empty root and attempting writes.
+ */
+internal fun rootChildNames(path: String, decodedNames: List<String>): Set<String>? {
+    val selfName = path.trimEnd('/').substringAfterLast('/')
+    if (selfName !in decodedNames) return null
+    return decodedNames.filter { it.isNotEmpty() && it != selfName }.toSet()
+}
+
+/**
  * A fetched body with the validator the server sent for it.
  *
  * [equals]/[hashCode] are hand-written because a `ByteArray` field otherwise compares by reference.
@@ -545,6 +577,47 @@ class WebDAVClient(
                 else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
             }
         }
+
+    /**
+     * Collapsed preflight probe: one `PROPFIND Depth: 1` on the sync root that reports which expected
+     * child directories exist and carries the server's `Date` header for a piggybacked clock-skew
+     * check. Replaces three sequential existence HEADs (and, when the server sends a usable `Date`,
+     * the dedicated clock-skew HEAD) with a single request.
+     *
+     * A 404 is reported as `rootExists = false` — an expected, non-error outcome that means the whole
+     * tree must be created. Every other non-success status stays an [AppResult.Error] (401 as
+     * [DomainError.SyncAuthError]); a caller must never read such a failure as "directory missing" and
+     * upload over a possibly-populated remote.
+     */
+    fun probeRoot(path: String): AppResult<RootProbe, DomainError> {
+        val startMs = System.currentTimeMillis()
+        return execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
+            val serverTimeMs = response.header("Date")?.let { parseHttpDate(it) }
+            val endMs = System.currentTimeMillis()
+            val localMidpointMs = startMs + (endMs - startMs) / 2
+            when {
+                response.code == HttpURLConnection.HTTP_NOT_FOUND ->
+                    AppResult.Success(RootProbe(false, emptySet(), serverTimeMs, localMidpointMs))
+
+                response.isSuccessful -> {
+                    val decodedNames = WebDavXml.parseHrefs(response.body.string())
+                        .map { Uri.decode(it.trimEnd('/').substringAfterLast('/')) }
+                    val childNames = rootChildNames(path, decodedNames)
+                        ?: return@execute AppResult.Error(
+                            DomainError.SyncError(
+                                "Invalid PROPFIND response: sync root entry is missing"
+                            )
+                        )
+                    AppResult.Success(RootProbe(true, childNames, serverTimeMs, localMidpointMs))
+                }
+
+                response.code == HttpURLConnection.HTTP_UNAUTHORIZED ->
+                    AppResult.Error(DomainError.SyncAuthError)
+
+                else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
+            }
+        }
+    }
 
     /**
      * The ETag of a single resource or collection, via `PROPFIND Depth: 0`. `Success(null)` when the
