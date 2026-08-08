@@ -1,315 +1,200 @@
-# WebDAV Sync - User Guide
+# WebDAV Sync — User Guide
 
 ## Overview
 
-Notable supports WebDAV synchronization to keep your notebooks, pages, and drawings in sync across
-multiple devices. WebDAV is a standard protocol that works with many cloud storage providers and
-self-hosted servers. Sync is experimental: keep an independent backup, especially before using
-either replacement operation under **CAUTION: Replacement Operations**.
+Notable can sync notebooks across devices through a cloud or self-hosted WebDAV server. Sync is
+experimental, so keep an independent backup—especially before using a replacement operation.
 
-## What Gets Synced?
+## What Gets Synced
 
-- **Notebooks**: notebooks, notebook order, and notebook settings
-- **Pages**: pages, handwriting, drawings, and embedded image records
-- **Images & backgrounds**: managed images and managed page backgrounds
-- **Folders**: your folder organization structure, including notebook moves
-- **Deletions**: notebook deletions
+- Notebooks, their order, and their settings
+- Pages, handwriting, drawings, managed images, and managed backgrounds
+- Folder organization and notebook moves
+- Notebook deletions
 
 Not synced:
 
-- standalone Quick Pages that are not inside a notebook;
-- the file behind a linked external PDF path (only the file *reference* travels with a managed
-  background, not an externally-linked PDF); and
-- folder deletions reliably — a folder deleted on one device can reappear after another device
-  syncs, although notebooks inside it are not deleted merely because the folder reappears.
+- Standalone Quick Pages
+- Files referenced through linked external PDF paths
+- Folder deletions; a deleted folder may reappear after another device syncs
 
-When the same notebook changes on two devices, Notable now handles it in one of two ways: edits to
-**different pages** merge automatically without losing anything, while a real clash — the **same page**
-edited on both devices, or a structural change like adding/reordering/renaming pages on both — is
-**flagged for you to resolve** rather than silently overwritten. See
-[Conflict Resolution](#conflict-resolution). There is still no stroke-level merge within a single
-page: resolving a same-page clash means choosing one whole version of that page.
+Changes to different pages merge automatically. If both devices change the same page or the notebook
+structure, Notable stops and asks which version to keep. It cannot merge individual strokes within a
+page. See [Conflict Resolution](#conflict-resolution).
 
 ## Prerequisites
 
-You'll need access to a WebDAV server that allows Basic authentication and supports `HEAD`, depth-1
-`PROPFIND`, `MKCOL`, `GET`, `PUT`, and `DELETE`. `MOVE` support improves manifest publication but is
-not required.
+You need a WebDAV account and its file endpoint URL. Use HTTPS unless the server is on a network you
+fully trust.
 
-### Popular WebDAV Providers
+### Common Providers
 
-1. **Nextcloud** (recommended for self-hosting)
-   - Free and open source, full control over your data
-   - Use the personal WebDAV URL shown in Files settings, normally:
-     `https://your-nextcloud.com/remote.php/dav/files/username/`
-   - Some installations instead expect (or also accept) the older, username-less endpoint:
-     `https://your-nextcloud.com/remote.php/webdav/`. If the `dav/files/username` form doesn't
-     connect, try this one before assuming something else is wrong.
-   - Nextcloud recommends an app password for third-party WebDAV clients — see
-     [Using Two-Factor Authentication](#using-two-factor-authentication-2fa) below and the
-     [Nextcloud WebDAV user manual](https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html).
+- **Nextcloud:** copy the personal WebDAV URL from Files settings. It is usually
+  `https://host/remote.php/dav/files/username/`. Some installations use
+  `https://host/remote.php/webdav/`. Nextcloud recommends an app password; see its
+  [WebDAV guide](https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html).
+- **ownCloud:** commonly uses `https://host/remote.php/webdav/`.
+- **NAS and hosting providers:** copy the exact URL from the provider's settings because paths vary.
 
-2. **ownCloud**
-   - Similar to Nextcloud
-   - URL format: `https://your-owncloud.com/remote.php/webdav/`
+## Set Up Sync
 
-3. **Other providers**
-   - Many NAS devices (Synology, QNAP) support WebDAV
-   - Some web hosting providers offer WebDAV access
-   - Copy the exact WebDAV URL shown by the product's own settings page instead of guessing its
-     path — providers vary more than the examples above suggest
+### 1. Get Your Credentials
 
-Box.com is intentionally not listed here: its old WebDAV endpoint is no longer a safe compatibility
-assumption, so we can't recommend a URL format for it.
+Collect the server URL, username, and password. If your account uses two-factor authentication, use
+an app password.
 
-Use HTTPS unless the server is on a network you fully trust. Notable accepts HTTP but does not
-protect credentials or note data from interception on an unencrypted connection.
+Notable appends `/notable` to the URL:
 
-## Setup Instructions
-
-### 1. Get Your WebDAV Credentials
-
-From your WebDAV provider, you'll need:
-- **Server URL**: the WebDAV endpoint URL (see [Prerequisites](#prerequisites))
-- **Username**: your account username
-- **Password**: your account password or an app-specific password
-
-**Important**: Notable automatically appends `/notable` to your server URL to keep your data
-organized. For example:
 - You enter: `https://cloud.example.com/remote.php/dav/files/alex/`
 - Notable uses: `https://cloud.example.com/remote.php/dav/files/alex/notable/`
 
 Don't add the trailing `/notable` yourself, or Notable will create `…/notable/notable/`.
 
-#### Using Two-Factor Authentication (2FA)
+#### Nextcloud with Two-Factor Authentication
 
-If your Nextcloud account has two-factor authentication enabled, your regular password will not
-work for WebDAV. You'll need to create an app-specific password:
+Create an app password instead of using your regular password:
 
-1. Log in to Nextcloud via your browser
+1. Log in to Nextcloud
 2. Go to **Settings** → **Security**
 3. Under **Devices & sessions**, click **Create new app password**
-4. Give it a name (e.g., "Notable")
-5. Nextcloud will generate a username and password for this app
-6. Use these generated credentials (not your regular login) when configuring Notable
-
-Other WebDAV providers with 2FA may have a similar app password mechanism — check your provider's
-documentation.
+4. Name it "Notable"
+5. Use the generated credentials in Notable
 
 ### 2. Configure Notable
 
 1. Open **Settings → Sync**
 2. Enter your **Server URL**, **Username**, and **Password** (or app password)
-3. Choose **Save Credentials**
+3. Tap **Save Credentials**
 
 ### 3. Test Your Connection
 
-1. Choose **Test Connection**
-2. This verifies that an authenticated `HEAD` request to the URL you entered succeeds, and shows any
-   clock difference read from the server's `Date` header
-3. It does **not** test file creation, available quota, the `/notable` directory, or every WebDAV
-   method sync needs — a successful test can still be followed by a sync failure, and the Sync Log
-   will contain the useful operation-level error
-4. If the test fails, double-check your credentials and URL, and see
-   [Troubleshooting](#troubleshooting)
+1. Tap **Test Connection**.
+2. If it fails, check the URL and credentials, then see [Troubleshooting](#troubleshooting).
 
-Normal sync also stops if the device clock differs from the server by more than 30 seconds; enabling
-automatic date and time is the easiest fix.
+The test checks authentication and server time, but not uploads, quota, or every WebDAV operation.
+A successful test does not guarantee that sync will succeed.
+
+Sync stops when the device and server clocks differ by more than 30 seconds. Enable automatic date
+and time if necessary.
 
 ### 4. Enable Sync
 
 1. Toggle **Enable WebDAV Sync**
-2. Run **Sync Now** once and inspect the Sync Log before relying on automatic sync
+2. Run **Sync Now** once and check the Sync Log before enabling automatic sync
 
 ## Sync Options
 
-### Manual Sync
-
-**Sync Now** queues a full two-way sync through Android WorkManager. It merges folders, applies
-notebook deletion markers, uploads or downloads existing notebooks based on their timestamps,
-downloads notebooks that are new to this device, and propagates local notebook deletions.
-
-The "Last synced" time is only updated after a completely successful full sync. A run can continue
-past one failed notebook so the rest still transfer, then finish as failed overall.
-
-### Automatic Sync
-
-**Auto sync every … minutes** creates periodic background sync (15–240 minutes). Android treats this
-interval as a minimum and may delay it for battery, network, or system scheduling reasons — don't
-expect sync exactly on the dot.
-
-### Sync on App Start
-
-Enable **Sync on app start** to queue a full sync automatically when Notable's main screen starts.
-Turn it off if you'd rather sync only manually or on a schedule.
-
-### Sync on Note Close
-
-Enable **Sync when closing notes** to sync just the notebook you were editing when you close it, so
-your latest changes upload promptly. This runs in-app rather than through WorkManager, syncs only
-that one notebook (not a full sync), and quietly skips itself if another guarded sync is already
-running.
-
-### Check on Open
-
-Enable **Check for newer version when opening a notebook** to have Notable do a quick, read-only
-manifest check when you open a notebook: if the server timestamp is more than one second newer, it
-offers a **Sync now** button (see [Sync Status Badges](#sync-status-badges)) that closes the editor
-and syncs before you can edit a stale copy. An absent warning doesn't prove the server is current —
-authentication, network, and other check errors are intentionally treated as "no warning" rather than
-blocking you from opening the notebook.
-
-### Wi-Fi Only
-
-Requires an Android network reported as unmetered. This usually includes unmetered Wi-Fi and Ethernet
-and excludes metered mobile data or metered Wi-Fi.
+| Option | Behavior |
+|---|---|
+| **Sync Now** | Runs a full sync. "Last synced" changes only after the entire run succeeds. Other notebooks can still transfer if one fails. |
+| **Auto sync every … minutes** | Schedules background sync every 15–240 minutes. Android may delay it for battery or network reasons. |
+| **Sync on app start** | Schedules a full sync when Notable's main screen starts. |
+| **Sync when closing notes** | Syncs only the notebook you closed. It skips the attempt if another sync holds the lock. |
+| **Check for newer version when opening a notebook** | Checks the remote manifest and offers **Sync now** when it is newer. Network and authentication errors do not block opening the notebook. |
+| **Wi-Fi only** | Requires a network Android reports as unmetered, usually Wi-Fi or Ethernet. |
 
 ### Upload Only / Download Only
 
 These two modes are mutually exclusive — turning one on turns the other off.
 
-- **Upload only (skip remote changes)** pushes your local changes to the server without ever
-  downloading. It **never modifies your local notebooks** and **never overwrites a newer copy on the
-  server** — notebooks that are newer on the server are simply left alone and shown with the
-  **Newer on server** badge. Remote deletions are not applied while upload-only is on. It still
-  merges and writes `folders.json`, so it isn't a blind overwrite of every server file.
+- **Upload only** pushes local changes but does not download notebooks or apply remote deletions. It
+  skips newer server copies and marks them **Newer on server**. Folder metadata can still be merged
+  and written.
 
-- **Download only (skip local changes)** is the mirror image: it pulls changes from the server
-  without ever pushing uploads or local deletions. Local edits stay on this device and normally keep
-  the **Not synced** badge. One exception: routine tombstone cleanup (pruning notebook-deletion
-  markers older than 90 days) can still touch the server in this mode, so don't treat it as a
-  strictly read-only client.
+- **Download only** pulls server changes but does not upload notebooks or local deletions. Local
+  edits remain **Not synced**. Cleanup may still delete server tombstones older than 90 days, so this
+  is not a strictly read-only mode.
 
 ### Cancel a Running Sync
 
-While a sync is running, a **Cancel** button asks WorkManager to cancel all work tagged for sync and
-resets visible progress. A blocking network request in flight may not stop immediately.
-
-Known limitation: the periodic schedule shares that same tag, so Cancel also removes automatic
-periodic sync for the rest of the current app session — restarting Notable recreates it from your
-saved settings. Sync-on-close and check-on-open run outside WorkManager and aren't reliably covered
-by Cancel either.
+**Cancel** stops WorkManager sync jobs, although an active network request may take time to finish.
+It also removes periodic sync for the current app session; restart Notable to restore the schedule.
+It may not stop sync-on-close or check-on-open.
 
 ## Sync Status Badges
 
 Each notebook cover in the library shows a small icon reflecting its sync status:
 
 | Icon | Status | Meaning |
-|------|--------|---------|
-| ☁️✓ (cloud-check) | **Synced** | Local timestamp matches the last recorded successful notebook commit. This is not a live server check. |
-| ☁️✕ (cloud-off) | **Not synced** | No sync record exists, or the notebook has local changes beyond the one-second tolerance. |
-| 🕐 (clock) | **Scheduled** | A full sync is running and this notebook is waiting its turn. |
-| 🔄 (sync) | **Syncing** | This notebook is the current transfer item. |
-| ☁️⬇ (cloud-download) | **Newer on server** | Upload-only mode found a newer server copy and did not download it. |
-| ⚠️ (alert) | **Error** | The latest upload/download attempt for this notebook failed — check the Sync Log. |
-| 🔄❗ (sync-problem) | **Conflict** | The same page (or the notebook's structure) was edited on two devices at once. **Tapping the notebook opens the resolution dialog instead of the editor** — see [Conflict Resolution](#conflict-resolution). The badge stays until you resolve it. |
+|---|---|---|
+| ☁️✓ | **Synced** | Local data matches the last successful notebook sync. This is not a live server check. |
+| ☁️✕ | **Not synced** | No sync record exists or the notebook has local changes. |
+| 🕐 | **Scheduled** | A full sync is running and this notebook is waiting its turn. |
+| 🔄 | **Syncing** | This notebook is transferring. |
+| ☁️⬇ | **Newer on server** | Upload-only mode skipped a newer server copy. |
+| ⚠️ | **Error** | The last attempt failed. Check the Sync Log. |
+| 🔄❗ | **Conflict** | Both devices changed the same page or notebook structure. Tap the notebook to resolve it. |
 
-The badges are informational and update automatically. A notebook with no badge simply has no
-recorded sync state yet; the first sync after an app upgrade that introduced this state table
-repopulates it for every notebook, so notebooks may briefly show **Not synced** until that sync
-completes.
+Badges describe the last recorded state, not the server's current state. A notebook may briefly show
+**Not synced** after an upgrade until the next sync rebuilds its status.
 
-## Advanced Features
+## Replacement Operations
 
-### Force Operations (Use with Caution!)
+These operations appear under **CAUTION: Replacement Operations** and cannot be undone.
 
-Located under **CAUTION: Replacement Operations**. Neither operation has an undo.
+- **Upload All (Replace Server with Local Data)** uploads every local notebook, then removes server
+  notebooks that do not exist locally. A partial failure can leave mixed old and new server data.
 
-- **Upload All (Replace Server with Local Data)**: uploads every local notebook, then deletes server
-  notebook directories that aren't present locally. It doesn't wipe the server before uploading, but
-  a partial failure can still leave a mixture of old and new server content and finish with an error.
-  `folders.json` is only written when your local folders are non-empty, and remote tombstones aren't
-  cleared wholesale.
+- **Download All (Replace Local with Server Data)** verifies that the server contains notebooks,
+  clears local data, then downloads the server copy. It is **not transactional**: a later failure can
+  leave a partial restore.
 
-- **Download All (Replace Local with Server Data)**: checks that the server notebook directory
-  exists and is non-empty, then deletes all local folders, notebooks, and sync-state rows before
-  downloading. That check exists specifically so an empty or unreachable server can't wipe your
-  device. It is **not transactional** — if the connection, parsing, storage, or database fails after
-  local data has already been cleared, the device can end up with only a partial restore. Keep a
-  backup and be prepared to run it again.
-
-**Warning**: these operations replace one side wholesale. Make sure you know which copy of your data
-is correct before using them.
+Back up your data and confirm which copy is authoritative before continuing.
 
 ## Conflict Resolution
 
-### Notebook Deletion Conflicts
+When both copies change, the newer notebook normally wins. If their timestamps are within one second,
+Notable compares what changed:
 
-Notebook deletions use zero-byte marker files on the server. If a notebook was deleted on one device
-but has a local edit timestamp later than that server deletion marker on another device, Notable
-**resurrects** it — keeps it and re-uploads it — instead of deleting it. This prevents accidental
-data loss, at the cost of an occasional deletion not "sticking."
-
-### Timestamp-Based Sync
-
-When both copies changed and one is clearly newer, Notable compares whole-notebook timestamps and the
-newer one wins:
-- local newer by more than one second → upload
-- server newer by more than one second → download
-- within one second → the two are compared more closely (see below)
-
-### When Edits Overlap
-
-If the timestamps are effectively tied but the copies genuinely differ, Notable looks at *what*
-changed instead of just *when*:
-
-- **Different pages on each device** — these don't actually conflict, so they're **merged
-  automatically**: the changes from both sides are combined and nothing is lost.
+- **Different pages** merge automatically.
 - **The same page on both devices**, or a **structural change** (pages added, removed, reordered, or
-  renamed, or notebook settings changed) on both — these can't be combined, so Notable **stops and
-  asks you** instead of overwriting. The notebook gets the **Conflict** badge and is not synced
-  further until you resolve it.
+  renamed, or notebook settings changed), creates a **Conflict** badge and waits for your choice.
 
 ### Resolving a Conflict
 
-Tap a notebook showing the **Conflict** badge. Instead of opening the editor, Notable shows a
-**Resolve sync conflict** dialog:
+Tap a notebook with a **Conflict** badge to open the resolution dialog.
 
-- **Page conflicts** are listed one at a time, each with a thumbnail of your local version and its
-  page number. For each, choose:
-  - **Keep mine** — upload your version, replacing the server's copy of that page;
-  - **Use server** — download the server's version over yours;
-  - **Skip** — decide later; the page stays flagged and is asked again on the next sync.
-- **Structural conflicts** are resolved for the whole notebook at once — **Keep mine** or **Use
-  server** — which also settles any page edits in the same direction.
+For each page conflict, choose:
 
-Once every conflict is resolved, Notable syncs and the badge clears. A failed resolution keeps the
-dialog open and shows the error rather than losing your choice.
+- **Keep mine** — upload your version, replacing the server copy.
+- **Use server** — download the server version over yours.
+- **Skip** — decide later; the page stays flagged until the next sync.
 
-**Note:** conflicts can only be resolved in normal two-way sync. If you're in **Upload only** or
-**Download only** mode, resolving is refused with a message to switch back to two-way sync first —
-resolving has to move data in both directions, which a one-way mode can't do. The badge stays until
-you switch and resolve.
+Resolve a structural conflict for the entire notebook with **Keep mine** or **Use server**.
 
-There is still no merge *within* a single page: resolving a same-page clash keeps one whole version of
-that page. To avoid conflicts entirely, sync before switching devices and avoid leaving the same
-notebook open on two devices at once.
+After the last conflict is resolved, Notable syncs and clears the badge. On failure, the dialog stays
+open and displays the error.
+
+Conflict resolution requires two-way sync. Switch off **Upload only** or **Download only** before
+resolving; the badge remains until then.
+
+Notable cannot merge changes within one page. Sync before switching devices and avoid editing the
+same notebook on two devices at once.
+
+### Deletion Conflicts
+
+If one device deletes a notebook while another makes a later edit, Notable keeps and re-uploads the
+edited copy. This protects the edit but can make a deletion reappear.
 
 ## Sync Log
 
-The **Sync Log** section shows real-time information about sync operations: which notebooks were
-synced, upload/download activity, and any errors that occurred. It holds only the latest 50
-in-memory entries, so copy it promptly if you need to report a problem. Choose **Clear** to clear it.
+The **Sync Log** shows transfers and errors. It keeps the latest 50 entries in memory, so copy a
+failure promptly. Tap **Clear** to empty it.
 
 ## Troubleshooting
 
 ### Connection Succeeds but Sync Fails
 
-**Problem**: Test Connection passes, but **Sync Now** still fails.
-
-**Solutions**:
 1. Confirm the entered URL is the writable WebDAV files endpoint, not a normal website page
 2. Confirm the account can create a folder and upload a file outside of Notable
-3. Use an app password when your provider requires one (see [2FA](#using-two-factor-authentication-2fa))
+3. Use an app password when your provider requires one (see
+   [Nextcloud with two-factor authentication](#nextcloud-with-two-factor-authentication))
 4. Check server quota and Android device storage
 5. Confirm the server supports `HEAD` and depth-1 `PROPFIND`
-6. Inspect and copy the Sync Log immediately — it contains only the latest 50 entries
+6. Copy the Sync Log before older entries disappear
 
 ### Notebooks Not Appearing on Other Device
 
-**Problem**: Synced on one device but not showing on another.
-
-**Solutions**:
 1. Run **Sync Now** on the source device and wait for success
 2. Run **Sync Now** on the destination device
 3. Confirm both devices use exactly the same base URL and account
@@ -319,15 +204,9 @@ in-memory entries, so copy it promptly if you need to report a problem. Choose *
 
 ### A Notebook Is Missing an Image or Background
 
-**Problem**: A synced notebook opens, but an image or page background is blank on another device.
+Missing media does not fail the whole notebook sync and is not fetched automatically if it appears
+later.
 
-**Why**: If a remote image or background 404s, Notable logs it, keeps downloading the rest of the
-notebook, and still marks the notebook synced — the missing item just appears blank and is not
-automatically fetched later even if it later appears on the server. The same leniency applies in the
-other direction: a locally referenced media file that can't be found is logged but doesn't stop an
-upload, so the rest of the notebook isn't held hostage by one missing file.
-
-**Solutions**:
 1. On the device that still has the file, open the affected notebook, make a small edit, and sync —
    this re-uploads the media
 2. Linked external PDFs are intentionally not copied by design — make the same file available
@@ -335,29 +214,17 @@ upload, so the rest of the notebook isn't held hostage by one missing file.
 
 ### Very Slow Sync
 
-**Problem**: Sync takes a long time to complete.
+The first sync transfers every page and media file. Later runs transfer only changed pages, although
+large images and pages still take time.
 
-**Why**: The first sync uploads every page and media file. Later syncs are incremental — they use
-ETags to skip unchanged manifests, and both upload and download move **only the pages that actually
-changed**, so editing one page of a large notebook transfers just that page rather than the whole
-book. A changed notebook still performs existence checks for its media and lists remote directories
-for cleanup. Large page and media transfers are buffered in memory, so very large individual notes or
-files can still use substantial memory.
-
-**Solutions**:
-1. This is normal for the first sync with many notebooks — subsequent syncs are faster
+1. Wait for the first sync to finish; later runs should be faster
 2. Check your internet connection speed
 3. Consider reducing auto-sync frequency
-4. Expect larger images or backgrounds to take longer
 
 ### A Deletion Reappears
 
-**Problem**: A notebook you deleted comes back after syncing.
-
 Run a normal full sync on the device that deleted the notebook, before its deletion tombstone ages
-out (90 days). Folder deletions specifically are not propagated reliably and can reappear by design
-of the current folder merge, even though notebooks inside a reappeared folder aren't deleted along
-with it.
+out after 90 days. Folder deletions are not propagated reliably and may reappear.
 
 ### Safe Recovery Order
 
@@ -369,80 +236,29 @@ When something looks wrong and you're not sure which side to trust:
 4. Try an ordinary **Sync Now**
 5. Only use a replacement operation once you're certain which side is authoritative
 
-## Data Format
+## Privacy and Security
 
-Notable stores your data on the WebDAV server in the following structure:
-
-```
-/notable/
-├── folders.json             # Folder hierarchy
-├── deletions/              # Tracks deleted notebooks (zero-byte files)
-│   └── {notebook-id}
-└── notebooks/
-    ├── {notebook-id-1}/
-    │   ├── manifest.json    # Notebook metadata
-    │   ├── pages/
-    │   │   └── {page-id}.json
-    │   ├── images/
-    │   │   └── {image-file}
-    │   └── backgrounds/
-    │       └── {background-file}
-    └── {notebook-id-2}/
-        └── ...
-```
-
-### Efficient Storage
-
-- **Strokes**: Base64-encoded inside page JSON, using Notable's current binary stroke encoding
-  (format version 2), optionally LZ4-compressed
-- **Images/backgrounds**: stored as plain files
-- **JSON files**: human-readable metadata (notebook manifest and folder hierarchy)
-
-This is a storage encoding, not encryption.
-
-## Privacy & Security
-
-- **Credentials**: your password is encrypted at rest in Notable's local Room database, using an
-  AndroidKeyStore-backed AES-GCM key
-- **Data in transit**: use HTTPS for secure communication — Notable does not enforce it, but strongly
-  recommends it outside a fully trusted network
-- **Data at rest on the server**: notebook data is not end-to-end encrypted by Notable; server-side
-  encryption, retention, backups, and account security depend entirely on your provider
-- **No third-party cloud service**: your data only goes to the WebDAV server you specify
+- Notable encrypts the saved password with an AndroidKeyStore-backed key.
+- Use HTTPS. HTTP exposes credentials and notebook data to the network.
+- Notable does not end-to-end encrypt server data; security, retention, and backups depend on the
+  provider.
+- Data goes only to the WebDAV server you configure.
 
 ## Best Practices
 
-1. **Use HTTPS**: always use `https://` URLs unless you fully trust the network
-2. **Regular syncs**: enable automatic sync, or sync deliberately before switching devices, to avoid
-   discarding edits
-3. **Backup**: keep a separate backup, especially before an Upload All / Download All operation
-4. **Test first**: use Test Connection before enabling sync, but don't treat a pass as a full
-   sync-readiness check
-5. **Monitor logs**: check the Sync Log occasionally, and copy it promptly after a failure — it only
-   keeps 50 entries
-6. **Dedicated folder**: the `/notable` subdirectory Notable creates keeps things organized; don't
-   add it to the URL yourself
+1. Use HTTPS unless you fully trust the network.
+2. Sync before switching devices.
+3. Keep a separate backup, especially before replacement operations.
+4. Check and copy the Sync Log promptly after a failure.
 
 ## Getting Help
-
-If you encounter issues:
 
 1. Check the Sync Log for error details
 2. Verify your WebDAV server is accessible and writable outside of Notable
 3. Try the troubleshooting steps above
-4. Report issues at: https://github.com/Ethran/notable/issues
+4. [Report an issue](https://github.com/Ethran/notable/issues)
 
 ## Technical Details
 
-For developers interested in how sync works internally, see
-[WebDAV Sync Technical Documentation](webdav-sync-technical.md) — architecture, sync protocol, data
-formats, and conflict resolution.
-
----
-
-**Version**: 3.0
-**Last Updated**: 2026-08-08 — documented the conflict-resolution flow: automatic merging of edits to
-different pages, the **Conflict** badge and the tap-to-resolve dialog (Keep mine / Use server / Skip),
-whole-notebook resolution for structural conflicts, and the refusal to resolve in upload-only /
-download-only modes. Also updated the "What Gets Synced?" and slow-sync notes to reflect per-page
-(incremental) transfer.
+See [WebDAV Sync — Technical Documentation](webdav-sync-technical.md) for the architecture, protocol,
+data formats, and conflict-resolution design.

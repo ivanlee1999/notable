@@ -1,55 +1,28 @@
-# WebDAV Sync - Technical Documentation
+# WebDAV Sync — Technical Documentation
 
-This document describes the architecture, protocol, data formats, and design decisions of Notable's
-WebDAV synchronization system, as implemented on 2026-08-08. For user-facing setup and usage
-instructions, see [webdav-sync-user.md](webdav-sync-user.md).
+This document describes Notable's WebDAV architecture, protocol, data formats, and design tradeoffs.
+For setup and usage, see the [user guide](webdav-sync-user.md).
 
-It is descriptive, not a claim that the protocol is fully transactional; the gaps it does have are
-called out where they arise, and section 9 collects them.
+## 1. Architecture overview
 
-## Contents
+`SyncOrchestrator` owns the process-wide mutex and normal-flow sequencing. Focused services handle
+preflight checks, folder sync, notebook reconciliation, transfers, and replacement operations.
+`WebDavClientFactoryPort` abstracts client construction, but transfer services still depend on the
+concrete `WebDAVClient` and broad `AppRepository`. This coupling limits executor-level testing.
 
-- [1) Architecture Overview](#1-architecture-overview)
-- [2) Component Overview](#2-component-overview)
-- [3) Sync Protocol](#3-sync-protocol)
-- [4) Data Format Specification](#4-data-format-specification)
-- [5) Conflict Resolution](#5-conflict-resolution)
-- [6) Security Model](#6-security-model)
-- [7) Error Handling and Recovery](#7-error-handling-and-recovery)
-- [8) Integration Points](#8-integration-points)
-- [9) Known Limitations and Test Coverage](#9-known-limitations-and-test-coverage)
-
----
-
-## 1) Architecture Overview
-
-The sync architecture is service-oriented: `SyncOrchestrator` owns the process-wide mutex and the
-normal-flow sequencing, while focused services handle preflight checks, folder sync, notebook
-reconciliation/transfer, and the two "replace one side wholesale" force operations. WebDAV client
-construction is abstracted behind `WebDavClientFactoryPort`, but the transfer services still accept
-the concrete `WebDAVClient` and all reach through the broad `AppRepository` — that coupling is the
-main obstacle to executor-level tests today (see [section 9](#9-known-limitations-and-test-coverage)).
-
-Transfer is per page: a notebook uploads and downloads only the pages that actually changed since its
-last committed sync, tracked in a dedicated `page_sync_state` table (see
-[section 5.10](#510-per-notebook-and-per-page-sync-state)). There is still no stroke-level merge — a
-page is the smallest unit that moves.
+Transfer is page-based. The `page_sync_state` table identifies pages changed since the last committed
+sync; a page is the smallest transferable unit.
 
 Reconciliation has two regimes:
 
-- **Clear winner (last-writer-wins).** When one side's `Notebook.updatedAt` is more than one second
-  past the other's, that side wins wholesale — the ordinary case for one device editing at a time.
+- **Clear winner.** When one `Notebook.updatedAt` is more than one second later, that side wins.
 - **Concurrent edits.** When the timestamps tie within tolerance but the manifest ETag differs, the
-  engine cannot assume the pages match. It separates *independent* edits (different pages changed on
-  each side) from a *genuine conflict* (the same page edited on both sides, or the manifests diverge
-  structurally). Independent edits are **merged losslessly** — pull the remotely-changed pages, push
-  the locally-changed ones. A genuine conflict is **not** auto-resolved: the notebook is flagged with
-  a CONFLICT badge and the user resolves it per page (or whole-notebook for a structural clash). This
-  is the `ASK` conflict strategy — the only one implemented; see [section 5](#5-conflict-resolution).
+  engine distinguishes independent page edits from same-page or structural conflicts. Independent
+  edits merge; conflicts receive a `CONFLICT` badge and require user resolution. `ASK` is the only
+  implemented conflict strategy.
 
-**There are commit points, but no atomic notebook snapshot.** Ordering is deliberate — pages are
-written before the manifest on upload, and pages are replaced before the notebook row commits on
-download — but that ordering does not close every gap:
+The protocol has commit points but no atomic notebook snapshot. Pages precede the manifest on upload;
+page replacements precede the notebook-row commit on download. This leaves several gaps:
 
 - upload writes live page files before publishing `manifest.json`; if a page id is unchanged, an
   interrupted update can expose new page content through an *old* manifest;
@@ -58,12 +31,7 @@ download — but that ordering does not close every gap:
   already be visible locally in the meantime;
 - media 404s and missing local media are deliberately treated as non-fatal, so a notebook can commit
   while still referring to a missing image or background.
-
-Keep these distinctions in mind before treating the transfer protocol as stronger than it is.
-
----
-
-## 2) Component Overview
+## 2. Components
 
 All sync code lives in `com.ethran.notable.sync`.
 
@@ -125,11 +93,9 @@ SyncProgressReporter → settings progress UI and notebook badges
 | [`ConnectivityChecker.kt`](../app/src/main/java/com/ethran/notable/sync/ConnectivityChecker.kt) | Queries Android `ConnectivityManager` for network/Wi-Fi availability. |
 | [`SyncLogger.kt`](../app/src/main/java/com/ethran/notable/sync/SyncLogger.kt) | Maintains a ring buffer of the last 50 log entries, exposed as a `StateFlow`, for the sync UI. |
 
----
+## 3. Sync protocol
 
-## 3) Sync Protocol
-
-### 3.1 Full Sync Flow (`syncAllNotebooks`)
+### 3.1 Full sync flow (`syncAllNotebooks`)
 
 `SyncOrchestrator.syncAllNotebooks()` uses `tryLock()` on the companion-object `Mutex`. If it cannot
 acquire the lock, it returns `SyncInProgress` rather than queueing behind the running sync.
@@ -193,7 +159,7 @@ acquire the lock, it returns `SyncInProgress` rather than queueing behind the ru
        sync, deletion work, or force operations)
 ```
 
-### 3.2 Per-Notebook Upload
+### 3.2 Per-notebook upload
 
 1. Ensure the `pages`, `images`, and `backgrounds` collections exist.
 2. Upload only the **dirty** pages — the ones `PageSyncSelector` reports changed since their
@@ -218,7 +184,7 @@ acquire the lock, it returns `SyncInProgress` rather than queueing behind the ru
 The code does not verify that every id in `Notebook.pageIds` was actually returned from Room, so a
 missing local page can leave a manifest reference with no uploaded page file.
 
-### 3.3 Per-Notebook Download
+### 3.3 Per-notebook download
 
 1. GET and deserialize `manifest.json`, retaining its ETag.
 2. If the notebook is new locally, insert it with `updatedAt = Date(0)` — a sentinel that guarantees
@@ -237,7 +203,7 @@ A media 404 is logged and dropped — it does not block the notebook commit. Oth
 Corrupt individual stroke/image DTOs are skipped by the serializer rather than failing the whole
 page.
 
-### 3.4 Single-Notebook Sync and Targeted Deletion
+### 3.4 Single-notebook sync and targeted deletion
 
 Sync-on-close and check-on-open run in-process (application `CoroutineScope`), not through
 WorkManager. Sync-on-close reuses the same timestamp-comparison logic as step 4 above but on a single
@@ -246,7 +212,7 @@ success rather than racing it. Check-on-open is a read-only conditional manifest
 takes the mutex and treats every error/ambiguity as "not newer." Targeted notebook deletion routes
 through WorkManager but does not take the orchestrator's mutex either.
 
-### 3.5 Triggers, Cancellation, and Snacks
+### 3.5 Triggers, cancellation, and UI notifications
 
 | Trigger | Execution path | Scope | Notes |
 |---|---|---|---|
@@ -264,11 +230,9 @@ app session; `MainActivity` recreates it on a later app start, but it is not imm
 Cancel itself. Blocking OkHttp calls may not stop the instant Cancel is pressed, since coroutine
 cancellation is not guaranteed to interrupt an in-flight synchronous request.
 
----
+## 4. Data format
 
-## 4) Data Format Specification
-
-### 4.1 Server Directory Structure
+### 4.1 Server directory structure
 
 All paths are relative to the user-entered WebDAV base URL. `WebDAVClient` trims the base URL's
 trailing slash and appends the path, percent-encoding each path segment.
@@ -350,40 +314,34 @@ for the remote image path and rewrites downloaded image records to local absolut
 `parentFolderId` references another folder's `id` for nesting, or `null` for root-level folders. The
 merge does not use `serverTimestamp` — only each folder's own `updatedAt`.
 
-### 4.5 Tombstone Files (`deletions/{uuid}`)
+### 4.5 Tombstone files (`deletions/{uuid}`)
 
 Each deleted notebook has a zero-byte file at `/notable/deletions/{notebook-uuid}`. It has no
 content; the server's own `lastModified` timestamp on the file provides the deletion time used for
 conflict resolution (section 5.7). Independent per-notebook tombstone files mean two devices can each
 write a deletion without racing over a shared file the way a single `deletions.json` would.
 
-### 4.6 JSON Configuration
+### 4.6 JSON configuration
 
 All serializers use `kotlinx.serialization` with `ignoreUnknownKeys = true` for forward compatibility.
 Manifest and folder JSON are pretty-printed; streamed page JSON is compact to keep upload memory
 bounded.
 
----
+## 5. Conflict resolution
 
-## 5) Conflict Resolution
+### 5.1 Last-writer-wins and concurrent reconciliation
 
-### 5.1 Two Regimes: Last-Writer-Wins and Concurrent-Edit Reconciliation
+There is no CRDT or operational transform. The system handles divergence in two ways:
 
-There is no CRDT and no operational transform. The design assumes one or two devices that rarely edit
-the *same* notebook at the same time, and it resolves the two situations differently:
-
-- **A clear winner** — one side's notebook `updatedAt` is more than a second past the other's — is
-  **last-writer-wins**: the newer whole-notebook version is uploaded or downloaded outright (5.2).
-- **A tie the ETag contradicts** — timestamps within tolerance but the manifest changed — is **not**
-  assumed equal. The engine reconciles page by page (5.3): independent edits merge losslessly, and a
-  genuine same-page or structural clash is **flagged for the user** rather than auto-resolved. This is
-  the `ASK` conflict strategy (5.4); the automatic `SERVER_WINS` / `LOCAL_WINS` strategies are
-  declared but not yet implemented.
+- **Clear timestamp winner:** upload or download the newer notebook (5.2).
+- **Tied timestamps with a changed ETag:** reconcile pages, merging independent edits and flagging
+  same-page or structural conflicts (5.3). `ASK` is implemented; `SERVER_WINS` and `LOCAL_WINS`
+  remain placeholders for future automatic resolution.
 
 The unit that flags, badges, and resolves is the notebook; the unit that actually transfers is the
 page.
 
-### 5.2 Timestamp Comparison
+### 5.2 Timestamp comparison
 
 When both local and remote versions of a notebook exist:
 
@@ -398,29 +356,24 @@ if |diffMs| <= 1000ms → within tolerance → the ETag decides (see 5.3)
 Within tolerance, an unchanged manifest ETag means the sides already agree (skip); a *changed* ETag
 means concurrent edits that the tie cannot prove equal, so the planner returns `Reconcile`.
 
-### 5.3 Concurrent Edits: Independent Merge vs. Genuine Conflict
+### 5.3 Concurrent edits: independent merge vs. genuine conflict
 
-`Reconcile` is handled by `NotebookReconciliationService.reconcileConcurrentEdits`, which first
-classifies the divergence:
+`NotebookReconciliationService.reconcileConcurrentEdits` classifies the divergence:
 
 - **Independent edits** — the manifests match structurally and no single page was touched on both
-  sides. These are merged losslessly: pull every remotely-changed page, then push any page that is
-  only locally changed. The republish is skipped when nothing is locally dirty, so two already-
-  converged devices don't ping-pong the manifest ETag.
+  sides. Pull remote changes, then push local-only changes. Skip publication when nothing remains
+  locally dirty, preventing manifest ETag ping-pong.
 - **Genuine conflict** — either a *page conflict* (the same page edited locally **and** remotely since
   the last common sync) or a *structural conflict* (the manifests disagree on page set, order, title,
-  parent folder, or defaults). These cannot be merged mechanically. The engine writes **nothing**: it
-  marks the notebook `CONFLICT` and leaves both copies intact for the user. Skipping the merge is the
-  point — a locally added / reordered / renamed manifest is never silently overwritten by the download.
+  parent folder, or defaults). Mark the notebook `CONFLICT` and leave both copies unchanged.
 
 Conflicts are only *detected* in two-way sync, because that's the only mode that produces a
 `Reconcile` (see 5.9).
 
-### 5.4 The ASK Conflict Model
+### 5.4 The `ASK` conflict model
 
-Under `ASK` — the only implemented strategy — a flagged notebook waits for an explicit user choice,
-surfaced by a resolution UI that reads the conflict picture through
-`SyncOrchestrator.notebookConflict` (read-only, holds no mutex):
+Under `ASK`, the resolution UI reads conflict details through the read-only
+`SyncOrchestrator.notebookConflict` call:
 
 - **Page conflicts** are resolved one page at a time via `PageConflictResolution`:
   - `REPLACE_WITH_SERVER` — take the server's copy of that page;
@@ -432,43 +385,33 @@ surfaced by a resolution UI that reads the conflict picture through
 
 The `CONFLICT` badge clears once the last conflict is resolved and its transfer commits.
 
-### 5.5 Applying a Resolution (rebaseline-then-reconcile)
+### 5.5 Applying a resolution
 
-A resolution does **not** move the resolved page's bytes directly. It is applied in two phases so that
-all byte-moving and commit logic stays in the one reconcile path rather than being duplicated:
+A resolution reuses the normal transfer path in two phases:
 
-1. **Rebaseline (no transfer).** The chosen resolution is expressed by rewriting the page's (or
-   notebook's) `*_sync_state` row so the page reads, to the next reconcile, as an ordinary non-conflict:
+1. **Rebaseline.** Rewrite the page or notebook sync-state row so reconciliation sees a normal change:
    - `REPLACE_WITH_SERVER` drops the stored page ETag and lifts the change anchor to the local page's
-     own timestamp → the row reads "remote differs, I'm not locally dirty" → a plain download.
+     own timestamp, causing a download.
    - `UPLOAD_DB` adopts the server's *current* page ETag as the base while leaving local content dirty
-     → "not a remote change, but locally dirty" → a plain upload that cleanly overwrites the server.
+     so the locally dirty page uploads against the latest server version.
    - `KEEP_LOCAL` re-anchors the manifest and every page row to the server's current ETags **without**
      advancing the change anchor → the still-newer local copy uploads next, guarded by up-to-date
-     ETags so it wins instead of 412-ing. (`TAKE_SERVER` just downloads inline — it needs no phase 2.)
-2. **Transfer.** `SyncOrchestrator.runResolutionTransfer` then runs a normal *whole-notebook*
-   reconcile. Because phase 1 disguised the resolved page as a routine upload/download, the general
-   engine moves it as part of syncing the notebook.
+     ETags. The newer local notebook then uploads instead of receiving a 412. `TAKE_SERVER` downloads
+     immediately and needs no second phase.
+2. **Transfer.** `SyncOrchestrator.runResolutionTransfer` runs normal whole-notebook reconciliation.
 
-This is deliberately indirect — "keep server" appears in the code as `remoteEtag = null`, not as a
-page download, and resolving one page re-plans the whole notebook. The trade buys a single
-byte-moving path (no second copy of upload/download/commit that could drift). Both phases run while
-*holding* the sync mutex (waiting for it, not skip-if-busy), so a concurrent sync can neither observe
-them half-done nor drop the user's choice. If phase 2 fails, the rebaselined row is left as a pending
-state the next sync completes.
+Both phases hold the sync mutex. If transfer fails, the rebaselined state remains pending for the
+next sync. Resolving one page therefore re-plans the whole notebook without duplicating transfer and
+commit logic.
 
-### 5.6 Conflicts and One-Directional Sync
+### 5.6 Conflicts and one-directional sync
 
-Resolving a conflict has to move a version in whichever direction the choice needs — `KEEP_LOCAL`
-uploads, `TAKE_SERVER` downloads — so it cannot be honored under upload-only or download-only sync
-without either violating the mode or silently dropping the choice. `SyncOrchestrator.resolutionPreflight`
-therefore **refuses** a resolution outright in a one-directional mode, returning
-`DomainError.SyncDirectionalConflict`; the notebook keeps its `CONFLICT` badge and the user resolves it
-after switching back to two-way sync. (Conflicts also only *arise* in two-way mode — a directional mode
-degrades `Reconcile` to a one-way skip/download and never flags — so this guard matters only when a
-notebook flagged in two-way mode is then viewed after switching modes.)
+Resolution may need either upload or download, so `SyncOrchestrator.resolutionPreflight` rejects it in
+a one-directional mode with `SyncDirectionalConflict`. The `CONFLICT` badge remains until the user
+returns to two-way sync. Directional sync does not create new conflicts because it never executes a
+live `Reconcile` action.
 
-### 5.7 Deletion vs. Edit Conflicts (Resurrection)
+### 5.7 Deletion vs. edit conflicts (resurrection)
 
 Notebook deletions use zero-byte tombstone files rather than a shared deletions list. When applying a
 remote tombstone: if the local notebook's `updatedAt` is **after** the tombstone's `lastModified`,
@@ -477,7 +420,7 @@ from the server on that notebook's next successful upload. Otherwise the local n
 and its `notebook_sync_state` row is dropped. This favors not losing a post-deletion edit over a
 deletion always sticking.
 
-### 5.8 Folder Merge
+### 5.8 Folder merge
 
 Folders use a simpler per-folder last-writer-wins merge: all remote folders load into a map, and a
 local folder replaces its remote counterpart only when its `updatedAt` is later. There is no folder
@@ -485,7 +428,7 @@ tombstone, so an absent folder is indistinguishable from a new remote folder and
 being deleted on one device and synced from another — notebooks inside it are not deleted merely
 because the folder reappears.
 
-### 5.9 Reconciliation Decision (`NotebookSyncPlanner`)
+### 5.9 Reconciliation decision (`NotebookSyncPlanner`)
 
 `NotebookSyncPlanner.decide(...)` is a pure, unit-tested function that takes the local `updatedAt`,
 the stored sync-state anchor, and the remote manifest facts, and returns one of `Upload`, `Download`,
@@ -504,7 +447,7 @@ Because a one-directional mode never yields a live `Reconcile`, conflicts are on
 sync. `NotebookReconciliationService` does the I/O and executes the decision. Upload-only and
 download-only are mutually exclusive in the settings UI.
 
-### 5.10 Per-Notebook and Per-Page Sync State
+### 5.10 Per-notebook and per-page sync state
 
 Two Room tables (keyed by id, **no** foreign key to `Notebook`/`Page` — the rows must outlive local
 deletion) are the source of truth for sync bookkeeping.
@@ -544,7 +487,7 @@ never checks remote state itself — outside an active sync, badges describe loc
 last recorded commit, not guaranteed present-day server equality. The first sync after an upgrade that
 introduced these tables simply repopulates them; there is no migration path from a predecessor.
 
-### 5.11 Media Handling
+### 5.11 Media handling
 
 Media (images and page backgrounds) is transferred alongside pages, but with rules that keep one
 missing or unsyncable file from wedging a whole notebook:
@@ -559,37 +502,15 @@ A notebook that committed with a media 404 is **not** automatically re-fetched i
 appears on the server; a force download or a local edit that re-triggers an upload/download is the
 current recovery path.
 
-### 5.12 Known Limitations
+## 6. Security
 
-- There is no sub-page merge: a genuine same-page conflict is resolved by taking one whole page
-  version (server or local), never by combining strokes. Independent *different-page* edits do merge
-  losslessly (5.3).
-- Only the `ASK` conflict strategy is implemented. `SERVER_WINS` / `LOCAL_WINS` are declared and
-  persisted in settings but the engine ignores the value and always flags (see `SyncConflictStrategy`).
-- A conflict cannot be resolved while sync is restricted to one direction; the badge persists until
-  the user switches back to two-way sync (5.6).
-- Folder deletion is not propagated across devices at all (see section 5.8).
-- Concurrent updates can surface as `SyncConflict` (HTTP 412) on `folders.json` or `manifest.json`,
-  since both are protected by `If-Match` — **but only where the server issues a strong ETag.** A
-  weak validator (`W/"…"`) cannot legally guard a state-changing request, so `ETag.writeGuard`
-  drops it and the write goes out unprotected; against such a server the protocol degrades to
-  last-writer-wins end to end, with no 412 to warn anyone. The sync log says so once per notebook;
-  the badge still reads SYNCED, because the condition is a property of the server and there is
-  nothing the user can do about it.
-- Conflict resolution depends on reasonably synchronized device clocks; see clock skew detection in
-  [section 3.1](#31-full-sync-flow-syncallnotebooks).
-
----
-
-## 6) Security Model
-
-### 6.1 Credential Storage
+### 6.1 Credential storage
 
 Credentials are persisted via the app's key-value Room table (`kv`, through `KvProxy`). The password
 is encrypted using an AES-GCM key stored in AndroidKeyStore; on read, a decryption failure returns
 settings with a blank password rather than throwing.
 
-### 6.2 Transport Security
+### 6.2 Transport security
 
 HTTPS is recommended but not enforced — HTTP base URLs are accepted, since some users run WebDAV on a
 trusted local network. TLS uses OkHttp/system certificate validation; there is no custom CA or
@@ -600,16 +521,14 @@ certificate-pinning UI.
 `SyncLogger` keeps a memory-only ring buffer of the last 50 entries, exposed as a `StateFlow` for the
 UI. It omits credentials and is not a durable audit log.
 
-### 6.4 Server-Side Data
+### 6.4 Server-side data
 
 Notebook data on the WebDAV server is **not** end-to-end encrypted by Notable. Server-side encryption,
 retention, backups, and account security depend entirely on the provider.
 
----
+## 7. Error handling and recovery
 
-## 7) Error Handling and Recovery
-
-### 7.1 Error Types
+### 7.1 Error types
 
 HTTP calls return `AppResult<…, DomainError>`. The variants relevant to sync:
 
@@ -629,14 +548,14 @@ Multiple per-notebook errors are aggregated into `MultipleErrors`, which current
 `recoverable = true` regardless of its children — so an aggregate of otherwise-permanent errors can
 still cause a retry of the entire full sync.
 
-### 7.2 Concurrency Control
+### 7.2 Concurrency control
 
 The orchestrator's mutex covers full sync, single-notebook sync, and force operations. It does not
 cover check-on-open or targeted notebook deletion (section 3.4). There is no cross-device locking —
 WebDAV provides no atomic multi-file transaction, which is why the ordering guarantees in
 [section 1](#1-architecture-overview) matter.
 
-### 7.3 Retry Strategy (`SyncWorker`)
+### 7.3 Retry strategy (`SyncWorker`)
 
 - Network unavailable (pre-check): retried immediately through WorkManager.
 - `NetworkError` during sync: retried up to 3 worker attempts, then failed.
@@ -647,15 +566,13 @@ WebDAV provides no atomic multi-file transaction, which is why the ordering guar
   failure — a manual Sync Now can legitimately collide with a running periodic sync.
 - The worker also has a broad `catch (Exception)`, which includes cancellation exceptions.
 
-### 7.4 WebDAV Idempotency
+### 7.4 WebDAV idempotency
 
 `MKCOL` returning 405 is treated as success — per RFC 4918 that means the collection already exists
 (only accepted on `MKCOL`; a 405 on any other operation is an error). `DELETE` returning 404 is
 treated as success — the resource is already gone. Both are therefore safe to retry.
 
----
-
-## 8) Integration Points
+## 8. Integrations
 
 | Dependency | Purpose |
 |---|---|
@@ -664,10 +581,15 @@ treated as success — the resource is already gone. Both are therefore safe to 
 | `org.jetbrains.kotlinx:kotlinx-serialization-json` | JSON serialization/deserialization for manifests, folders, and pages. |
 | `androidx.work:work-runtime-ktx` | Background sync scheduling (one-time and periodic). |
 
----
+## 9. Limitations and test coverage
 
-## 9) Known Limitations and Test Coverage
-
+- Same-page conflicts require choosing one whole page; there is no stroke-level merge.
+- `SERVER_WINS` and `LOCAL_WINS` remain persisted placeholders. The engine always uses `ASK`.
+- Conflict resolution requires two-way sync, and folder deletions do not propagate.
+- Weak ETags cannot guard writes. When a server supplies them, `ETag.writeGuard` drops the
+  precondition and conflict handling degrades to last-writer-wins.
+- Conflict resolution relies on synchronized device clocks; normal preflight rejects skew over 30
+  seconds.
 - `WebDavClientFactoryPort` abstracts client construction only. Transfer services still accept the
   concrete `WebDAVClient`, and all of them reach through the broad `AppRepository` — the main
   obstacle to executor-level tests today.
@@ -677,13 +599,3 @@ treated as success — the resource is already gone. Both are therefore safe to 
   `FolderSyncService`, `SyncForceService`, scheduler cancellation, trigger integration, or remote JSON
   identity/path validation. The seam these need is a narrow transfer port in place of the concrete
   `WebDAVClient` and the broad `AppRepository`.
-
----
-
-**Version:** 3.0
-**Last updated:** 2026-08-08 — documented the per-page transfer model (`page_sync_state`,
-`PageSyncSelector`) and the `ASK` conflict-resolution system: concurrent-edit reconciliation,
-page/structural conflicts and the `CONFLICT` badge, the rebaseline-then-reconcile resolution
-mechanism, refusal of resolution in one-directional modes (`SyncDirectionalConflict`), the added
-`Reconcile` planner action, and `openPageId` no longer being serialized. Section 5 was expanded and
-renumbered accordingly.
