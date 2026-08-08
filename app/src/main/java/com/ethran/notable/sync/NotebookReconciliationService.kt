@@ -54,7 +54,10 @@ class NotebookReconciliationService @Inject constructor(
                 bulkEnabled = bulkEnabled,
                 currentServerKey = currentServerKey,
                 listingEtag = dirEtags[notebook.id],
-            ).onError { errors.add(it) }
+            ).onError {
+                log.w(TAG, "✗ ${notebook.title} failed: ${it.userMessage}")
+                errors.add(it)
+            }
         }
         reporter.endItem()
 

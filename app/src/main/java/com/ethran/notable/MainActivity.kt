@@ -129,8 +129,9 @@ class MainActivity : ComponentActivity() {
                     val message = event.errorArg?.let { arg ->
                         getString(event.messageResId, arg)
                     } ?: getString(event.messageResId)
+                    // A failure message is longer and more important, so give it time to be read.
                     snackDispatcher.showOrUpdateSnack(
-                        SnackConf(text = message, duration = 3000)
+                        SnackConf(text = message, duration = if (event.isError) 7000 else 3000)
                     )
                 }
             }

@@ -58,6 +58,11 @@ class SyncOrchestrator @Inject constructor(
             val uploadOnly = settings.uploadOnly
             val downloadOnly = settings.downloadOnly
             var nonCriticalError: DomainError? = null
+            log.i(
+                TAG,
+                "Mode: ${if (uploadOnly) "upload-only" else if (downloadOnly) "download-only" else "two-way"}" +
+                    ", fastSync=${settings.fastSyncEnabled}, wifiOnly=${settings.wifiOnly}"
+            )
 
             if (!settings.syncEnabled) {
                 return@withContext failStep(DomainError.SyncConfigError)
@@ -112,6 +117,18 @@ class SyncOrchestrator @Inject constructor(
             val bulkEnabled = settings.fastSyncEnabled && capabilities?.let {
                 it.serverKey == currentServerKey && it.collectionEtagPropagates
             } == true
+            log.i(
+                TAG,
+                "Bulk change detection: " + when {
+                    !settings.fastSyncEnabled -> "off (fast sync disabled)"
+                    capabilities == null -> "off (no stored capability — run Test Connection)"
+                    capabilities.serverKey != currentServerKey ->
+                        "off (capability is for a different server URL/username)"
+                    !capabilities.collectionEtagPropagates ->
+                        "off (server does not propagate collection ETags)"
+                    else -> "on"
+                }
+            )
 
             reporter.beginStep(
                 SyncStep.SYNCING_FOLDERS,
@@ -209,6 +226,13 @@ class SyncOrchestrator @Inject constructor(
                 downloadedCount,
                 deletedCount,
                 System.currentTimeMillis() - startTime
+            )
+            log.i(
+                TAG,
+                "Full sync finished in ${summary.duration} ms: " +
+                    "${summary.notebooksDownloaded} downloaded, ${summary.notebooksDeleted} deleted, " +
+                    "${preDownloadIds.size} local notebook(s)" +
+                    (nonCriticalError?.let { " — with error: ${it.userMessage}" } ?: "")
             )
             finalizeSyncResult(reporter, summary, nonCriticalError).onSuccess {
                 // Persist the last successful full-sync time so the settings "Last synced" line
@@ -527,6 +551,8 @@ class SyncOrchestrator @Inject constructor(
 
     /** Report [error] as the terminal state of the current sync and return it as a failure. */
     private fun failStep(error: DomainError): AppResult<Unit, DomainError> {
+        val step = (reporter.state.value as? SyncState.Syncing)?.currentStep ?: SyncStep.INITIALIZING
+        log.w(TAG, "Sync aborted during $step: ${error.userMessage}")
         reporter.finishError(error, false)
         return AppResult.Error(error)
     }
