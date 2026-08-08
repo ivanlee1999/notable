@@ -116,6 +116,6 @@ fun ETag?.writeGuard(): WriteGuard = when {
 
 /** Human-readable reason for the sync log, phrased as what it costs. */
 fun WriteGuard.Unguarded.explain(): String = when (reason) {
-    WriteGuard.Reason.NoStoredTag -> "server issued no ETag"
+    WriteGuard.Reason.NoStoredTag -> "no stored ETag to guard against"
     WriteGuard.Reason.WeakTag -> "server's ETag is weak (W/)"
 }

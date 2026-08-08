@@ -146,7 +146,9 @@ internal data class ProbeObservations(
  * have moved across **all four** of overwrite → MOVE → deep-create → deep-overwrite; any step that
  * didn't move (or that the server withheld an ETag for) fails it, because a server that propagates
  * some changes but not others is the dangerous case. `movePreservesEtag` requires the MOVE to have
- * succeeded and the destination to carry the tmp file's validator.
+ * succeeded and the destination to carry the tmp file's exact validator. Weak comparison is not
+ * sufficient here: reusing a strong tmp ETag when the destination exposes the same opaque value as
+ * weak would later send an `If-Match` validator that can never strongly match.
  */
 internal fun evaluate(serverKey: String, nowMs: Long, obs: ProbeObservations): ServerCapabilities {
     fun moved(a: ETag?, b: ETag?): Boolean = a != null && b != null && !a.matches(b)
@@ -160,7 +162,8 @@ internal fun evaluate(serverKey: String, nowMs: Long, obs: ProbeObservations): S
         serverKey = serverKey,
         probedAt = nowMs,
         collectionEtagPropagates = propagates,
-        movePreservesEtag = obs.moveOk && obs.destEtagAfterMove.matches(obs.tmpEtag),
+        movePreservesEtag = obs.moveOk && obs.tmpEtag != null &&
+            obs.destEtagAfterMove?.raw == obs.tmpEtag.raw,
         issuesEtagOnPut = obs.putEtag != null,
         issuesStrongEtags = obs.putEtag != null && !obs.putEtag.isWeak,
     )

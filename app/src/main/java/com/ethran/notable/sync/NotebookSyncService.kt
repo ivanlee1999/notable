@@ -3,6 +3,7 @@ package com.ethran.notable.sync
 import android.content.Context
 import android.net.Uri
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageSyncState
@@ -20,6 +21,7 @@ import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import com.ethran.notable.utils.onSuccess
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.security.MessageDigest
 import java.util.Date
@@ -27,10 +29,46 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Below this many deletions the mass-deletion guard never trips, so ordinary single/few deletes
+ * always propagate. See [looksLikeStaleStateWipe].
+ */
+internal const val MASS_DELETION_SAFETY_FLOOR = 10
+
+/**
+ * Whether deleting [deletionCount] notebooks out of a reference set of [referenceCount] is better
+ * explained by lost local state than by an intentional bulk delete — at least
+ * [MASS_DELETION_SAFETY_FLOOR] notebooks AND a strict majority of the reference set. Callers refuse
+ * the deletion when this holds, so a device whose local rows were wiped while sync-state survived
+ * cannot tombstone the whole server. Pure, so the guard is unit-testable independently of any I/O.
+ *
+ * [referenceCount] is what the deletions are measured against: all synced notebooks when detecting
+ * local deletions, or the full server set when force upload prunes server-only notebooks.
+ */
+internal fun looksLikeStaleStateWipe(deletionCount: Int, referenceCount: Int): Boolean =
+    deletionCount >= MASS_DELETION_SAFETY_FLOOR && deletionCount > referenceCount / 2
+
+/**
+ * Select remote notebooks that are absent locally and may be downloaded. A sync-state row suppresses
+ * the download only when local deletion is authoritative; download-only devices are mirrors, so a
+ * missing local notebook must be restored even when stale sync bookkeeping still exists for it.
+ */
+internal fun selectNewRemoteNotebookIds(
+    remoteNotebookIds: Set<String>,
+    localNotebookIds: Set<String>,
+    tombstonedIds: Set<String>,
+    syncedNotebookIds: Set<String>,
+    downloadOnly: Boolean,
+): List<String> = remoteNotebookIds
+    .filter { it !in localNotebookIds }
+    .filter { it !in tombstonedIds }
+    .filter { downloadOnly || it !in syncedNotebookIds }
+
 @Singleton
 class NotebookSyncService @Inject constructor(
     private val appRepository: AppRepository,
     private val reporter: SyncProgressReporter,
+    private val kvProxy: KvProxy,
     @param:ApplicationContext private val context: Context
 ) {
     private val log = SyncLogger
@@ -56,10 +94,23 @@ class NotebookSyncService @Inject constructor(
                     val deletedAt = tombstone.lastModified
                     val localNotebook = appRepository.bookRepository.getById(notebookId) ?: continue
 
-                    if (deletedAt != null && localNotebook.updatedAt.after(deletedAt)) {
+                    if (deletedAt != null) {
+                        // Dated tombstone: keep the local copy if it was edited after the deletion.
+                        if (localNotebook.updatedAt.after(deletedAt)) {
+                            log.i(
+                                TAG,
+                                "↻ Resurrecting '${localNotebook.title}' (modified after server deletion)"
+                            )
+                            continue
+                        }
+                    } else if (hasUnsyncedLocalEdits(notebookId, localNotebook)) {
+                        // Undated tombstone (server omitted Last-Modified): we cannot prove the local
+                        // copy predates the deletion, so deleting it could drop work edited after
+                        // another device removed the notebook. Only delete a clean copy; keep one with
+                        // unsynced edits until a dated tombstone arrives or the user resolves it.
                         log.i(
                             TAG,
-                            "↻ Resurrecting '${localNotebook.title}' (modified after server deletion)"
+                            "↻ Keeping '${localNotebook.title}': undated tombstone but local has unsynced edits"
                         )
                         continue
                     }
@@ -97,6 +148,18 @@ class NotebookSyncService @Inject constructor(
 
             errors.asResult(tombstonedIds)
         }
+    }
+
+    /**
+     * Whether [notebook] carries local edits not yet committed to the server: its current `updatedAt`
+     * is meaningfully newer than the anchor recorded at its last sync. A missing sync-state row counts
+     * as unsynced — with no proof the local copy was ever pushed, an undated tombstone must not delete
+     * a notebook whose provenance we cannot establish.
+     */
+    private suspend fun hasUnsyncedLocalEdits(notebookId: String, notebook: Notebook): Boolean {
+        val syncRow = appRepository.notebookSyncStateRepository.get(notebookId) ?: return true
+        return notebook.updatedAt.time - syncRow.syncedLocalUpdatedAt.time >
+            NotebookSyncPlanner.TOLERANCE_MS
     }
 
     /**
@@ -145,6 +208,19 @@ class NotebookSyncService @Inject constructor(
         val deletedLocally = syncedIds - preDownloadNotebookIds
         val errors = ErrorAccumulator()
 
+        // Safety guard: distinguish a real bulk delete from a stale-state divergence. If the local
+        // notebook rows were lost while their sync-state rows survived (a partial DB reset, or rows
+        // accumulated in download-only mode where deletions are never tombstoned), this set would
+        // otherwise DELETE every one of them from the server -- for all devices. A genuine delete of
+        // most of what we ever synced is rare; a wipe is unrecoverable, so refuse and surface it.
+        if (looksLikeStaleStateWipe(deletedLocally.size, syncedIds.size)) {
+            val message = "Refusing to delete ${deletedLocally.size} of ${syncedIds.size} notebooks " +
+                "from the server: the local copies look missing, not intentionally deleted. Use " +
+                "\"Download all\" to restore them before syncing deletions."
+            log.e(TAG, message)
+            return AppResult.Error(DomainError.SyncError(message, recoverable = false))
+        }
+
         if (deletedLocally.isNotEmpty()) {
             log.i(TAG, "Detected ${deletedLocally.size} local deletion(s)")
             for (notebookId in deletedLocally) {
@@ -178,17 +254,36 @@ class NotebookSyncService @Inject constructor(
         client: WebDAVClient,
         tombstonedIds: Set<String>,
         preDownloadNotebookIds: Set<String>,
-        remoteNotebookIds: Set<String>
+        remoteNotebookIds: Set<String>,
+        downloadOnly: Boolean = false,
+        bulkEnabled: Boolean = false,
+        currentServerKey: String? = null,
+        dirEtags: Map<String, ETag?> = emptyMap(),
     ): AppResult<Int, DomainError> {
         log.i(TAG, "Checking server for new notebooks...")
-        // Notebooks we previously synced but are no longer local were deleted here; don't
-        // re-download them (they get tombstoned by detectAndUploadLocalDeletions instead).
+        // In two-way/upload mode a remote notebook we previously synced but no longer hold locally
+        // was DELETED here, so it must not be re-downloaded -- detectAndUploadLocalDeletions
+        // tombstones it instead. In download-only mode local deletions are NOT authoritative (the
+        // device mirrors the server and never tombstones), so a synced-but-locally-absent notebook
+        // is a copy we lost, not a deletion: it must be re-downloaded. Applying the `synced` filter
+        // there stranded every notebook whose local row was wiped while its sync-state row survived.
         val syncedIds = appRepository.notebookSyncStateRepository.getAllIds()
         // remoteNotebookIds is the single PROPFIND listing shared with reconciliation.
-        val newNotebookIds = remoteNotebookIds
-            .filter { it !in preDownloadNotebookIds }
-            .filter { it !in tombstonedIds }
-            .filter { it !in syncedIds }
+        val newNotebookIds = selectNewRemoteNotebookIds(
+            remoteNotebookIds = remoteNotebookIds,
+            localNotebookIds = preDownloadNotebookIds,
+            tombstonedIds = tombstonedIds,
+            syncedNotebookIds = syncedIds,
+            downloadOnly = downloadOnly,
+        )
+        // Breakdown so a "0 new" is diagnosable: a short remote listing looks nothing like a full
+        // one whose entries were all filtered out by the local/synced/tombstone sets.
+        log.i(
+            TAG,
+            "New-notebook scan: remote=${remoteNotebookIds.size}, local=${preDownloadNotebookIds.size}, " +
+                "synced=${syncedIds.size} (downloadOnly=$downloadOnly), " +
+                "tombstoned=${tombstonedIds.size} -> ${newNotebookIds.size} new"
+        )
 
         val errors = ErrorAccumulator()
         if (newNotebookIds.isNotEmpty()) {
@@ -196,7 +291,17 @@ class NotebookSyncService @Inject constructor(
             val total = newNotebookIds.size
             newNotebookIds.forEachIndexed { i, notebookId ->
                 reporter.beginItem(index = i + 1, total = total, name = notebookId, id = notebookId)
-                downloadNotebook(notebookId, client).onError { errors.add(it) }
+                downloadNotebook(notebookId, client).onError { errors.add(it) }.onSuccess {
+                    // Establish the directory baseline for a freshly downloaded notebook so the next
+                    // sync's fast path can skip its manifest GET. The listing ETag is the converged
+                    // directory here; a null one just means no baseline yet.
+                    val listingEtag = dirEtags[notebookId]
+                    if (bulkEnabled && currentServerKey != null && listingEtag != null) {
+                        safelyStoreDirectoryBaseline(
+                            notebookId, listingEtag, currentServerKey
+                        )
+                    }
+                }
             }
             reporter.endItem()
         } else {
@@ -204,6 +309,22 @@ class NotebookSyncService @Inject constructor(
         }
 
         return errors.asResult(newNotebookIds.size)
+    }
+
+    /** Baselines accelerate later syncs; failure to persist one must leave this download successful. */
+    private suspend fun safelyStoreDirectoryBaseline(
+        notebookId: String,
+        etag: ETag,
+        serverKey: String,
+    ) {
+        try {
+            appRepository.notebookSyncStateRepository
+                .updateRemoteDirBaseline(notebookId, etag.raw, serverKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.w(TAG, "Could not store directory baseline for $notebookId: ${e.message}")
+        }
     }
 
     /**
@@ -577,9 +698,13 @@ class NotebookSyncService @Inject constructor(
      * The tmp file is cleaned up best-effort; if left behind (interrupted before MOVE) it is simply
      * overwritten by the next upload.
      *
-     * Returns the published manifest's ETag when known. The MOVE path can't reliably report the
-     * destination's post-move ETag, so it returns `null` there — self-correcting, since the next
-     * sync does one full GET and the skip path backfills the ETag.
+     * Returns the published manifest's ETag when known. MOVE carries no destination ETag (RFC 4918),
+     * so it is learned one of two ways: on a server measured to preserve the ETag across MOVE
+     * ([ServerCapabilities.movePreservesEtag] for the current server key) the tmp PUT's ETag *is* the
+     * destination's and is returned directly, saving a readback; otherwise a `PROPFIND Depth:0` reads
+     * it back. Either can be `null` (server issued no ETag, or a failed readback) — self-correcting,
+     * since the next sync's conditional GET returns a body on mismatch and re-establishes the
+     * validator.
      */
     private suspend fun publishManifest(
         notebookId: String,
@@ -591,12 +716,35 @@ class NotebookSyncService @Inject constructor(
         val tmpPath = "$finalPath.tmp"
         // Whether we actually sent a precondition decides how to read a 412 below.
         val guard = ifMatch.writeGuard()
+        // Snapshot the capability before publishing. Most importantly, bind it to this client's
+        // endpoint rather than mutable settings that the user can edit while a sync is running.
+        val reuseMovedEtag = movePreservesEtag(client)
 
-        client.putFile(tmpPath, manifestBytes, "application/json")
-            .onFailure { return AppResult.Error(it) }
+        // Capture the tmp PUT's ETag so it can be reused as the destination's on a server measured to
+        // preserve ETags across MOVE, avoiding the readback PROPFIND below.
+        val tmpEtag = client.putFileReturningEtag(tmpPath, manifestBytes, "application/json")
+            .getOrElse { return AppResult.Error(it) }
 
         return when (val moved = client.move(tmpPath, finalPath, ifMatchDestination = ifMatch)) {
-            is AppResult.Success -> AppResult.Success(null)
+            is AppResult.Success -> {
+                // MOVE carries no ETag for its destination (RFC 4918). When the server is measured to
+                // keep the tmp file's ETag across MOVE, that captured ETag *is* the manifest's now --
+                // reuse it and skip the read. Otherwise read it back with a cheap PROPFIND Depth:0.
+                // Without a validator the row commits unguarded even on servers that DO issue ETags
+                // (e.g. Nextcloud) -- forfeiting next sync's conditional-304 skip and the guarded
+                // remote GC. A wrong reused ETag self-corrects on the next conditional GET; a failed
+                // readback degrades to null (unguarded, but the MOVE already succeeded), never
+                // failing the publish.
+                val destEtag = if (tmpEtag != null && reuseMovedEtag) {
+                    tmpEtag
+                } else {
+                    client.resourceEtag(finalPath).getOrElse { null }
+                }
+                if (destEtag == null) {
+                    log.w(TAG, "Manifest ETag unknown for $notebookId; commit will be unguarded")
+                }
+                AppResult.Success(destEtag)
+            }
             is AppResult.Error -> {
                 client.delete(tmpPath) // best-effort cleanup either way
                 if (moved.error is DomainError.SyncConflict && guard is WriteGuard.Guarded) {
@@ -609,6 +757,25 @@ class NotebookSyncService @Inject constructor(
                     client.putFileReturningEtag(finalPath, manifestBytes, "application/json", ifMatch)
                 }
             }
+        }
+    }
+
+    /**
+     * Whether the current server was *measured* to keep a resource's ETag across a MOVE, so the tmp
+     * PUT's ETag can stand in for the post-MOVE destination ETag. Only trusted when the stored
+     * capability's key matches the server about to be written — a record from a different server (URL
+     * or username) is stale and ignored. Any missing piece answers `false`, keeping the safe readback.
+     */
+    private suspend fun movePreservesEtag(client: WebDAVClient): Boolean {
+        return try {
+            canReuseMovedEtag(kvProxy.getServerCapabilities(), client.serverKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Capability storage is optional optimization state. A read/decode/database failure
+            // must not fail a manifest upload; retain the safe destination-Etag readback instead.
+            log.w(TAG, "Could not read MOVE capability; using manifest ETag readback: ${e.message}")
+            false
         }
     }
 
@@ -1174,3 +1341,10 @@ class NotebookSyncService @Inject constructor(
         private const val TAG = "NotebookSyncService"
     }
 }
+
+/** Pure capability gate kept separate so server-key mismatch behavior is pinned by unit tests. */
+internal fun canReuseMovedEtag(
+    capabilities: ServerCapabilities?,
+    clientServerKey: String
+): Boolean = capabilities?.movePreservesEtag == true &&
+    capabilities.serverKey == clientServerKey

@@ -58,6 +58,11 @@ class SyncOrchestrator @Inject constructor(
             val uploadOnly = settings.uploadOnly
             val downloadOnly = settings.downloadOnly
             var nonCriticalError: DomainError? = null
+            log.i(
+                TAG,
+                "Mode: ${if (uploadOnly) "upload-only" else if (downloadOnly) "download-only" else "two-way"}" +
+                    ", fastSync=${settings.fastSyncEnabled}, wifiOnly=${settings.wifiOnly}"
+            )
 
             if (!settings.syncEnabled) {
                 return@withContext failStep(DomainError.SyncConfigError)
@@ -77,19 +82,53 @@ class SyncOrchestrator @Inject constructor(
                 settings.password
             )
 
-            syncPreflightService.checkClockSkew(client).onFailure {
-                return@withContext failStep(it)
-            }
-
-            syncPreflightService.ensureServerDirectories(client).onFailure {
+            // One root PROPFIND collapses the three directory-existence HEADs and (when the server
+            // sends a usable Date header) the dedicated clock-skew HEAD into a single request.
+            syncPreflightService.ensureServerReady(client).onFailure {
                 return@withContext failStep(it)
             }
 
             // One PROPFIND for the whole remote notebook set, shared by reconciliation (existence
-            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes.
-            val remoteNotebookIds = client.listCollection(SyncPaths.notebooksDir())
+            // checks) and new-notebook discovery -- replaces the per-notebook HEAD probes. The
+            // per-directory ETags it also carries drive bulk change detection: a matching baseline
+            // lets a notebook skip its manifest GET entirely.
+            val remoteEntries = client.listCollectionWithMetadata(SyncPaths.notebooksDir())
                 .onFailure { return@withContext failStep(it) }
-                .toSet()
+            val remoteNotebookIds = remoteEntries.mapTo(mutableSetOf()) { it.name }
+            val dirEtags: Map<String, ETag?> = remoteEntries.associate { it.name to it.etag }
+            log.i(
+                TAG,
+                "Remote listing: ${remoteNotebookIds.size} notebook dir(s), " +
+                    "${dirEtags.values.count { it != null }} with an ETag"
+            )
+
+            // Snapshot the measured capability once for the whole pass, bound to this client's server
+            // identity. A read/decode failure is treated as "no capability" (fast path off) rather
+            // than failing the sync -- optimization state must never break a functional sync.
+            val currentServerKey = client.serverKey
+            val capabilities = try {
+                kvProxy.getServerCapabilities()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.w(TAG, "Could not read server capabilities; bulk detection off: ${e.message}")
+                null
+            }
+            val bulkEnabled = settings.fastSyncEnabled && capabilities?.let {
+                it.serverKey == currentServerKey && it.collectionEtagPropagates
+            } == true
+            log.i(
+                TAG,
+                "Bulk change detection: " + when {
+                    !settings.fastSyncEnabled -> "off (fast sync disabled)"
+                    capabilities == null -> "off (no stored capability — run Test Connection)"
+                    capabilities.serverKey != currentServerKey ->
+                        "off (capability is for a different server URL/username)"
+                    !capabilities.collectionEtagPropagates ->
+                        "off (server does not propagate collection ETags)"
+                    else -> "on"
+                }
+            )
 
             reporter.beginStep(
                 SyncStep.SYNCING_FOLDERS,
@@ -119,7 +158,10 @@ class SyncOrchestrator @Inject constructor(
             )
             val localIdsSnapshot = appRepository.bookRepository.getAll().map { it.id }.toSet()
             val preDownloadIds = when (
-                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly)
+                val syncResult = notebookReconciliationService.syncExistingNotebooks(
+                    client, remoteNotebookIds, uploadOnly, downloadOnly,
+                    bulkEnabled, currentServerKey, dirEtags
+                )
             ) {
                 is AppResult.Success -> syncResult.data
                 // Per-notebook failures are NON-CRITICAL: each failed notebook was marked ERROR
@@ -141,10 +183,14 @@ class SyncOrchestrator @Inject constructor(
                 0
             } else {
                 notebookSyncService.downloadNewNotebooks(
-                    client,
-                    tombstonedIds,
-                    preDownloadIds,
-                    remoteNotebookIds
+                    client = client,
+                    tombstonedIds = tombstonedIds,
+                    preDownloadNotebookIds = preDownloadIds,
+                    remoteNotebookIds = remoteNotebookIds,
+                    downloadOnly = downloadOnly,
+                    bulkEnabled = bulkEnabled,
+                    currentServerKey = currentServerKey,
+                    dirEtags = dirEtags,
                 ).onFailure { return@withContext failStep(it) }
             }
 
@@ -181,6 +227,13 @@ class SyncOrchestrator @Inject constructor(
                 downloadedCount,
                 deletedCount,
                 System.currentTimeMillis() - startTime
+            )
+            log.i(
+                TAG,
+                "Full sync finished in ${summary.duration} ms: " +
+                    "${summary.notebooksDownloaded} downloaded, ${summary.notebooksDeleted} deleted, " +
+                    "${preDownloadIds.size} local notebook(s)" +
+                    (nonCriticalError?.let { " — with error: ${it.userMessage}" } ?: "")
             )
             finalizeSyncResult(reporter, summary, nonCriticalError).onSuccess {
                 // Persist the last successful full-sync time so the settings "Last synced" line
@@ -342,21 +395,40 @@ class SyncOrchestrator @Inject constructor(
             }
         }
 
-    suspend fun forceUploadAll(): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+    suspend fun forceUploadAll(): AppResult<Unit, DomainError> =
+        runForce("Uploading all notebooks...") { syncForceService.forceUploadAll() }
+
+    suspend fun forceDownloadAll(): AppResult<Unit, DomainError> =
+        runForce("Downloading all notebooks...") { syncForceService.forceDownloadAll() }
+
+    /**
+     * Shared wrapper for the force operations. Beyond holding [syncMutex] it drives the same
+     * [reporter] a normal sync does, so the "Sync now" button disables and the progress panel shows
+     * while a force run is in flight -- otherwise the reporter stayed Idle and the button, thinking
+     * nothing was running, funnelled a tap into [syncAllNotebooks] whose [syncMutex.tryLock] then
+     * failed with SyncInProgress. The terminal state is set only after the lock is actually held, so
+     * a contended run (another sync active) returns SyncInProgress without clobbering its state.
+     */
+    private suspend fun runForce(
+        details: String,
+        block: suspend () -> AppResult<Unit, DomainError>
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
         if (!syncMutex.tryLock()) return@withContext AppResult.Error(DomainError.SyncInProgress)
         try {
-            syncForceService.forceUploadAll()
+            reporter.beginStep(SyncStep.SYNCING_NOTEBOOKS, PROGRESS_SYNCING_NOTEBOOKS, details)
+            block().also { result ->
+                when (result) {
+                    is AppResult.Success -> reporter.finishSuccess(SyncSummary(0, 0, 0, 0))
+                    is AppResult.Error -> reporter.finishError(result.error, false)
+                }
+            }
         } finally {
             syncMutex.unlock()
         }
-    }
-
-    suspend fun forceDownloadAll(): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
-        if (!syncMutex.tryLock()) return@withContext AppResult.Error(DomainError.SyncInProgress)
-        try {
-            syncForceService.forceDownloadAll()
-        } finally {
-            syncMutex.unlock()
+    }.also { result ->
+        if (result is AppResult.Success) appScope.launch {
+            delay(SUCCESS_STATE_AUTO_RESET_MS)
+            if (reporter.state.value is SyncState.Success) reporter.reset()
         }
     }
 
@@ -480,6 +552,8 @@ class SyncOrchestrator @Inject constructor(
 
     /** Report [error] as the terminal state of the current sync and return it as a failure. */
     private fun failStep(error: DomainError): AppResult<Unit, DomainError> {
+        val step = (reporter.state.value as? SyncState.Syncing)?.currentStep ?: SyncStep.INITIALIZING
+        log.w(TAG, "Sync aborted during $step: ${error.userMessage}")
         reporter.finishError(error, false)
         return AppResult.Error(error)
     }

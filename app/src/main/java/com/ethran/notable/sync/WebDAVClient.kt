@@ -17,15 +17,55 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Date
+import javax.net.ssl.SSLException
 
 /**
- * A remote WebDAV collection entry with its name and last-modified timestamp.
+ * A remote WebDAV collection entry with its name, last-modified timestamp, and — for a child
+ * collection in a `Depth: 1` listing — that subdirectory's own ETag. The ETag defaults to null so
+ * existing metadata/tombstone call sites are unaffected; a null on a notebook directory simply means
+ * the bulk fast path falls back to a manifest check for it, never an error.
  */
-data class RemoteEntry(val name: String, val lastModified: Date?)
+data class RemoteEntry(val name: String, val lastModified: Date?, val etag: ETag? = null)
+
+/**
+ * Result of the collapsed preflight PROPFIND on the sync root — one request that answers "which of
+ * the expected directories exist?" and, opportunistically, "what is the server's clock?".
+ *
+ * @property rootExists false when the root collection itself returned 404 (both children are then
+ *   known-absent without any further request).
+ * @property childNames decoded names of the root's immediate children, with the root's own entry
+ *   removed. Membership answers each directory-existence question.
+ * @property serverTimeMs the server clock parsed from the response `Date` header, or null when the
+ *   server omitted or corrupted it — the caller then falls back to the dedicated clock-skew HEAD.
+ * @property localMidpointMs the local time midway between issuing the request and reading the
+ *   response, the best single-sample estimate of "now" to compare against [serverTimeMs].
+ */
+data class RootProbe(
+    val rootExists: Boolean,
+    val childNames: Set<String>,
+    val serverTimeMs: Long?,
+    val localMidpointMs: Long,
+)
+
+/**
+ * Validate a decoded Depth-1 root listing and remove its mandatory self-entry. A successful HTTP
+ * response without the requested collection is not trustworthy WebDAV data (for example, an HTML
+ * login page reached through a redirect), so callers must fail closed instead of treating it as an
+ * empty root and attempting writes.
+ */
+internal fun rootChildNames(path: String, decodedNames: List<String>): Set<String>? {
+    val selfName = path.trimEnd('/').substringAfterLast('/')
+    if (selfName !in decodedNames) return null
+    return decodedNames.filter { it.isNotEmpty() && it != selfName }.toSet()
+}
 
 /**
  * A fetched body with the validator the server sent for it.
@@ -72,6 +112,9 @@ class WebDAVClient(
     private val client: OkHttpClient
 ) {
     private val credentials = Credentials.basic(username, password)
+
+    /** Identity of the endpoint this client actually targets; capability gates must match this. */
+    internal val serverKey: String = ServerCapabilities.serverKey(serverUrl, username)
 
     /**
      * Test connection to WebDAV server.
@@ -231,7 +274,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(ETag.parse(response.header("ETag")))
+                response.isSuccessful -> AppResult.Success(response.etag())
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -263,7 +306,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_PRECON_FAILED ->
                     AppResult.Error(DomainError.SyncConflict)
 
-                response.isSuccessful -> AppResult.Success(ETag.parse(response.header("ETag")))
+                response.isSuccessful -> AppResult.Success(response.etag())
                 else -> AppResult.Error(DomainError.SyncError("PUT failed: ${response.code}"))
             }
         }
@@ -280,7 +323,7 @@ class WebDAVClient(
             when {
                 response.isSuccessful ->
                     AppResult.Success(
-                        DownloadedFile(response.body.bytes(), ETag.parse(response.header("ETag")))
+                        DownloadedFile(response.body.bytes(), response.etag())
                     )
 
                 response.code == HttpURLConnection.HTTP_NOT_FOUND ->
@@ -312,7 +355,7 @@ class WebDAVClient(
                 response.code == HttpURLConnection.HTTP_NOT_MODIFIED -> AppResult.Success(null)
                 response.isSuccessful ->
                     AppResult.Success(
-                        DownloadedFile(response.body.bytes(), ETag.parse(response.header("ETag")))
+                        DownloadedFile(response.body.bytes(), response.etag())
                     )
 
                 // Same typed signal as getFileWithMetadata so a vanished manifest is handled
@@ -350,7 +393,7 @@ class WebDAVClient(
                         // Some filesystems refuse a rename onto an existing file; retry via a backup.
                         val moved = partFile.renameTo(localFile) ||
                             replaceViaBackup(partFile, localFile)
-                        if (moved) AppResult.Success(ETag.parse(response.header("ETag")))
+                        if (moved) AppResult.Success(response.etag())
                         else AppResult.Error(DomainError.SyncError("Could not store download: $path"))
                     } catch (e: IOException) {
                         AppResult.Error(DomainError.SyncError("Download of $path failed: ${e.message}"))
@@ -465,12 +508,17 @@ class WebDAVClient(
      * @return List of UUID resource names in the collection
      */
     fun listCollection(path: String): AppResult<List<String>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             if (response.isSuccessful) {
                 val hrefs = WebDavXml.parseHrefs(response.body.string())
-                AppResult.Success(hrefs.filter { it != path && !it.endsWith("/$path") }
+                val kept = hrefs.filter { it != path && !it.endsWith("/$path") }
                     .map { Uri.decode(it.trimEnd('/').substringAfterLast('/')) }
-                    .filter { WebDavXml.isValidUuid(it) })
+                    .filter { WebDavXml.isValidUuid(it) }
+                SyncLogger.i(
+                    TAG,
+                    "PROPFIND $path: ${hrefs.size} raw href(s) -> ${kept.size} notebook dir(s)"
+                )
+                AppResult.Success(kept)
             } else {
                 AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
             }
@@ -483,7 +531,7 @@ class WebDAVClient(
      * Returns an empty list when the collection does not exist (404).
      */
     fun listNames(path: String): AppResult<List<String>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
@@ -507,7 +555,7 @@ class WebDAVClient(
      * to `null`.
      */
     fun listEtags(path: String): AppResult<Map<String, ETag?>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyMap())
                 response.isSuccessful -> {
@@ -530,21 +578,72 @@ class WebDAVClient(
      * @return List of RemoteEntry objects; empty if collection doesn't exist
      */
     fun listCollectionWithMetadata(path: String): AppResult<List<RemoteEntry>, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_LASTMODIFIED) }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
             when {
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(emptyList())
                 response.isSuccessful -> {
                     val entries = WebDavXml.parseEntries(response.body.string())
-                    AppResult.Success(entries.filter { it.href != path && !it.href.endsWith("/$path") }
+                    val kept = entries.filter { it.href != path && !it.href.endsWith("/$path") }
                         .mapNotNull { entry ->
                             val name = Uri.decode(entry.href.trimEnd('/').substringAfterLast('/'))
-                            if (WebDavXml.isValidUuid(name)) RemoteEntry(name, entry.lastModified) else null
-                        })
+                            if (WebDavXml.isValidUuid(name))
+                                RemoteEntry(name, entry.lastModified, ETag.parse(entry.etag))
+                            else null
+                        }
+                    // If these two counts diverge sharply, the server sent plenty but the UUID
+                    // filter dropped them (href shape); if both are tiny, the server itself listed
+                    // little. That distinction is otherwise invisible from the logs.
+                    SyncLogger.i(
+                        TAG,
+                        "PROPFIND $path: ${entries.size} raw entr(ies) -> ${kept.size} notebook dir(s)"
+                    )
+                    AppResult.Success(kept)
                 }
 
                 else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
             }
         }
+
+    /**
+     * Collapsed preflight probe: one `PROPFIND Depth: 1` on the sync root that reports which expected
+     * child directories exist and carries the server's `Date` header for a piggybacked clock-skew
+     * check. Replaces three sequential existence HEADs (and, when the server sends a usable `Date`,
+     * the dedicated clock-skew HEAD) with a single request.
+     *
+     * A 404 is reported as `rootExists = false` — an expected, non-error outcome that means the whole
+     * tree must be created. Every other non-success status stays an [AppResult.Error] (401 as
+     * [DomainError.SyncAuthError]); a caller must never read such a failure as "directory missing" and
+     * upload over a possibly-populated remote.
+     */
+    fun probeRoot(path: String): AppResult<RootProbe, DomainError> {
+        val startMs = System.currentTimeMillis()
+        return execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS) }) { response ->
+            val serverTimeMs = response.header("Date")?.let { parseHttpDate(it) }
+            val endMs = System.currentTimeMillis()
+            val localMidpointMs = startMs + (endMs - startMs) / 2
+            when {
+                response.code == HttpURLConnection.HTTP_NOT_FOUND ->
+                    AppResult.Success(RootProbe(false, emptySet(), serverTimeMs, localMidpointMs))
+
+                response.isSuccessful -> {
+                    val decodedNames = WebDavXml.parseHrefs(response.body.string())
+                        .map { Uri.decode(it.trimEnd('/').substringAfterLast('/')) }
+                    val childNames = rootChildNames(path, decodedNames)
+                        ?: return@execute AppResult.Error(
+                            DomainError.SyncError(
+                                "Invalid PROPFIND response: sync root entry is missing"
+                            )
+                        )
+                    AppResult.Success(RootProbe(true, childNames, serverTimeMs, localMidpointMs))
+                }
+
+                response.code == HttpURLConnection.HTTP_UNAUTHORIZED ->
+                    AppResult.Error(DomainError.SyncAuthError)
+
+                else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
+            }
+        }
+    }
 
     /**
      * The ETag of a single resource or collection, via `PROPFIND Depth: 0`. `Success(null)` when the
@@ -553,7 +652,7 @@ class WebDAVClient(
      * change.
      */
     fun resourceEtag(path: String): AppResult<ETag?, DomainError> =
-        execute("PROPFIND", { propfindRequest(path, PROPFIND_ALLPROP, depth = "0") }) { response ->
+        execute("PROPFIND", { propfindRequest(path, PROPFIND_PROPS, depth = "0") }) { response ->
             if (response.isSuccessful) {
                 val self = WebDavXml.parseEntries(response.body.string()).firstOrNull()
                 AppResult.Success(ETag.parse(self?.etag))
@@ -594,8 +693,32 @@ class WebDAVClient(
         return try {
             client.newCall(buildRequest()).execute().use { response -> map(response) }
         } catch (e: Exception) {
-            AppResult.Error(DomainError.NetworkError(e.message ?: "$errorLabel failed"))
+            // Keep the raw exception in the log for diagnosis; show the user a message that says
+            // what went wrong instead of OkHttp's terse "timeout".
+            SyncLogger.w(TAG, "$errorLabel failed: ${e.javaClass.simpleName}: ${e.message}")
+            AppResult.Error(DomainError.NetworkError(humanizeNetworkError(errorLabel, e)))
         }
+    }
+
+    /**
+     * Turn a low-level networking exception into a message a user can act on. OkHttp surfaces a bare
+     * "timeout" / "Read timed out" and similarly cryptic strings; this names the actual failure and
+     * suggests the next step. The technical detail is still logged at the call site above.
+     */
+    private fun humanizeNetworkError(errorLabel: String, e: Exception): String = when (e) {
+        // SocketTimeoutException is a subclass of InterruptedIOException, so it is matched first;
+        // OkHttp's overall call timeout throws a bare InterruptedIOException("timeout").
+        is SocketTimeoutException, is InterruptedIOException ->
+            "The server took too long to respond (timed out). Check your connection and try again."
+        is UnknownHostException ->
+            "Can't reach the server. Check the server address and your internet connection."
+        is ConnectException ->
+            "Couldn't connect to the server. It may be offline or blocked by the network."
+        is SSLException ->
+            "Secure connection to the server failed (TLS/certificate error)."
+        is IOException ->
+            "Network error while ${errorLabel.lowercase()}: ${e.message ?: "connection interrupted"}."
+        else -> e.message ?: "$errorLabel failed"
     }
 
     /**
@@ -633,6 +756,14 @@ class WebDAVClient(
     }
 
     /**
+     * The validator a response advertises, falling back to Nextcloud/ownCloud's `OC-ETag` when the
+     * standard `ETag` header is absent -- some setups send only the OC- variant (e.g. behind a proxy
+     * that strips `ETag`, or on chunked uploads). Both carry the same opaque value there, so either
+     * is a valid anchor for a later If-Match/If-None-Match.
+     */
+    private fun Response.etag(): ETag? = ETag.parse(header("ETag") ?: header("OC-ETag"))
+
+    /**
      * Build full URL from server URL and path.
      */
     private fun buildUrl(path: String): String {
@@ -648,18 +779,18 @@ class WebDAVClient(
     companion object {
         private const val TAG = "WebDAVClient"
 
-        private val PROPFIND_ALLPROP = """
-            <?xml version="1.0" encoding="utf-8"?>
-            <D:propfind xmlns:D="DAV:">
-                <D:allprop/>
-            </D:propfind>
-        """.trimIndent()
-
-        private val PROPFIND_LASTMODIFIED = """
+        // Enumerate the props we actually read rather than asking for <allprop/>. Nextcloud/ownCloud
+        // do NOT return <getetag> (among others) for an <allprop/> request -- the ETag is only sent
+        // when it is named explicitly in a <prop>. Relying on allprop left resourceEtag/listEtags
+        // reading a null validator on those servers, so every commit degraded to unguarded
+        // last-writer-wins ("server issued no ETag") even though the server does issue ETags.
+        private val PROPFIND_PROPS = """
             <?xml version="1.0" encoding="utf-8"?>
             <D:propfind xmlns:D="DAV:">
                 <D:prop>
+                    <D:getetag/>
                     <D:getlastmodified/>
+                    <D:resourcetype/>
                 </D:prop>
             </D:propfind>
         """.trimIndent()

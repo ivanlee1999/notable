@@ -35,6 +35,20 @@ data class NotebookSyncState(
     val remoteEtag: String? = null,
     val remoteUpdatedAt: Date? = null,
     val lastError: String? = null,
+    /**
+     * The notebook **directory** ETag observed at the last converged sync — the value the bulk
+     * change-detection fast path compares a fresh listing against to skip the per-notebook manifest
+     * GET. Owned exclusively by [NotebookSyncStateRepository.updateRemoteDirBaseline]; every other
+     * writer builds a fresh row and so resets this to null, which is correct because a non-`SYNCED`
+     * state must never carry a consumable baseline.
+     */
+    val remoteDirEtag: String? = null,
+    /**
+     * The server identity ([ServerCapabilities.serverKey]) the [remoteDirEtag] was observed on. A
+     * baseline is consumed only when this matches the current server, so an opaque ETag left over
+     * from a previously configured server can never suppress a read on a different one.
+     */
+    val remoteDirServerKey: String? = null,
 )
 
 object SyncStateValue {
@@ -71,6 +85,18 @@ interface NotebookSyncStateDao {
 
     @Query("DELETE FROM notebook_sync_state")
     suspend fun deleteAll()
+
+    /**
+     * Update only the directory-baseline columns for one row. A targeted `UPDATE` (not a full-row
+     * upsert) so a post-commit network read can never clobber other fields of a fresher sync-state
+     * row. A no-op when no row exists for [id] or the row is no longer `SYNCED`, preserving the
+     * invariant even if a future caller attempts to store a stale post-transfer observation.
+     */
+    @Query(
+        "UPDATE notebook_sync_state SET remoteDirEtag = :etag, remoteDirServerKey = :serverKey " +
+            "WHERE notebookId = :id AND state = 'SYNCED'"
+    )
+    suspend fun updateRemoteDirBaseline(id: String, etag: String?, serverKey: String)
 }
 
 class NotebookSyncStateRepository @Inject constructor(
@@ -82,6 +108,15 @@ class NotebookSyncStateRepository @Inject constructor(
     suspend fun upsert(state: NotebookSyncState) = dao.upsert(state)
     suspend fun delete(id: String) = dao.delete(id)
     suspend fun deleteAll() = dao.deleteAll()
+
+    /**
+     * Record the directory ETag observed for [notebookId] at a converged sync, tagged with the
+     * [serverKey] it was seen on. The single owner of the two baseline columns; see the field docs on
+     * [NotebookSyncState.remoteDirEtag]. Called after the commit that established convergence, so the
+     * preceding `markSynced` (which resets these columns) has already run.
+     */
+    suspend fun updateRemoteDirBaseline(notebookId: String, etag: String?, serverKey: String) =
+        dao.updateRemoteDirBaseline(notebookId, etag, serverKey)
 
     /** Record a notebook as successfully synced at [localUpdatedAt] / [remoteUpdatedAt]. */
     suspend fun markSynced(

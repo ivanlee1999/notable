@@ -47,7 +47,8 @@ class SyncWorkUiBridge @Inject constructor(
             }
         }
 
-    // SyncWorker writes DomainError.javaClass.simpleName into OUTPUT_KEY_ERROR.
+    // SyncWorker writes the human-readable DomainError.userMessage into OUTPUT_KEY_ERROR for real
+    // failures, and only the class simpleName for the informational SyncInProgress case matched here.
     private val SYNC_IN_PROGRESS_ERROR = DomainError.SyncInProgress::class.simpleName
 
     private fun trimHandledIds(maxSize: Int = 64) {
@@ -72,7 +73,7 @@ class SyncWorkUiBridge @Inject constructor(
             // "Sync already in progress" is informational (another run is handling it), not a
             // failure -- e.g. a manual Sync Now landing while a periodic sync runs (8i-1 / 9c).
             errorMsg == SYNC_IN_PROGRESS_ERROR -> SnackEvent(R.string.sync_already_running)
-            errorMsg != null -> SnackEvent(R.string.sync_failed_message, errorMsg)
+            errorMsg != null -> SnackEvent(R.string.sync_failed_message, errorMsg, isError = true)
             else -> SnackEvent(R.string.sync_finished)
         }
     }
@@ -83,5 +84,7 @@ class SyncWorkUiBridge @Inject constructor(
  */
 data class SnackEvent(
     @param:StringRes val messageResId: Int,
-    val errorArg: String? = null
+    val errorArg: String? = null,
+    /** A failure the user should have time to read — shown longer and can be styled as a problem. */
+    val isError: Boolean = false
 )

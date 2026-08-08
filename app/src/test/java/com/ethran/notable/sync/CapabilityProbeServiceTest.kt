@@ -81,11 +81,21 @@ class CapabilityProbeServiceTest {
     }
 
     @Test
-    fun etag_comparison_is_weak_so_prefixed_tmp_still_matches() {
-        // Server may spell the destination's validator weak (W/) while the PUT reported it strong;
-        // they still identify the same content, so the MOVE preserved it.
+    fun movePreservesEtag_rejects_strong_tmp_to_weak_destination() {
+        // They identify equivalent content for cache validation, but are not interchangeable for
+        // If-Match: a strong tmp validator can never strongly match the weak destination validator.
         val obs = allMoved().copy(tmpEtag = tag("v"), destEtagAfterMove = ETag.parse("W/\"v\"")!!)
-        assertTrue(evaluate("srv", 0L, obs).movePreservesEtag)
+        assertFalse(evaluate("srv", 0L, obs).movePreservesEtag)
+    }
+
+    @Test
+    fun moveEtag_reuse_requires_capability_for_the_active_client_server() {
+        val caps = evaluate("active", 0L, allMoved())
+
+        assertTrue(canReuseMovedEtag(caps, "active"))
+        assertFalse(canReuseMovedEtag(caps, "different"))
+        assertFalse(canReuseMovedEtag(caps.copy(movePreservesEtag = false), "active"))
+        assertFalse(canReuseMovedEtag(null, "active"))
     }
 
     @Test

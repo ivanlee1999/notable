@@ -25,4 +25,19 @@ class WebDavClientTest {
     fun parseHttpDate_returns_null_for_invalid_header() {
         assertNull(WebDAVClient.parseHttpDate("not-a-date"))
     }
+
+    @Test
+    fun rootChildNames_requires_and_removes_root_self_entry() {
+        val result = rootChildNames(
+            path = "/notable/",
+            decodedNames = listOf("notable", "notebooks", "deletions")
+        )
+
+        assertEquals(setOf("notebooks", "deletions"), result)
+    }
+
+    @Test
+    fun rootChildNames_rejects_response_without_root_self_entry() {
+        assertNull(rootChildNames("/notable", listOf("notebooks", "deletions")))
+    }
 }
