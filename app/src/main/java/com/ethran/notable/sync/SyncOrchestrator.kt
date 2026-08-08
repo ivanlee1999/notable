@@ -119,7 +119,7 @@ class SyncOrchestrator @Inject constructor(
             )
             val localIdsSnapshot = appRepository.bookRepository.getAll().map { it.id }.toSet()
             val preDownloadIds = when (
-                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly, settings.conflictStrategy)
+                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly)
             ) {
                 is AppResult.Success -> syncResult.data
                 // Per-notebook failures are NON-CRITICAL: each failed notebook was marked ERROR
@@ -251,8 +251,7 @@ class SyncOrchestrator @Inject constructor(
             notebookId,
             client,
             settings.uploadOnly,
-            settings.downloadOnly,
-            settings.conflictStrategy
+            settings.downloadOnly
         )
     }
 
@@ -402,7 +401,7 @@ class SyncOrchestrator @Inject constructor(
                 .getOrElse { return@withContext AppResult.Error(it) }
             notebookSyncService.resolveConflictedPage(notebookId, pageId, resolution, client)
                 .onFailure { return@withContext AppResult.Error(it) }
-            runResolutionTransfer(notebookId, client, settings.conflictStrategy)
+            runResolutionTransfer(notebookId, client)
         } finally {
             syncMutex.unlock()
         }
@@ -432,7 +431,7 @@ class SyncOrchestrator @Inject constructor(
             notebookSyncService.resolveNotebookConflict(notebookId, resolution, client)
                 .onFailure { return@withContext AppResult.Error(it) }
             if (resolution == NotebookConflictResolution.TAKE_SERVER) AppResult.Success(Unit)
-            else runResolutionTransfer(notebookId, client, settings.conflictStrategy)
+            else runResolutionTransfer(notebookId, client)
         } finally {
             syncMutex.unlock()
         }
@@ -474,10 +473,9 @@ class SyncOrchestrator @Inject constructor(
      */
     private suspend fun runResolutionTransfer(
         notebookId: String,
-        client: WebDAVClient,
-        conflictStrategy: SyncConflictStrategy
+        client: WebDAVClient
     ): AppResult<Unit, DomainError> = notebookReconciliationService.syncNotebook(
-        notebookId, client, uploadOnly = false, downloadOnly = false, conflictStrategy
+        notebookId, client, uploadOnly = false, downloadOnly = false
     )
 
     /** Report [error] as the terminal state of the current sync and return it as a failure. */

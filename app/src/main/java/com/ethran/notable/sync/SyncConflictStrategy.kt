@@ -14,7 +14,9 @@ import kotlinx.serialization.Serializable
  * [ASK] is the only implemented strategy and the safe default: it never destroys either version —
  * it flags the notebook and lets the user pick per page. The other values are the intended future
  * automatic strategies (mirroring [com.ethran.notable.io.ImportConflictStrategy]); they are declared
- * so callers and settings can already reference them, but the engine does not act on them yet.
+ * and persisted in [SyncSettings] so the future feature has a stable place to hook in, but the sync
+ * engine ignores the setting entirely today — it always flags. Nothing is threaded through the
+ * reconcile path until a strategy is actually implemented.
  */
 @Serializable
 enum class SyncConflictStrategy {

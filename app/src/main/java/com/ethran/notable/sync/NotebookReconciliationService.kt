@@ -34,7 +34,6 @@ class NotebookReconciliationService @Inject constructor(
         remoteNotebookIds: Set<String>,
         uploadOnly: Boolean,
         downloadOnly: Boolean,
-        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Set<String>, DomainError> {
         val localNotebooks = appRepository.bookRepository.getAll()
         val preDownloadNotebookIds = localNotebooks.map { it.id }.toSet()
@@ -46,7 +45,7 @@ class NotebookReconciliationService @Inject constructor(
             // Individual notebook sync failures are non-fatal for the whole process.
             reconcileNotebook(
                 notebook.id, client, remoteNotebookIds.contains(notebook.id),
-                uploadOnly, downloadOnly, conflictStrategy
+                uploadOnly, downloadOnly
             ).onError { errors.add(it) }
         }
         reporter.endItem()
@@ -63,7 +62,6 @@ class NotebookReconciliationService @Inject constructor(
         client: WebDAVClient,
         uploadOnly: Boolean,
         downloadOnly: Boolean,
-        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Unit, DomainError> {
         log.i(TAG, "Syncing notebook: $notebookId")
         // If we cannot determine whether the remote manifest exists (e.g. transient network error),
@@ -71,7 +69,7 @@ class NotebookReconciliationService @Inject constructor(
         val remotePresent = client.exists(SyncPaths.manifestFile(notebookId))
             .onFailure { return AppResult.Error(it) }
         return reconcileNotebook(
-            notebookId, client, remotePresent, uploadOnly, downloadOnly, conflictStrategy
+            notebookId, client, remotePresent, uploadOnly, downloadOnly
         )
     }
 
@@ -81,7 +79,6 @@ class NotebookReconciliationService @Inject constructor(
         remotePresent: Boolean,
         uploadOnly: Boolean,
         downloadOnly: Boolean,
-        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Unit, DomainError> {
         val localNotebook = appRepository.bookRepository.getById(notebookId)
             ?: return AppResult.Error(DomainError.NotFound("Notebook $notebookId"))
@@ -163,7 +160,7 @@ class NotebookReconciliationService @Inject constructor(
             NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client)
 
             NotebookAction.Reconcile ->
-                reconcileConcurrentEdits(notebookId, localNotebook, remoteNotebook, client, conflictStrategy)
+                reconcileConcurrentEdits(notebookId, localNotebook, remoteNotebook, client)
 
             NotebookAction.SkipUploadOnly -> {
                 // Upload-only mode: remote is newer but we never pull. This is a planned no-op, not
@@ -210,12 +207,11 @@ class NotebookReconciliationService @Inject constructor(
      * edits before touching anything:
      *
      * - **Same-page conflict** (a page edited on both sides) or **structural conflict** (the manifests
-     *   disagree on page set, order, title, or open page) → non-mergeable. Dispatch on
-     *   [conflictStrategy]; only [SyncConflictStrategy.ASK] is implemented: flag the notebook
-     *   (CONFLICT badge) and leave both copies untouched for the user to resolve. Crucially the merge
-     *   below is skipped, so a locally-added/reordered/renamed manifest is never overwritten by the
-     *   download. Unimplemented automatic strategies fall back to ASK rather than crash a background
-     *   sync.
+     *   disagree on page set, order, title, or open page) → non-mergeable: flag the notebook (CONFLICT
+     *   badge) and leave both copies untouched for the user to resolve. Crucially the merge below is
+     *   skipped, so a locally-added/reordered/renamed manifest is never overwritten by the download.
+     *   Flagging is the only behavior today; the automatic [SyncConflictStrategy] values are declared
+     *   but not yet acted on (see that enum).
      * - **No conflict** (identical structure, at most different-page content edits) → merge
      *   losslessly: pull every remotely-changed page, then push any page that is only locally changed.
      *   The download is safe here precisely because the manifests match, so it drops no local page.
@@ -230,7 +226,6 @@ class NotebookReconciliationService @Inject constructor(
         localNotebook: Notebook,
         remoteNotebook: Notebook?,
         client: WebDAVClient,
-        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Unit, DomainError> {
         val pageConflicts = notebookSyncService.detectPageConflicts(localNotebook, client)
             .getOrElse { return AppResult.Error(it) }
@@ -238,11 +233,6 @@ class NotebookReconciliationService @Inject constructor(
             remoteNotebook == null || notebookSyncService.structurallyDiverges(localNotebook, remoteNotebook)
 
         if (pageConflicts.isNotEmpty() || structural) {
-            when (conflictStrategy) {
-                SyncConflictStrategy.ASK -> Unit
-                SyncConflictStrategy.SERVER_WINS, SyncConflictStrategy.LOCAL_WINS ->
-                    log.w(TAG, "Conflict strategy $conflictStrategy not implemented yet; asking instead")
-            }
             log.i(
                 TAG,
                 "⚠ Conflict in ${localNotebook.title} (${pageConflicts.size} page(s)" +
