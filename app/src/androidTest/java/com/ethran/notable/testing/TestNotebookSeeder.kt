@@ -6,6 +6,7 @@ import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.StrokePoint
 import com.ethran.notable.editor.utils.Pen
+import java.util.Date
 import java.util.UUID
 import kotlin.random.Random
 
@@ -58,7 +59,7 @@ object TestNotebookSeeder {
             db.strokeDao().create(strokes)
         }
 
-        db.notebookDao().setPageIds(notebookId, pageIds)
+        db.notebookDao().setPageIds(notebookId, pageIds, Date())
         db.notebookDao().setOpenPageId(notebookId, pageIds.first())
 
         return SeededNotebook(

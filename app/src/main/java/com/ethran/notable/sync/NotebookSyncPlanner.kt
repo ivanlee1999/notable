@@ -19,6 +19,15 @@ sealed interface NotebookAction {
     /** Both sides already agree — nothing to transfer (the sync-state row is just refreshed). */
     data object Skip : NotebookAction
 
+    /**
+     * Concurrent edits: the manifest changed remotely while neither clock is clearly newer. The
+     * executor separates independent edits from genuine conflicts — independent different-page edits
+     * merge losslessly (pull remotely-changed pages, push locally-changed ones), while a same-page or
+     * structural conflict is dispatched to the [conflict strategy][SyncConflictStrategy] instead of
+     * either side being overwritten.
+     */
+    data object Reconcile : NotebookAction
+
     /** Remote is newer but we are in upload-only mode, so the download is intentionally skipped. */
     data object SkipUploadOnly : NotebookAction
 
@@ -35,7 +44,12 @@ sealed interface NotebookAction {
  * executor directly as a plain upload — it needs no timestamp reasoning.
  *
  * Conflict handling: when *both* sides changed, this returns the last-writer-wins outcome (upload if
- * local is newer, download if remote is newer); it does not surface a conflict badge.
+ * local is newer, download if remote is newer); it does not surface a conflict badge. When neither
+ * clock is clearly newer (within tolerance) but the manifest ETag differs, it returns [Reconcile]:
+ * the tie can't prove page equality, so the executor merges per page rather than mark the notebook
+ * synced over possibly-stale pages. The executor reconciles independent (different-page) edits
+ * losslessly and hands a genuine same-page or structural conflict to the
+ * [SyncConflictStrategy] instead of overwriting either side.
  */
 object NotebookSyncPlanner {
     const val TOLERANCE_MS = 1000L
@@ -63,10 +77,13 @@ object NotebookSyncPlanner {
             localUpdatedAt, syncedLocalUpdatedAt, storedEtag, remoteChanged, remote, toleranceMs
         )
         // Apply the one-directional mode: an UPLOAD is suppressed in download-only, a DOWNLOAD in
-        // upload-only. Skips stay skips.
+        // upload-only. Skips stay skips. A Reconcile needs both directions, so it degrades to the
+        // half its mode permits: download-only keeps the pull, upload-only surfaces REMOTE_AHEAD.
         return when {
             uploadOnly && raw is NotebookAction.Download -> NotebookAction.SkipUploadOnly
+            uploadOnly && raw is NotebookAction.Reconcile -> NotebookAction.SkipUploadOnly
             downloadOnly && raw is NotebookAction.Upload -> NotebookAction.SkipDownloadOnly
+            downloadOnly && raw is NotebookAction.Reconcile -> NotebookAction.Download
             else -> raw
         }
     }
@@ -92,9 +109,12 @@ object NotebookSyncPlanner {
         val remoteUpdatedAt = r.updatedAt ?: return NotebookAction.Upload(r.etag)
         val diff = localUpdatedAt - remoteUpdatedAt
         return when {
-            diff > toleranceMs -> NotebookAction.Upload(r.etag)      // local newer
-            diff < -toleranceMs -> NotebookAction.Download           // remote newer
-            else -> NotebookAction.Skip                              // within tolerance -> equal
+            diff > toleranceMs -> NotebookAction.Upload(r.etag)      // local newer -> local wins
+            diff < -toleranceMs -> NotebookAction.Download           // remote newer -> remote wins
+            // Timestamps tie while the manifest ETag differs: concurrent edits. A tie is NOT proof of
+            // page equality, so we must not Skip it into a metadata-only markSynced (the next
+            // If-None-Match would 304 forever over stale pages). Reconcile merges per page instead.
+            else -> NotebookAction.Reconcile
         }
     }
 }

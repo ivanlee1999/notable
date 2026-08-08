@@ -220,6 +220,177 @@ class NotebookSyncService @Inject constructor(
         return result
     }
 
+    /**
+     * Whether [notebook] has any page changed locally since its last committed sync — the same
+     * page-level dirty test [uploadNotebookInternal] uses, exposed for the reconcile path to decide
+     * whether an upload half is even needed. Reconcile skips the upload (and its manifest republish)
+     * when this is false, so two devices that have already converged don't churn the manifest ETag
+     * back and forth and re-trigger each other's reconcile forever.
+     */
+    suspend fun hasLocallyDirtyPages(notebook: Notebook): Boolean {
+        val pages = appRepository.pageRepository.getByIds(notebook.pageIds)
+        val rowsByPageId =
+            appRepository.pageSyncStateRepository.getByNotebook(notebook.id).associateBy { it.pageId }
+        return selectDirtyPages(pages, rowsByPageId).isNotEmpty()
+    }
+
+    /**
+     * The manifest pages in a *genuine* conflict: edited locally since the last committed sync AND
+     * changed on the server since then. Independent edits (only one side moved) are not returned —
+     * those merge losslessly. Pure detection: one PROPFIND for page ETags plus local reads, no
+     * content transfer, so it is cheap to recompute whenever the UI needs the current conflict set.
+     *
+     * A page with no sync row (never synced / new local page) or absent from the remote listing is
+     * not a conflict here — those are creates/self-heals the normal reconcile handles. Only a
+     * *provable* remote ETag change counts, so a server that omits ETags never invents a conflict.
+     */
+    suspend fun detectPageConflicts(
+        notebook: Notebook,
+        client: WebDAVClient
+    ): AppResult<List<String>, DomainError> {
+        val remoteEtags = client.listEtags(SyncPaths.pagesDir(notebook.id))
+            .getOrElse { return AppResult.Error(it) }
+        val rowsByPageId =
+            appRepository.pageSyncStateRepository.getByNotebook(notebook.id).associateBy { it.pageId }
+        val pagesById = appRepository.pageRepository.getByIds(notebook.pageIds).associateBy { it.id }
+        val conflicts = notebook.pageIds.filter { pageId ->
+            val row = rowsByPageId[pageId] ?: return@filter false
+            val page = pagesById[pageId] ?: return@filter false
+            val localDirty = page.updatedAt.time > row.syncedLocalUpdatedAt.time
+            val remoteEtag = remoteEtags["$pageId.json"]
+            val remoteChanged = remoteEtag != null && !ETag.parse(row.remoteEtag).matches(remoteEtag)
+            localDirty && remoteChanged
+        }
+        return AppResult.Success(conflicts)
+    }
+
+    /**
+     * Apply the user's [resolution] for one conflicted page by re-baselining its sync row, then
+     * letting the next sync do the actual transfer through the normal reconcile path (which also
+     * republishes the manifest and clears the CONFLICT state once every page is resolved).
+     * Re-baselining instead of transferring inline keeps this cheap and keeps all the byte-moving and
+     * commit logic in one place.
+     *
+     * - [PageConflictResolution.SKIP]: leave the row untouched — the page stays flagged and is asked
+     *   again next sync.
+     * - [PageConflictResolution.REPLACE_WITH_SERVER]: drop our page ETag and lift the change anchor to
+     *   the local page's own timestamp, so it reads as "not locally dirty, remote differs" and the
+     *   next reconcile fetches the server copy over it.
+     * - [PageConflictResolution.UPLOAD_DB]: adopt the server's current page ETag as our base (so it is
+     *   no longer a remote *change*) while leaving local content dirty, so the next reconcile pushes
+     *   it — guarded by that adopted ETag, so it cleanly overwrites the server copy.
+     */
+    suspend fun resolveConflictedPage(
+        notebookId: String,
+        pageId: String,
+        resolution: PageConflictResolution,
+        client: WebDAVClient
+    ): AppResult<Unit, DomainError> {
+        val row = appRepository.pageSyncStateRepository.getByNotebook(notebookId)
+            .firstOrNull { it.pageId == pageId }
+            ?: return AppResult.Error(DomainError.NotFound("page sync row for $pageId"))
+        val rebased = when (resolution) {
+            PageConflictResolution.SKIP -> return AppResult.Success(Unit)
+            PageConflictResolution.REPLACE_WITH_SERVER -> {
+                val localUpdatedAt =
+                    appRepository.pageRepository.getById(pageId)?.updatedAt ?: row.syncedLocalUpdatedAt
+                row.copy(remoteEtag = null, syncedLocalUpdatedAt = localUpdatedAt)
+            }
+
+            PageConflictResolution.UPLOAD_DB -> {
+                val remoteEtag = client.listEtags(SyncPaths.pagesDir(notebookId))
+                    .getOrElse { return AppResult.Error(it) }["$pageId.json"]
+                row.copy(remoteEtag = remoteEtag?.raw)
+            }
+        }
+        appRepository.pageSyncStateRepository.upsertAll(listOf(rebased))
+        return AppResult.Success(Unit)
+    }
+
+    /**
+     * Whether two manifests disagree on any authoritative notebook field that cannot be merged page by
+     * page — every serialized field except page *content* (which merges per page) and two deliberate
+     * exclusions:
+     *  - `updatedAt`: the change clock the tolerance window already reasons about, not a value to
+     *    conflict on.
+     *  - `openPageId`: device-local navigation state (which page this device last had open), not
+     *    synced content — comparing it would flag a conflict every time two devices browse to
+     *    different pages. A plain download may overwrite it, which is harmless.
+     *
+     * A pure download would overwrite the local side of any of the compared fields, so a divergence
+     * here is surfaced as a whole-notebook conflict rather than silently resolved.
+     */
+    fun structurallyDiverges(local: Notebook, remote: Notebook): Boolean =
+        local.pageIds != remote.pageIds ||
+            local.title != remote.title ||
+            local.parentFolderId != remote.parentFolderId ||
+            local.defaultBackground != remote.defaultBackground ||
+            local.defaultBackgroundType != remote.defaultBackgroundType ||
+            local.linkedExternalUri != remote.linkedExternalUri ||
+            local.createdAt != remote.createdAt
+
+    /**
+     * The full conflict picture for [notebook] against the server: the same-page conflicts from
+     * [detectPageConflicts] plus whether the manifests [structurallyDiverges]. Read-only; used by the
+     * resolution UI, so it fetches the remote manifest fresh. A remote manifest that cannot be read or
+     * parsed is reported as a structural conflict — the safe reading when we cannot prove the
+     * structures match.
+     */
+    suspend fun detectConflicts(
+        notebook: Notebook,
+        client: WebDAVClient
+    ): AppResult<NotebookConflict, DomainError> {
+        val conflictIds = detectPageConflicts(notebook, client).getOrElse { return AppResult.Error(it) }
+        val pageConflicts = conflictIds.map { pageId ->
+            PageConflict(pageId = pageId, pageNumber = notebook.pageIds.indexOf(pageId) + 1)
+        }
+        val remote = client.getFile(SyncPaths.manifestFile(notebook.id))
+            .flatMap { NotebookSerializer.deserializeManifest(it.decodeToString()) }
+            .getOrElse { return AppResult.Success(NotebookConflict(pageConflicts, structural = true)) }
+        return AppResult.Success(NotebookConflict(pageConflicts, structurallyDiverges(notebook, remote)))
+    }
+
+    /**
+     * Apply a whole-notebook [resolution] for a structural conflict, then let the next sync do the
+     * transfer (as with [resolveConflictedPage]).
+     *
+     * - [NotebookConflictResolution.TAKE_SERVER]: download the server notebook over the local copy,
+     *   which commits it as synced and clears the CONFLICT state.
+     * - [NotebookConflictResolution.KEEP_LOCAL]: adopt the server's current manifest and page ETags
+     *   as our base *without* advancing the change anchor, so the still-newer local copy is uploaded
+     *   next sync and cleanly overwrites the server — guarded by those adopted ETags, so it wins.
+     */
+    suspend fun resolveNotebookConflict(
+        notebookId: String,
+        resolution: NotebookConflictResolution,
+        client: WebDAVClient
+    ): AppResult<Unit, DomainError> = when (resolution) {
+        NotebookConflictResolution.TAKE_SERVER -> downloadNotebook(notebookId, client)
+        NotebookConflictResolution.KEEP_LOCAL -> adoptRemoteAsBase(notebookId, client)
+    }
+
+    /**
+     * Re-anchor [notebookId]'s sync rows to the server's current ETags (manifest and every page)
+     * while keeping the previous change anchor, so the local copy still reads as dirty and is uploaded
+     * next sync — but now guarded by up-to-date ETags, so the upload overwrites the server instead of
+     * 412-ing. Used by [resolveNotebookConflict] to force the local version.
+     */
+    private suspend fun adoptRemoteAsBase(
+        notebookId: String,
+        client: WebDAVClient
+    ): AppResult<Unit, DomainError> {
+        val manifest = client.getFileWithMetadata(SyncPaths.manifestFile(notebookId))
+            .getOrElse { return AppResult.Error(it) }
+        val remotePageEtags = client.listEtags(SyncPaths.pagesDir(notebookId))
+            .getOrElse { return AppResult.Error(it) }
+        val rebasedRows = appRepository.pageSyncStateRepository.getByNotebook(notebookId).map { row ->
+            remotePageEtags["${row.pageId}.json"]?.let { row.copy(remoteEtag = it.raw) } ?: row
+        }
+        appRepository.pageSyncStateRepository.upsertAll(rebasedRows)
+        appRepository.notebookSyncStateRepository.rebaselineToRemoteEtag(notebookId, manifest.etag?.raw)
+        return AppResult.Success(Unit)
+    }
+
     private suspend fun uploadNotebookInternal(
         notebook: Notebook,
         client: WebDAVClient,
@@ -239,17 +410,53 @@ class NotebookSyncService @Inject constructor(
             val pages = appRepository.pageRepository.getByIds(notebook.pageIds)
             val rowsByPageId =
                 appRepository.pageSyncStateRepository.getByNotebook(notebookId).associateBy { it.pageId }
-            val dirtyPages = selectDirtyPages(pages, rowsByPageId)
+            // A page unchanged locally can still be MISSING on the server: another device deleted its
+            // file (or the whole remote directory), yet its stale sync row would skip it and we'd
+            // republish a manifest pointing at a file that no longer exists -- and the remote would
+            // never self-heal. List the remote pages once (names AND ETags: the ETags also guard the
+            // rowless-but-present case below) and force-upload any manifest page absent from that
+            // listing. If the listing can't be read we can't prove presence, so re-upload every page
+            // (safe and self-healing; also covers a wholly vanished remote directory).
+            val remotePageEtags = client.listEtags(SyncPaths.pagesDir(notebookId))
+                .getOrElse { error ->
+                    log.w(TAG, "Remote page listing failed for ${notebook.title}; uploading all pages: ${error.userMessage}")
+                    null
+                }
+            val locallyDirtyIds = selectDirtyPages(pages, rowsByPageId).map { it.id }.toSet()
+            // Pages the listing proved absent (only when the listing succeeded -- a failed listing
+            // proves nothing, so guard those normally). Their stored ETag is stale, so they are
+            // recreated with an `If-None-Match: *` create guard below rather than the stale If-Match:
+            // the write lands only if the page is still absent, and a page another device recreated
+            // first 412s and aborts this sync to re-plan instead of being overwritten.
+            val knownAbsentPageIds = if (remotePageEtags == null) emptySet()
+            else notebook.pageIds.filter { "$it.json" !in remotePageEtags }.toSet()
+            val dirtyPages = pages.filter { page ->
+                page.id in locallyDirtyIds || page.id in knownAbsentPageIds
+            }
             log.i(TAG, "${dirtyPages.size}/${pages.size} page(s) dirty, uploading")
 
             val errors = ErrorAccumulator()
             val committedPageRows = mutableListOf<PageSyncState>()
             for (page in dirtyPages) {
                 // Guard the dirty-page PUT with the stored ETag. A concurrent remote
-                // change to this page 412s, aborting before manifest publish (nothing committed);
-                // new pages (no row) send no If-Match.
-                val ifMatch = ETag.parse(rowsByPageId[page.id]?.remoteEtag)
-                val uploaded = uploadPage(page, notebookId, client, ifMatch).onSuccess { pageEtag ->
+                // change to this page 412s, aborting before manifest publish (nothing committed).
+                // A page proven absent is recreated with an `If-None-Match: *` create guard instead,
+                // which 412s (and likewise aborts) if another device recreated it first.
+                // A page with no committed row but present on the server (e.g. the first edit after the
+                // 35->36 migration created an empty sync table) is guarded with the ETag from the
+                // listing, so a concurrent update 412s instead of being silently overwritten. Only a
+                // genuinely new page -- no row and absent from the listing -- uploads unguarded, and a
+                // server that omits the ETag leaves the present-but-rowless case unguarded too, the
+                // same last-writer-wins policy already in force where no validator exists.
+                val createOnly = page.id in knownAbsentPageIds
+                val storedRow = rowsByPageId[page.id]
+                val ifMatch = when {
+                    createOnly -> null
+                    storedRow != null -> ETag.parse(storedRow.remoteEtag)
+                    else -> remotePageEtags?.get("${page.id}.json")
+                }
+                val uploaded =
+                    uploadPage(page, notebookId, client, ifMatch, createOnly).onSuccess { pageEtag ->
                     committedPageRows.add(
                         PageSyncState(
                             pageId = page.id,
@@ -311,7 +518,22 @@ class NotebookSyncService @Inject constructor(
                     log.i(TAG, "Uploaded: ${notebook.title}")
                     // Best-effort GC: remove remote page/image/background files no longer
                     // referenced by the manifest we just committed (P11). Never fails the upload.
-                    garbageCollectRemote(notebook, client)
+                    //
+                    // Only after a *guarded* commit. Unguarded (no/weak stored ETag) the manifest
+                    // publish is last-writer-wins, so this GC could delete a page a concurrent
+                    // device just uploaded while that device's own unguarded publish still succeeds
+                    // -- leaving the final manifest pointing at a file we removed. A guarded commit
+                    // cannot be reached under a concurrent remote change (it would 412 and abort),
+                    // so our manifest snapshot is current and pruning against it is safe. On no-ETag
+                    // servers orphan files instead linger until a later guarded upload or the
+                    // time-gated orphan sweep.
+                    when (val guard = manifestIfMatch.writeGuard()) {
+                        is WriteGuard.Guarded -> garbageCollectRemote(notebook, client)
+                        is WriteGuard.Unguarded -> log.i(
+                            TAG,
+                            "Skipping remote GC for ${notebook.title}: commit unguarded (${guard.explain()})"
+                        )
+                    }
                 }.map { }
             }
         }
@@ -486,12 +708,18 @@ class NotebookSyncService @Inject constructor(
      * page file's new server ETag (or `null` if the server sent none). [ifMatch] guards the page PUT
      * against a concurrent remote change; a 412 is resolved by [resolvePageConflict]. Pass `null`
      * for a page with no prior sync row.
+     *
+     * [createOnly] sends an `If-None-Match: *` create guard for a page we believe is absent on the
+     * server: a concurrent create by another device then 412s and is surfaced as
+     * [DomainError.SyncConflict] (never content-resolved, since there is no stored ETag to trust),
+     * so the caller aborts and re-plans instead of overwriting that device's page.
      */
     private suspend fun uploadPage(
         page: Page,
         notebookId: String,
         client: WebDAVClient,
-        ifMatch: ETag? = null
+        ifMatch: ETag? = null,
+        createOnly: Boolean = false
     ): AppResult<ETag?, DomainError> {
         val pageWithData =
             appRepository.pageRepository.getWithDataById(page.id) ?: return AppResult.Error(
@@ -508,7 +736,8 @@ class NotebookSyncService @Inject constructor(
             tempFile.outputStream().buffered().use { out ->
                 NotebookSerializer.serializePage(page, pageWithData.strokes, pageWithData.images, out)
             }
-            val guarded = client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch)
+            val guarded =
+                client.putFileReturningEtag(pagePath, tempFile, "application/json", ifMatch, createOnly)
             if (guarded is AppResult.Error && guarded.error is DomainError.SyncConflict && ifMatch != null) {
                 resolvePageConflict(page.id, pagePath, tempFile, client)
             } else {

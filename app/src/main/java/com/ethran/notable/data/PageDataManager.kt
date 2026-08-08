@@ -632,7 +632,13 @@ class PageDataManager @Inject constructor(
         synchronized(lock) { entries[pageId]?.backgroundIsNative = false }
         val value = CachedBackground(background, pageNumber, 1f)
         log.i("Preloaded background: $value")
-        setBackground(pageId, value)
+        // Link synchronously (not via the fire-and-forget [setBackground]) so a caller that awaited
+        // this load — loadPageFromDb, then requestCurrentPageLoadJoin — actually observes the
+        // background. A deferred publish would leave entry.backgroundKey null when the join runs, and
+        // ensureBackgroundLoaded would launch a *second* decode of the same image/PDF page. The
+        // inotify watch stays deferred (blocking file I/O, ordered against nothing).
+        linkBackground(pageId, value)
+        armBackgroundWatch(pageId, value)
     }
 
     private suspend fun loadPageFromDb(coroutineScope: CoroutineScope, pageId: String) {
@@ -1082,31 +1088,49 @@ class PageDataManager @Inject constructor(
     }
 
     fun setBackground(pageId: String, background: CachedBackground) {
+        // Fire-and-forget entry point (e.g. the delayed currentBackground property setter). The load
+        // path publishes synchronously via [linkBackground] instead — see [preLoadBackground].
+        dataScope.launch {
+            linkBackground(pageId, background)
+            armBackgroundWatch(pageId, background)
+        }
+    }
+
+    /**
+     * Publish [background] into the shared pool and link [pageId] to it — pure in-memory work under
+     * [lock], no I/O. Caller must hold no lock. Synchronous so an awaited load observes the link
+     * before it returns.
+     */
+    private fun linkBackground(pageId: String, background: CachedBackground) {
+        synchronized(lock) {
+            // Merge/upgrade the shared pool: keep the higher-scale (higher-quality) bitmap.
+            val existing = backgroundCache[background.id]
+            if (existing == null || background.scale > existing.scale) {
+                background.lastAccessSeq = ++bgAccessSeq
+                backgroundCache[background.id] = background
+                log.d("Cached background set: id=${background.id} scale=${background.scale}")
+            } else {
+                existing.lastAccessSeq = ++bgAccessSeq
+                log.d("Cached background exists with equal/higher scale; reusing id=${existing.id} scale=${existing.scale}")
+            }
+
+            // Link this page to the background key.
+            getOrCreateEntryLocked(pageId).backgroundKey = background.id
+
+            // Keep the pool within its own budget line right after every addition.
+            trimBackgroundsLocked()
+        }
+    }
+
+    /**
+     * Arm the inotify watch for [background] off the lock. Registering it stats the file and arms an
+     * inotify watch (blocking I/O), so it never runs with the drawing path blocked behind it, and it
+     * is deliberately not joined by the load — invalidation, not the initial render, needs it.
+     */
+    private fun armBackgroundWatch(pageId: String, background: CachedBackground) {
         dataScope.launch {
             // we assume that the pageId is in current notebook.
             val observeBg = appRepository.isObservable(pageFromDb?.notebookId)
-
-            synchronized(lock) {
-                // Merge/upgrade the shared pool: keep the higher-scale (higher-quality) bitmap.
-                val existing = backgroundCache[background.id]
-                if (existing == null || background.scale > existing.scale) {
-                    background.lastAccessSeq = ++bgAccessSeq
-                    backgroundCache[background.id] = background
-                    log.d("Cached background set: id=${background.id} scale=${background.scale}")
-                } else {
-                    existing.lastAccessSeq = ++bgAccessSeq
-                    log.d("Cached background exists with equal/higher scale; reusing id=${existing.id} scale=${existing.scale}")
-                }
-
-                // Link this page to the background key.
-                getOrCreateEntryLocked(pageId).backgroundKey = background.id
-
-                // Keep the pool within its own budget line right after every addition.
-                trimBackgroundsLocked()
-            }
-
-            // Registering the watch stats the file and arms an inotify watch, so it happens after
-            // the lock is released — never with the drawing path blocked behind it.
             if (observeBg) backgroundFileWatcher.watch(pageId, background.path)
         }
     }

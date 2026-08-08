@@ -64,6 +64,7 @@ import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.components.BreadCrumb
 import com.ethran.notable.ui.components.NotebookCard
 import com.ethran.notable.ui.components.ShowPagesRow
+import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
 import com.ethran.notable.ui.dialogs.FolderConfigDialog
 import com.ethran.notable.ui.dialogs.NotebookConfigDialog
@@ -335,13 +336,19 @@ fun NotebookGrid(
                     return@items
                 }
                 var isSettingsOpen by remember { mutableStateOf(false) }
+                var isConflictOpen by remember { mutableStateOf(false) }
                 NotebookCard(
                     bookId = book.id,
                     title = book.title,
                     pageIds = book.pageIds,
                     openPageId = book.openPageId,
                     syncBadge = syncBadges[book.id],
-                    onOpen = { bookId, pageId -> onNavigateToEditor(pageId, bookId) },
+                    // A conflicted notebook opens the resolution dialog on tap — the reachable entry
+                    // point for the CONFLICT badge — instead of the editor.
+                    onOpen = { bookId, pageId ->
+                        if (syncBadges[bookId] == SyncBadge.CONFLICT) isConflictOpen = true
+                        else onNavigateToEditor(pageId, bookId)
+                    },
                     onOpenSettings = { isSettingsOpen = true },
                     onPreviewMissing = onPreviewMissing
                 )
@@ -352,6 +359,13 @@ fun NotebookGrid(
                         exportEngine = exportEngine,
                         syncScheduler = syncScheduler,
                         bookId = book.id, onClose = { isSettingsOpen = false })
+                }
+
+                if (isConflictOpen) {
+                    ConflictResolutionDialog(
+                        bookId = book.id,
+                        title = book.title,
+                        onClose = { isConflictOpen = false })
                 }
             }
         }

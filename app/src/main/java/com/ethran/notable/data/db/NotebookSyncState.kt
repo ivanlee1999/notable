@@ -43,6 +43,13 @@ object SyncStateValue {
 
     /** Remote is newer than local, but it was not pulled (upload-only mode). */
     const val REMOTE_AHEAD = "REMOTE_AHEAD"
+
+    /**
+     * At least one page was edited both locally and on the server since the last common sync, and the
+     * conflict strategy is ASK. Nothing was overwritten; the user must resolve it. Re-detected each
+     * sync until resolved, so this is safe to lose (recomputed from ETags + local dirtiness).
+     */
+    const val CONFLICT = "CONFLICT"
 }
 
 @Dao
@@ -132,6 +139,44 @@ class NotebookSyncStateRepository @Inject constructor(
                 remoteUpdatedAt = existing?.remoteUpdatedAt,
                 remoteEtag = existing?.remoteEtag,
                 lastError = message,
+            )
+        )
+    }
+
+    /**
+     * Record that a notebook has an unresolved page conflict (ASK strategy). Non-destructive:
+     * preserves the previous anchor and — crucially — the previous manifest [remoteEtag], so the next
+     * sync's conditional GET still sees the remote as changed and re-enters reconciliation to
+     * re-detect (or clear) the conflict, rather than reading it as "in sync". Nothing here overwrites
+     * page content; the divergence stays on disk until the user resolves it.
+     */
+    suspend fun markConflict(notebookId: String) {
+        val existing = dao.get(notebookId)
+        dao.upsert(
+            NotebookSyncState(
+                notebookId = notebookId,
+                state = SyncStateValue.CONFLICT,
+                lastSyncedAt = Date(),
+                syncedLocalUpdatedAt = existing?.syncedLocalUpdatedAt ?: Date(0),
+                remoteUpdatedAt = existing?.remoteUpdatedAt,
+                remoteEtag = existing?.remoteEtag,
+            )
+        )
+    }
+
+    /**
+     * Adopt [remoteEtag] as the manifest base while KEEPING the previous change anchor, clearing the
+     * CONFLICT state. Because the anchor is not advanced, a still-newer local copy stays dirty and is
+     * uploaded next sync (winning the now-current guard). Used to force the local version after a
+     * user resolves a structural conflict in favor of local. A no-op if no row exists.
+     */
+    suspend fun rebaselineToRemoteEtag(notebookId: String, remoteEtag: String?) {
+        val existing = dao.get(notebookId) ?: return
+        dao.upsert(
+            existing.copy(
+                state = SyncStateValue.SYNCED,
+                lastSyncedAt = Date(),
+                remoteEtag = remoteEtag,
             )
         )
     }

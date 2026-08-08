@@ -241,20 +241,22 @@ class WebDAVClient(
      * the streaming counterpart of the `ByteArray` overload above. Used for per-page uploads: the
      * page JSON is streamed from a temp file to bound memory, and the returned ETag is stored in
      * `page_sync_state` so the next sync can skip the page when unchanged. Returns
-     * [DomainError.SyncConflict] on a 412 (the [ifMatch] guard).
+     * [DomainError.SyncConflict] on a 412 — either the [ifMatch] update guard failing, or, when
+     * [createOnly] is set, `If-None-Match: *` rejecting a resource that already exists.
      */
     fun putFileReturningEtag(
         path: String,
         localFile: File,
         contentType: String = "application/octet-stream",
-        ifMatch: ETag? = null
+        ifMatch: ETag? = null,
+        createOnly: Boolean = false
     ): AppResult<ETag?, DomainError> {
         if (!localFile.exists()) return AppResult.Error(DomainError.SyncError("Local file missing"))
         return execute("PUT", {
             val requestBody = localFile.asRequestBody(contentType.toMediaType())
             Request.Builder().url(buildUrl(path)).put(requestBody)
                 .header("Authorization", credentials)
-                .applyWriteGuard(ifMatch)
+                .applyWritePrecondition(ifMatch, createOnly)
                 .build()
         }) { response ->
             when {
@@ -587,6 +589,19 @@ class WebDAVClient(
     private fun Request.Builder.applyWriteGuard(ifMatch: ETag?): Request.Builder = apply {
         val guard = ifMatch.writeGuard()
         if (guard is WriteGuard.Guarded) header("If-Match", guard.header)
+    }
+
+    /**
+     * Choose a PUT's precondition. [createOnly] sends `If-None-Match: *` — the write succeeds only if
+     * the resource does not yet exist, so a page another device created between our listing and this
+     * PUT makes the server return 412 instead of us overwriting it. Otherwise fall back to the
+     * [ifMatch] update guard (which is itself dropped for weak/absent tags — see [applyWriteGuard]).
+     */
+    private fun Request.Builder.applyWritePrecondition(
+        ifMatch: ETag?,
+        createOnly: Boolean
+    ): Request.Builder = apply {
+        if (createOnly) header("If-None-Match", "*") else applyWriteGuard(ifMatch)
     }
 
     private fun propfindRequest(path: String, body: String): Request {

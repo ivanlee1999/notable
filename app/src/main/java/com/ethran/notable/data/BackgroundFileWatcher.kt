@@ -84,7 +84,32 @@ class BackgroundFileWatcher @Inject constructor(
                 log.w("Cannot observe background file: $filePath does not exist or is not readable")
                 return
             }
-            val observer = newObserver(pageId, file, filePath)
+            val observer = newObserver(file, filePath)
+            observer.startWatching()
+            observers[filePath] = observer
+        }
+    }
+
+    /**
+     * After a delete/recreate, re-install an observer for [filePath] — but **only if pages still use
+     * it**, and without touching the page set.
+     *
+     * Re-arming by the page id that first created the observer (as the old code did) resurrects an
+     * evicted page: with a PDF shared by several pages, the creator can be evicted while another page
+     * still shows the file, and re-adding it leaves a zombie id in [pagesByFile] plus, if every real
+     * user unwatched during [waitForFileAvailable], a live observer for a file nobody displays.
+     * Re-checking [pagesByFile] here is the single source of truth for "does anyone still need this".
+     */
+    private fun rearm(filePath: String) {
+        synchronized(registryLock) {
+            if (pagesByFile[filePath].isNullOrEmpty()) return // all real users gone -> stay unwatched
+            if (observers.containsKey(filePath)) return       // someone already re-armed it
+            val file = File(filePath)
+            if (!file.exists() || !file.canRead()) {
+                log.w("Cannot re-observe background file: $filePath does not exist or is not readable")
+                return
+            }
+            val observer = newObserver(file, filePath)
             observer.startWatching()
             observers[filePath] = observer
         }
@@ -119,7 +144,7 @@ class BackgroundFileWatcher @Inject constructor(
         }
     }
 
-    private fun newObserver(pageId: String, file: File, filePath: String): FileObserver =
+    private fun newObserver(file: File, filePath: String): FileObserver =
         object : FileObserver(file, WATCH_MASK) {
             override fun onEvent(event: Int, path: String?) {
                 // FileObserver calls this on its own thread; do the work on our scope so nothing
@@ -140,7 +165,9 @@ class BackgroundFileWatcher @Inject constructor(
                             )
                             return@launch
                         }
-                        watch(pageId, filePath)
+                        // Re-arm by file path, re-checking who still uses it -- never by a captured
+                        // page id, which may have been evicted while this observer waited.
+                        rearm(filePath)
                     }
 
                     fileChanges.emit(filePath)

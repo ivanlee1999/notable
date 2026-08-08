@@ -9,6 +9,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -41,10 +43,27 @@ class PageViewportState @Inject constructor() {
     // shares the mechanism rather than needing a second map with its own lock.
     private val zooms = mutableStateMapOf<String, Float>()
 
+    // Per-page write generation, bumped on every set. A scheduled removal captures the generation
+    // live at schedule time; the deferred cleanup only fires if it still matches. This is what makes
+    // an evict-then-immediately-reselect safe: the reload writes fresh viewport values (bumping the
+    // generation) before the stale removal runs, so the removal is dropped instead of erasing them.
+    private val generation = ConcurrentHashMap<String, Long>()
+    private val generationSeq = AtomicLong(0)
+
+    // Serializes a setter's write+bump against the collector's compare+remove so the two can't
+    // interleave (a setter landing between the collector's equality check and its removal would
+    // otherwise still lose the fresh value). Held only by setters and the collector — never by
+    // [scheduleRemoval], which runs under the cache lock and must not block on a snapshot commit —
+    // and never while the cache lock is held, so no lock-ordering inversion. Composition reads take
+    // it not at all (the getters are lock-free).
+    private val removalLock = Any()
+
+    private data class Removal(val pageId: String, val generation: Long?)
+
     // Eviction can burst (trimToBudget drops many pages at once) and pruning is pure cleanup, so a
     // generous buffer that drops the oldest on overflow is fine: a leaked height/scroll entry for a
     // page nobody is looking at costs a map slot, and is overwritten if the page comes back.
-    private val removals = MutableSharedFlow<String>(
+    private val removals = MutableSharedFlow<Removal>(
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
@@ -53,11 +72,20 @@ class PageViewportState @Inject constructor() {
 
     init {
         scope.launch {
-            removals.collect { pageId ->
-                mutateUiState {
-                    heights.remove(pageId)
-                    scrolls.remove(pageId)
-                    zooms.remove(pageId)
+            removals.collect { (pageId, scheduledGeneration) ->
+                synchronized(removalLock) {
+                    mutateUiState {
+                        // Only forget the page if nothing wrote its viewport since the removal was
+                        // scheduled. A reload that re-selected the page bumps its generation, so a
+                        // stale removal drops out here instead of wiping the fresh height/scroll/zoom.
+                        // The lock makes this check-and-remove atomic against a concurrent setter.
+                        if (generation[pageId] == scheduledGeneration) {
+                            heights.remove(pageId)
+                            scrolls.remove(pageId)
+                            zooms.remove(pageId)
+                            generation.remove(pageId)
+                        }
+                    }
                 }
             }
         }
@@ -67,19 +95,24 @@ class PageViewportState @Inject constructor() {
      * Forget [pageId]'s viewport state, eventually.
      *
      * The one method that may be called under a lock — it appends to a buffered flow and returns,
-     * running no Compose code inline. The removal is applied on this class's own scope. Nothing
-     * observes the gap: a stale entry for an evicted page is only read again if the page is
-     * reloaded, and a reload rewrites both values.
+     * running no Compose code inline. The removal is applied on this class's own scope, and carries
+     * the page's current write [generation] so a reload that re-selects the page before the cleanup
+     * runs (bumping the generation) cancels the stale removal rather than losing its fresh values.
      */
     fun scheduleRemoval(pageId: String) {
-        removals.tryEmit(pageId)
+        removals.tryEmit(Removal(pageId, generation[pageId]))
     }
 
     /** Stored content height, or null if this page has none yet. Lock-free; safe in composition. */
     fun height(pageId: String): Int? = heights[pageId]
 
     fun setHeight(pageId: String, height: Int) {
-        mutateUiState { heights[pageId] = height }
+        synchronized(removalLock) {
+            mutateUiState {
+                heights[pageId] = height
+                generation[pageId] = generationSeq.incrementAndGet()
+            }
+        }
     }
 
     /**
@@ -90,7 +123,12 @@ class PageViewportState @Inject constructor() {
     fun scroll(pageId: String): Offset? = scrolls[pageId]
 
     fun setScroll(pageId: String, scroll: Offset) {
-        mutateUiState { scrolls[pageId] = scroll }
+        synchronized(removalLock) {
+            mutateUiState {
+                scrolls[pageId] = scroll
+                generation[pageId] = generationSeq.incrementAndGet()
+            }
+        }
     }
 
     /**
@@ -100,7 +138,12 @@ class PageViewportState @Inject constructor() {
     fun zoom(pageId: String): Float? = zooms[pageId]
 
     fun setZoom(pageId: String, zoom: Float) {
-        mutateUiState { zooms[pageId] = zoom }
+        synchronized(removalLock) {
+            mutateUiState {
+                zooms[pageId] = zoom
+                generation[pageId] = generationSeq.incrementAndGet()
+            }
+        }
     }
 
     private inline fun <T> mutateUiState(block: () -> T): T = Snapshot.withMutableSnapshot(block)

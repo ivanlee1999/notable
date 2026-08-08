@@ -22,4 +22,6 @@ data class SyncSettings(
     val uploadOnly: Boolean = false,
     /** Only pull from the server; never push local changes/deletions (mirror of [uploadOnly]). */
     val downloadOnly: Boolean = false,
+    /** How to resolve a genuine same-page conflict; independent edits always merge. */
+    val conflictStrategy: SyncConflictStrategy = SyncConflictStrategy.ASK,
 )

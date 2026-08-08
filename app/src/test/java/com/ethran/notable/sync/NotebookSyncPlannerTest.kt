@@ -16,6 +16,7 @@ class NotebookSyncPlannerTest {
         remoteChanged: Boolean,
         remote: RemoteManifestInfo?,
         uploadOnly: Boolean = false,
+        downloadOnly: Boolean = false,
     ): NotebookAction = NotebookSyncPlanner.decide(
         localUpdatedAt = localUpdatedAt,
         syncedLocalUpdatedAt = syncedLocalUpdatedAt,
@@ -23,6 +24,7 @@ class NotebookSyncPlannerTest {
         remoteChanged = remoteChanged,
         remote = remote,
         uploadOnly = uploadOnly,
+        downloadOnly = downloadOnly,
     )
 
     // ---- remote unchanged (304) ----
@@ -116,7 +118,9 @@ class NotebookSyncPlannerTest {
     }
 
     @Test
-    fun remoteChanged_withinTolerance_skips() {
+    fun remoteChanged_withinTolerance_reconciles() {
+        // Manifest ETag changed but timestamps tie: a tie can't prove page equality, so we reconcile
+        // per page rather than Skip into a metadata-only markSynced.
         val action = decide(
             localUpdatedAt = 10_500,
             syncedLocalUpdatedAt = 4_000,
@@ -124,7 +128,36 @@ class NotebookSyncPlannerTest {
             remoteChanged = true,
             remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")), // +500ms
         )
-        assertEquals(NotebookAction.Skip, action)
+        assertEquals(NotebookAction.Reconcile, action)
+    }
+
+    @Test
+    fun remoteChanged_withinTolerance_uploadOnly_skipsUploadOnly() {
+        // Reconcile needs both directions; upload-only can't pull, so it surfaces REMOTE_AHEAD,
+        // never a false SYNCED.
+        val action = decide(
+            localUpdatedAt = 10_500,
+            syncedLocalUpdatedAt = 4_000,
+            storedEtag = "old",
+            remoteChanged = true,
+            remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")),
+            uploadOnly = true,
+        )
+        assertEquals(NotebookAction.SkipUploadOnly, action)
+    }
+
+    @Test
+    fun remoteChanged_withinTolerance_downloadOnly_downloads() {
+        // Download-only keeps the pull half of the reconcile; the local-push half is simply skipped.
+        val action = decide(
+            localUpdatedAt = 10_500,
+            syncedLocalUpdatedAt = 4_000,
+            storedEtag = "old",
+            remoteChanged = true,
+            remote = RemoteManifestInfo(updatedAt = 10_000, etag = ETag.parse("fresh")),
+            downloadOnly = true,
+        )
+        assertEquals(NotebookAction.Download, action)
     }
 
     @Test

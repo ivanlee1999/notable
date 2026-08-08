@@ -119,7 +119,7 @@ class SyncOrchestrator @Inject constructor(
             )
             val localIdsSnapshot = appRepository.bookRepository.getAll().map { it.id }.toSet()
             val preDownloadIds = when (
-                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly)
+                val syncResult = notebookReconciliationService.syncExistingNotebooks(client, remoteNotebookIds, uploadOnly, downloadOnly, settings.conflictStrategy)
             ) {
                 is AppResult.Success -> syncResult.data
                 // Per-notebook failures are NON-CRITICAL: each failed notebook was marked ERROR
@@ -245,7 +245,8 @@ class SyncOrchestrator @Inject constructor(
                         notebookId,
                         client,
                         settings.uploadOnly,
-                        settings.downloadOnly
+                        settings.downloadOnly,
+                        settings.conflictStrategy
                     )
                 }
                 AppResult.Success(Unit)
@@ -357,6 +358,68 @@ class SyncOrchestrator @Inject constructor(
         } finally {
             syncMutex.unlock()
         }
+    }
+
+    /**
+     * The full conflict picture for [notebookId] — the pages edited on both sides plus whether the
+     * manifests diverge structurally. For the resolution UI: read-only, holds no sync mutex. Returns
+     * an empty [NotebookConflict] when sync is off/unconfigured or the notebook is gone.
+     */
+    suspend fun notebookConflict(notebookId: String): AppResult<NotebookConflict, DomainError> =
+        withContext(ioDispatcher) {
+            val settings = kvProxy.getSyncSettings()
+            if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+                return@withContext AppResult.Success(NotebookConflict(emptyList(), structural = false))
+            }
+            val notebook = appRepository.bookRepository.getById(notebookId)
+                ?: return@withContext AppResult.Success(NotebookConflict(emptyList(), structural = false))
+            val client =
+                webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+            notebookSyncService.detectConflicts(notebook, client)
+        }
+
+    /**
+     * Apply the user's [resolution] to one conflicted page, then run a normal single-notebook sync so
+     * the choice is actually transferred and — once the last conflict is resolved — the CONFLICT
+     * badge clears. Skips the sync for [PageConflictResolution.SKIP], which changes nothing.
+     */
+    suspend fun resolvePageConflict(
+        notebookId: String,
+        pageId: String,
+        resolution: PageConflictResolution
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+        val settings = kvProxy.getSyncSettings()
+        if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+            return@withContext AppResult.Error(DomainError.SyncConfigError)
+        }
+        val client =
+            webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+        notebookSyncService.resolveConflictedPage(notebookId, pageId, resolution, client)
+            .onFailure { return@withContext AppResult.Error(it) }
+        if (resolution == PageConflictResolution.SKIP) AppResult.Success(Unit)
+        else syncNotebook(notebookId)
+    }
+
+    /**
+     * Apply a whole-notebook [resolution] for a structural conflict. TAKE_SERVER downloads the server
+     * copy (which commits as synced); KEEP_LOCAL adopts the server ETags as our base and then runs a
+     * normal sync, which uploads the local copy over the server. Either way the CONFLICT badge clears
+     * once it completes.
+     */
+    suspend fun resolveNotebookConflict(
+        notebookId: String,
+        resolution: NotebookConflictResolution
+    ): AppResult<Unit, DomainError> = withContext(ioDispatcher) {
+        val settings = kvProxy.getSyncSettings()
+        if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+            return@withContext AppResult.Error(DomainError.SyncConfigError)
+        }
+        val client =
+            webDavClientFactory.create(settings.serverUrl, settings.username, settings.password)
+        notebookSyncService.resolveNotebookConflict(notebookId, resolution, client)
+            .onFailure { return@withContext AppResult.Error(it) }
+        if (resolution == NotebookConflictResolution.TAKE_SERVER) AppResult.Success(Unit)
+        else syncNotebook(notebookId)
     }
 
     /** Report [error] as the terminal state of the current sync and return it as a failure. */

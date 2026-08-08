@@ -6,6 +6,8 @@ import com.ethran.notable.sync.serializers.NotebookSerializer
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import com.ethran.notable.utils.ErrorAccumulator
+import com.ethran.notable.utils.getOrElse
+import com.ethran.notable.utils.getOrNull
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import java.util.Date
@@ -31,7 +33,8 @@ class NotebookReconciliationService @Inject constructor(
         client: WebDAVClient,
         remoteNotebookIds: Set<String>,
         uploadOnly: Boolean,
-        downloadOnly: Boolean
+        downloadOnly: Boolean,
+        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Set<String>, DomainError> {
         val localNotebooks = appRepository.bookRepository.getAll()
         val preDownloadNotebookIds = localNotebooks.map { it.id }.toSet()
@@ -42,7 +45,8 @@ class NotebookReconciliationService @Inject constructor(
             reporter.beginItem(index = i + 1, total = total, name = notebook.title, id = notebook.id)
             // Individual notebook sync failures are non-fatal for the whole process.
             reconcileNotebook(
-                notebook.id, client, remoteNotebookIds.contains(notebook.id), uploadOnly, downloadOnly
+                notebook.id, client, remoteNotebookIds.contains(notebook.id),
+                uploadOnly, downloadOnly, conflictStrategy
             ).onError { errors.add(it) }
         }
         reporter.endItem()
@@ -58,14 +62,17 @@ class NotebookReconciliationService @Inject constructor(
         notebookId: String,
         client: WebDAVClient,
         uploadOnly: Boolean,
-        downloadOnly: Boolean
+        downloadOnly: Boolean,
+        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Unit, DomainError> {
         log.i(TAG, "Syncing notebook: $notebookId")
         // If we cannot determine whether the remote manifest exists (e.g. transient network error),
         // abort this notebook rather than fall through to an unguarded upload (P2).
         val remotePresent = client.exists(SyncPaths.manifestFile(notebookId))
             .onFailure { return AppResult.Error(it) }
-        return reconcileNotebook(notebookId, client, remotePresent, uploadOnly, downloadOnly)
+        return reconcileNotebook(
+            notebookId, client, remotePresent, uploadOnly, downloadOnly, conflictStrategy
+        )
     }
 
     private suspend fun reconcileNotebook(
@@ -73,7 +80,8 @@ class NotebookReconciliationService @Inject constructor(
         client: WebDAVClient,
         remotePresent: Boolean,
         uploadOnly: Boolean,
-        downloadOnly: Boolean
+        downloadOnly: Boolean,
+        conflictStrategy: SyncConflictStrategy,
     ): AppResult<Unit, DomainError> {
         val localNotebook = appRepository.bookRepository.getById(notebookId)
             ?: return AppResult.Error(DomainError.NotFound("Notebook $notebookId"))
@@ -97,6 +105,9 @@ class NotebookReconciliationService @Inject constructor(
         // run — treat the remote as absent and self-heal by re-uploading the local copy (P6/3a).
         val remoteChanged: Boolean
         val remote: RemoteManifestInfo?
+        // The parsed remote manifest, kept for reconciliation so a within-tolerance tie can compare
+        // structure without a second fetch. Null when the remote is unchanged (304).
+        val remoteNotebook: Notebook?
         if (storedEtag != null) {
             when (val fetched = client.getFileIfNoneMatch(manifestPath, storedEtag)) {
                 is AppResult.Error -> {
@@ -109,9 +120,11 @@ class NotebookReconciliationService @Inject constructor(
                     if (fetched.data == null) {
                         remoteChanged = false
                         remote = null
+                        remoteNotebook = null
                     } else {
                         remoteChanged = true
                         remote = fetched.data.toManifestInfo()
+                        remoteNotebook = fetched.data.toNotebook()
                     }
                 }
             }
@@ -126,6 +139,7 @@ class NotebookReconciliationService @Inject constructor(
                 is AppResult.Success -> {
                     remoteChanged = true
                     remote = fetched.data.toManifestInfo()
+                    remoteNotebook = fetched.data.toNotebook()
                 }
             }
         }
@@ -147,6 +161,9 @@ class NotebookReconciliationService @Inject constructor(
             }
 
             NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client)
+
+            NotebookAction.Reconcile ->
+                reconcileConcurrentEdits(notebookId, localNotebook, remoteNotebook, client, conflictStrategy)
 
             NotebookAction.SkipUploadOnly -> {
                 // Upload-only mode: remote is newer but we never pull. This is a planned no-op, not
@@ -185,6 +202,67 @@ class NotebookReconciliationService @Inject constructor(
                 )
                 AppResult.Success(Unit)
             }
+        }
+    }
+
+    /**
+     * Concurrent edits within the timestamp tolerance. Separate a genuine conflict from independent
+     * edits before touching anything:
+     *
+     * - **Same-page conflict** (a page edited on both sides) or **structural conflict** (the manifests
+     *   disagree on page set, order, title, or open page) → non-mergeable. Dispatch on
+     *   [conflictStrategy]; only [SyncConflictStrategy.ASK] is implemented: flag the notebook
+     *   (CONFLICT badge) and leave both copies untouched for the user to resolve. Crucially the merge
+     *   below is skipped, so a locally-added/reordered/renamed manifest is never overwritten by the
+     *   download. Unimplemented automatic strategies fall back to ASK rather than crash a background
+     *   sync.
+     * - **No conflict** (identical structure, at most different-page content edits) → merge
+     *   losslessly: pull every remotely-changed page, then push any page that is only locally changed.
+     *   The download is safe here precisely because the manifests match, so it drops no local page.
+     *   The republish is skipped when nothing is locally dirty, so two already-converged devices don't
+     *   ping-pong the manifest ETag and re-trigger each other.
+     *
+     * [remoteNotebook] is the manifest already fetched by [reconcileNotebook]; a null one (unreadable
+     * remote structure) is treated as a structural conflict, the safe reading.
+     */
+    private suspend fun reconcileConcurrentEdits(
+        notebookId: String,
+        localNotebook: Notebook,
+        remoteNotebook: Notebook?,
+        client: WebDAVClient,
+        conflictStrategy: SyncConflictStrategy,
+    ): AppResult<Unit, DomainError> {
+        val pageConflicts = notebookSyncService.detectPageConflicts(localNotebook, client)
+            .getOrElse { return AppResult.Error(it) }
+        val structural =
+            remoteNotebook == null || notebookSyncService.structurallyDiverges(localNotebook, remoteNotebook)
+
+        if (pageConflicts.isNotEmpty() || structural) {
+            when (conflictStrategy) {
+                SyncConflictStrategy.ASK -> Unit
+                SyncConflictStrategy.SERVER_WINS, SyncConflictStrategy.LOCAL_WINS ->
+                    log.w(TAG, "Conflict strategy $conflictStrategy not implemented yet; asking instead")
+            }
+            log.i(
+                TAG,
+                "⚠ Conflict in ${localNotebook.title} (${pageConflicts.size} page(s)" +
+                    "${if (structural) ", structural" else ""}); flagging for the user"
+            )
+            appRepository.notebookSyncStateRepository.markConflict(notebookId)
+            return AppResult.Success(Unit)
+        }
+
+        log.i(TAG, "⇄ Independent concurrent edits for ${localNotebook.title}; merging per page")
+        notebookSyncService.downloadNotebook(notebookId, client)
+            .onFailure { return AppResult.Error(it) }
+
+        val refreshed = appRepository.bookRepository.getById(notebookId) ?: localNotebook
+        return if (notebookSyncService.hasLocallyDirtyPages(refreshed)) {
+            val storedAfter =
+                ETag.parse(appRepository.notebookSyncStateRepository.get(notebookId)?.remoteEtag)
+            notebookSyncService.uploadNotebook(refreshed, client, storedAfter)
+        } else {
+            AppResult.Success(Unit)
         }
     }
 
@@ -234,6 +312,10 @@ class NotebookReconciliationService @Inject constructor(
         val updatedAt = NotebookSerializer.getManifestUpdatedAt(content.decodeToString())?.time
         return RemoteManifestInfo(updatedAt = updatedAt, etag = etag)
     }
+
+    /** The fully parsed remote manifest, or null if it could not be deserialized. */
+    private fun DownloadedFile.toNotebook(): Notebook? =
+        NotebookSerializer.deserializeManifest(content.decodeToString()).getOrNull()
 
     companion object {
         private const val TAG = "NotebookReconciliationService"
