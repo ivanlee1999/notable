@@ -3,6 +3,7 @@ package com.ethran.notable.sync
 import android.content.Context
 import android.net.Uri
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageSyncState
@@ -20,6 +21,7 @@ import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import com.ethran.notable.utils.onSuccess
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.security.MessageDigest
 import java.util.Date
@@ -31,6 +33,7 @@ import javax.inject.Singleton
 class NotebookSyncService @Inject constructor(
     private val appRepository: AppRepository,
     private val reporter: SyncProgressReporter,
+    private val kvProxy: KvProxy,
     @param:ApplicationContext private val context: Context
 ) {
     private val log = SyncLogger
@@ -577,9 +580,13 @@ class NotebookSyncService @Inject constructor(
      * The tmp file is cleaned up best-effort; if left behind (interrupted before MOVE) it is simply
      * overwritten by the next upload.
      *
-     * Returns the published manifest's ETag when known. The MOVE path can't reliably report the
-     * destination's post-move ETag, so it returns `null` there — self-correcting, since the next
-     * sync does one full GET and the skip path backfills the ETag.
+     * Returns the published manifest's ETag when known. MOVE carries no destination ETag (RFC 4918),
+     * so it is learned one of two ways: on a server measured to preserve the ETag across MOVE
+     * ([ServerCapabilities.movePreservesEtag] for the current server key) the tmp PUT's ETag *is* the
+     * destination's and is returned directly, saving a readback; otherwise a `PROPFIND Depth:0` reads
+     * it back. Either can be `null` (server issued no ETag, or a failed readback) — self-correcting,
+     * since the next sync's conditional GET returns a body on mismatch and re-establishes the
+     * validator.
      */
     private suspend fun publishManifest(
         notebookId: String,
@@ -591,22 +598,34 @@ class NotebookSyncService @Inject constructor(
         val tmpPath = "$finalPath.tmp"
         // Whether we actually sent a precondition decides how to read a 412 below.
         val guard = ifMatch.writeGuard()
+        // Snapshot the capability before publishing. Most importantly, bind it to this client's
+        // endpoint rather than mutable settings that the user can edit while a sync is running.
+        val reuseMovedEtag = movePreservesEtag(client)
 
-        client.putFile(tmpPath, manifestBytes, "application/json")
-            .onFailure { return AppResult.Error(it) }
+        // Capture the tmp PUT's ETag so it can be reused as the destination's on a server measured to
+        // preserve ETags across MOVE, avoiding the readback PROPFIND below.
+        val tmpEtag = client.putFileReturningEtag(tmpPath, manifestBytes, "application/json")
+            .getOrElse { return AppResult.Error(it) }
 
         return when (val moved = client.move(tmpPath, finalPath, ifMatchDestination = ifMatch)) {
             is AppResult.Success -> {
-                // MOVE carries no ETag for its destination (RFC 4918), so read the manifest's ETag
-                // back with a cheap PROPFIND Depth:0. Without this the row committed unguarded (null
-                // ETag) even on servers that DO issue ETags (e.g. Nextcloud) -- forfeiting next
-                // sync's conditional-304 skip and the guarded remote GC. A failed readback degrades
-                // to null (unguarded, but the MOVE already succeeded), never failing the publish.
-                val readback = client.resourceEtag(finalPath).getOrElse { null }
-                if (readback == null) {
-                    log.w(TAG, "Manifest ETag readback empty for $notebookId; commit will be unguarded")
+                // MOVE carries no ETag for its destination (RFC 4918). When the server is measured to
+                // keep the tmp file's ETag across MOVE, that captured ETag *is* the manifest's now --
+                // reuse it and skip the read. Otherwise read it back with a cheap PROPFIND Depth:0.
+                // Without a validator the row commits unguarded even on servers that DO issue ETags
+                // (e.g. Nextcloud) -- forfeiting next sync's conditional-304 skip and the guarded
+                // remote GC. A wrong reused ETag self-corrects on the next conditional GET; a failed
+                // readback degrades to null (unguarded, but the MOVE already succeeded), never
+                // failing the publish.
+                val destEtag = if (tmpEtag != null && reuseMovedEtag) {
+                    tmpEtag
+                } else {
+                    client.resourceEtag(finalPath).getOrElse { null }
                 }
-                AppResult.Success(readback)
+                if (destEtag == null) {
+                    log.w(TAG, "Manifest ETag unknown for $notebookId; commit will be unguarded")
+                }
+                AppResult.Success(destEtag)
             }
             is AppResult.Error -> {
                 client.delete(tmpPath) // best-effort cleanup either way
@@ -620,6 +639,25 @@ class NotebookSyncService @Inject constructor(
                     client.putFileReturningEtag(finalPath, manifestBytes, "application/json", ifMatch)
                 }
             }
+        }
+    }
+
+    /**
+     * Whether the current server was *measured* to keep a resource's ETag across a MOVE, so the tmp
+     * PUT's ETag can stand in for the post-MOVE destination ETag. Only trusted when the stored
+     * capability's key matches the server about to be written — a record from a different server (URL
+     * or username) is stale and ignored. Any missing piece answers `false`, keeping the safe readback.
+     */
+    private suspend fun movePreservesEtag(client: WebDAVClient): Boolean {
+        return try {
+            canReuseMovedEtag(kvProxy.getServerCapabilities(), client.serverKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Capability storage is optional optimization state. A read/decode/database failure
+            // must not fail a manifest upload; retain the safe destination-Etag readback instead.
+            log.w(TAG, "Could not read MOVE capability; using manifest ETag readback: ${e.message}")
+            false
         }
     }
 
@@ -1185,3 +1223,10 @@ class NotebookSyncService @Inject constructor(
         private const val TAG = "NotebookSyncService"
     }
 }
+
+/** Pure capability gate kept separate so server-key mismatch behavior is pinned by unit tests. */
+internal fun canReuseMovedEtag(
+    capabilities: ServerCapabilities?,
+    clientServerKey: String
+): Boolean = capabilities?.movePreservesEtag == true &&
+    capabilities.serverKey == clientServerKey

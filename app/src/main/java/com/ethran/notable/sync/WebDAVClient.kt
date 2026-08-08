@@ -105,6 +105,9 @@ class WebDAVClient(
 ) {
     private val credentials = Credentials.basic(username, password)
 
+    /** Identity of the endpoint this client actually targets; capability gates must match this. */
+    internal val serverKey: String = ServerCapabilities.serverKey(serverUrl, username)
+
     /**
      * Test connection to WebDAV server.
      * Checks server connectivity and detects clock skew.
