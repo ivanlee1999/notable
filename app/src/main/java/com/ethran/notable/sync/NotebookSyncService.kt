@@ -29,6 +29,41 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Below this many deletions the mass-deletion guard never trips, so ordinary single/few deletes
+ * always propagate. See [looksLikeStaleStateWipe].
+ */
+internal const val MASS_DELETION_SAFETY_FLOOR = 10
+
+/**
+ * Whether deleting [deletionCount] notebooks out of a reference set of [referenceCount] is better
+ * explained by lost local state than by an intentional bulk delete — at least
+ * [MASS_DELETION_SAFETY_FLOOR] notebooks AND a strict majority of the reference set. Callers refuse
+ * the deletion when this holds, so a device whose local rows were wiped while sync-state survived
+ * cannot tombstone the whole server. Pure, so the guard is unit-testable independently of any I/O.
+ *
+ * [referenceCount] is what the deletions are measured against: all synced notebooks when detecting
+ * local deletions, or the full server set when force upload prunes server-only notebooks.
+ */
+internal fun looksLikeStaleStateWipe(deletionCount: Int, referenceCount: Int): Boolean =
+    deletionCount >= MASS_DELETION_SAFETY_FLOOR && deletionCount > referenceCount / 2
+
+/**
+ * Select remote notebooks that are absent locally and may be downloaded. A sync-state row suppresses
+ * the download only when local deletion is authoritative; download-only devices are mirrors, so a
+ * missing local notebook must be restored even when stale sync bookkeeping still exists for it.
+ */
+internal fun selectNewRemoteNotebookIds(
+    remoteNotebookIds: Set<String>,
+    localNotebookIds: Set<String>,
+    tombstonedIds: Set<String>,
+    syncedNotebookIds: Set<String>,
+    downloadOnly: Boolean,
+): List<String> = remoteNotebookIds
+    .filter { it !in localNotebookIds }
+    .filter { it !in tombstonedIds }
+    .filter { downloadOnly || it !in syncedNotebookIds }
+
 @Singleton
 class NotebookSyncService @Inject constructor(
     private val appRepository: AppRepository,
@@ -59,10 +94,23 @@ class NotebookSyncService @Inject constructor(
                     val deletedAt = tombstone.lastModified
                     val localNotebook = appRepository.bookRepository.getById(notebookId) ?: continue
 
-                    if (deletedAt != null && localNotebook.updatedAt.after(deletedAt)) {
+                    if (deletedAt != null) {
+                        // Dated tombstone: keep the local copy if it was edited after the deletion.
+                        if (localNotebook.updatedAt.after(deletedAt)) {
+                            log.i(
+                                TAG,
+                                "↻ Resurrecting '${localNotebook.title}' (modified after server deletion)"
+                            )
+                            continue
+                        }
+                    } else if (hasUnsyncedLocalEdits(notebookId, localNotebook)) {
+                        // Undated tombstone (server omitted Last-Modified): we cannot prove the local
+                        // copy predates the deletion, so deleting it could drop work edited after
+                        // another device removed the notebook. Only delete a clean copy; keep one with
+                        // unsynced edits until a dated tombstone arrives or the user resolves it.
                         log.i(
                             TAG,
-                            "↻ Resurrecting '${localNotebook.title}' (modified after server deletion)"
+                            "↻ Keeping '${localNotebook.title}': undated tombstone but local has unsynced edits"
                         )
                         continue
                     }
@@ -100,6 +148,18 @@ class NotebookSyncService @Inject constructor(
 
             errors.asResult(tombstonedIds)
         }
+    }
+
+    /**
+     * Whether [notebook] carries local edits not yet committed to the server: its current `updatedAt`
+     * is meaningfully newer than the anchor recorded at its last sync. A missing sync-state row counts
+     * as unsynced — with no proof the local copy was ever pushed, an undated tombstone must not delete
+     * a notebook whose provenance we cannot establish.
+     */
+    private suspend fun hasUnsyncedLocalEdits(notebookId: String, notebook: Notebook): Boolean {
+        val syncRow = appRepository.notebookSyncStateRepository.get(notebookId) ?: return true
+        return notebook.updatedAt.time - syncRow.syncedLocalUpdatedAt.time >
+            NotebookSyncPlanner.TOLERANCE_MS
     }
 
     /**
@@ -148,6 +208,19 @@ class NotebookSyncService @Inject constructor(
         val deletedLocally = syncedIds - preDownloadNotebookIds
         val errors = ErrorAccumulator()
 
+        // Safety guard: distinguish a real bulk delete from a stale-state divergence. If the local
+        // notebook rows were lost while their sync-state rows survived (a partial DB reset, or rows
+        // accumulated in download-only mode where deletions are never tombstoned), this set would
+        // otherwise DELETE every one of them from the server -- for all devices. A genuine delete of
+        // most of what we ever synced is rare; a wipe is unrecoverable, so refuse and surface it.
+        if (looksLikeStaleStateWipe(deletedLocally.size, syncedIds.size)) {
+            val message = "Refusing to delete ${deletedLocally.size} of ${syncedIds.size} notebooks " +
+                "from the server: the local copies look missing, not intentionally deleted. Use " +
+                "\"Download all\" to restore them before syncing deletions."
+            log.e(TAG, message)
+            return AppResult.Error(DomainError.SyncError(message, recoverable = false))
+        }
+
         if (deletedLocally.isNotEmpty()) {
             log.i(TAG, "Detected ${deletedLocally.size} local deletion(s)")
             for (notebookId in deletedLocally) {
@@ -182,25 +255,34 @@ class NotebookSyncService @Inject constructor(
         tombstonedIds: Set<String>,
         preDownloadNotebookIds: Set<String>,
         remoteNotebookIds: Set<String>,
+        downloadOnly: Boolean = false,
         bulkEnabled: Boolean = false,
         currentServerKey: String? = null,
         dirEtags: Map<String, ETag?> = emptyMap(),
     ): AppResult<Int, DomainError> {
         log.i(TAG, "Checking server for new notebooks...")
-        // Notebooks we previously synced but are no longer local were deleted here; don't
-        // re-download them (they get tombstoned by detectAndUploadLocalDeletions instead).
+        // In two-way/upload mode a remote notebook we previously synced but no longer hold locally
+        // was DELETED here, so it must not be re-downloaded -- detectAndUploadLocalDeletions
+        // tombstones it instead. In download-only mode local deletions are NOT authoritative (the
+        // device mirrors the server and never tombstones), so a synced-but-locally-absent notebook
+        // is a copy we lost, not a deletion: it must be re-downloaded. Applying the `synced` filter
+        // there stranded every notebook whose local row was wiped while its sync-state row survived.
         val syncedIds = appRepository.notebookSyncStateRepository.getAllIds()
         // remoteNotebookIds is the single PROPFIND listing shared with reconciliation.
-        val newNotebookIds = remoteNotebookIds
-            .filter { it !in preDownloadNotebookIds }
-            .filter { it !in tombstonedIds }
-            .filter { it !in syncedIds }
+        val newNotebookIds = selectNewRemoteNotebookIds(
+            remoteNotebookIds = remoteNotebookIds,
+            localNotebookIds = preDownloadNotebookIds,
+            tombstonedIds = tombstonedIds,
+            syncedNotebookIds = syncedIds,
+            downloadOnly = downloadOnly,
+        )
         // Breakdown so a "0 new" is diagnosable: a short remote listing looks nothing like a full
         // one whose entries were all filtered out by the local/synced/tombstone sets.
         log.i(
             TAG,
             "New-notebook scan: remote=${remoteNotebookIds.size}, local=${preDownloadNotebookIds.size}, " +
-                "synced=${syncedIds.size}, tombstoned=${tombstonedIds.size} -> ${newNotebookIds.size} new"
+                "synced=${syncedIds.size} (downloadOnly=$downloadOnly), " +
+                "tombstoned=${tombstonedIds.size} -> ${newNotebookIds.size} new"
         )
 
         val errors = ErrorAccumulator()

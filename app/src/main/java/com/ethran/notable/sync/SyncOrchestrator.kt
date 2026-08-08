@@ -183,13 +183,14 @@ class SyncOrchestrator @Inject constructor(
                 0
             } else {
                 notebookSyncService.downloadNewNotebooks(
-                    client,
-                    tombstonedIds,
-                    preDownloadIds,
-                    remoteNotebookIds,
-                    bulkEnabled,
-                    currentServerKey,
-                    dirEtags
+                    client = client,
+                    tombstonedIds = tombstonedIds,
+                    preDownloadNotebookIds = preDownloadIds,
+                    remoteNotebookIds = remoteNotebookIds,
+                    downloadOnly = downloadOnly,
+                    bulkEnabled = bulkEnabled,
+                    currentServerKey = currentServerKey,
+                    dirEtags = dirEtags,
                 ).onFailure { return@withContext failStep(it) }
             }
 

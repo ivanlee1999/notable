@@ -81,7 +81,20 @@ class SyncForceService @Inject constructor(
         //    never learn about -- which otherwise left them showing a stale SYNCED badge for a
         //    notebook whose server copy was gone.
         client.listCollection(SyncPaths.notebooksDir()).onSuccess { serverDirs ->
-            serverDirs.map { it.trimEnd('/') }.filter { it !in localIds }.forEach { extra ->
+            val extras = serverDirs.map { it.trimEnd('/') }.filter { it !in localIds }
+            // Symmetric to detectAndUploadLocalDeletions' guard and forceDownloadAll's "refuse to
+            // wipe": never let a small/incomplete local set delete a much larger server. The upload
+            // above already ran, so the server keeps both this device's notebooks and the ones it
+            // simply does not have, instead of being wiped down to a stale local snapshot.
+            if (looksLikeStaleStateWipe(extras.size, serverDirs.size)) {
+                val message = "Force upload kept ${extras.size} server notebook(s) not present " +
+                    "locally: the local set (${localIds.size}) looks incomplete, so they were not " +
+                    "deleted from the server."
+                log.e(TAG, message)
+                errors.add(DomainError.SyncError(message, recoverable = false))
+                return@onSuccess
+            }
+            extras.forEach { extra ->
                 log.i(TAG, "Deleting server notebook not present locally: $extra")
                 val deleted = client.delete(SyncPaths.notebookDir(extra))
                     .onError { errors.add(it) } is AppResult.Success
