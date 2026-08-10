@@ -27,6 +27,18 @@ jobs:
         with:
           gradle-version: 9.1.0
 
+      # Fail fast with an actionable message. Without a keystore Gradle silently skips signing
+      # (the signingConfig is gated on STORE_FILE), emits app-release-unsigned.apk, and the run
+      # only falls over later at "Rename APK" with a confusing missing-file error.
+      - name: Check signing secrets
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+        run: |
+          if [ -z "$KEYSTORE_FILE" ]; then
+            echo "::error::KEYSTORE_FILE is not set. A fork cannot inherit the upstream signing key and must supply its own. Generate one with 'keytool -genkeypair -v -keystore notable-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias notable', then set KEYSTORE_FILE (base64 of the .jks), KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD as repository secrets."
+            exit 1
+          fi
+
       - name: Decode Keystore
         id: decode_keystore
         uses: timheuer/base64-to-file@v1.2.4
@@ -35,11 +47,19 @@ jobs:
           fileName: "my.keystore"
           encodedString: ${{ secrets.KEYSTORE_FILE }}
 
+      # app/google-services.json is tracked in the repo, so this step is only an override for
+      # builds that want their own Firebase project. Running it unconditionally on a fork with no
+      # FIREBASE_CONFIG secret truncated the tracked file to empty and broke the Google Services
+      # plugin, so decode only when the secret is actually present.
       - name: Decode and Replace `google-services.json`
         env:
           FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
         run: |
-          echo $FIREBASE_CONFIG | base64 --decode > ${{ github.workspace }}/app/google-services.json
+          if [ -n "$FIREBASE_CONFIG" ]; then
+            echo "$FIREBASE_CONFIG" | base64 --decode > "${{ github.workspace }}/app/google-services.json"
+          else
+            echo "FIREBASE_CONFIG not set - keeping the google-services.json tracked in the repo."
+          fi
 
       - name: Execute Gradle build
         env:
@@ -89,4 +109,6 @@ jobs:
         with:
           files: ${{ github.workspace }}/app/build/outputs/apk/release/notable-${{ env.VERSION_NAME }}.apk
           tag_name: v${{ env.VERSION_NAME }}
-          token: ${{ secrets.TOKEN }}
+          # Fall back to the automatic GITHUB_TOKEN, which `permissions: contents: write` above
+          # already scopes for creating releases -- a fork has no inherited TOKEN secret.
+          token: ${{ secrets.TOKEN || github.token }}
