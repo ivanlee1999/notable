@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.ethran.notable.data.db.AppDatabase
+import com.ethran.notable.data.db.MIGRATION_37_38
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertTrue
 import org.junit.Rule
@@ -101,7 +102,11 @@ class MigrationTest {
         db.close()
 
         // 2. Reopen DB with version 31 (latest AppDatabase version) to trigger migration
-        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
+            // even for a test that is only interested in an earlier auto-migration.
+            .addMigrations(MIGRATION_37_38)
+            .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
         // 3. Verify renamed column exists with expected data
@@ -141,7 +146,11 @@ class MigrationTest {
         oldDb.close()
 
         // 2. Reopen at the latest version to trigger the 35 -> 36 auto-migration.
-        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
+            // even for a test that is only interested in an earlier auto-migration.
+            .addMigrations(MIGRATION_37_38)
+            .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
         // 3. The renamed anchor is readable under the new name, with its original value.
@@ -196,7 +205,11 @@ class MigrationTest {
         oldDb.close()
 
         // 2. Reopen at the latest version to trigger the 36 -> 37 auto-migration.
-        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
+            // even for a test that is only interested in an earlier auto-migration.
+            .addMigrations(MIGRATION_37_38)
+            .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
         // 3. The existing row survives and the two new columns are present and NULL.
@@ -219,6 +232,61 @@ class MigrationTest {
             assertTrue(it.moveToFirst())
             assertEquals("\"dir-etag\"", it.getString(it.getColumnIndexOrThrow("remoteDirEtag")))
             assertEquals("srv", it.getString(it.getColumnIndexOrThrow("remoteDirServerKey")))
+        }
+
+        roomDb.close()
+    }
+
+    /**
+     * 37 -> 38 adds the two tables CouchDB sync needs to express *absence*: `DeletedStroke`
+     * (erasures, so a merge can tell "erased here" from "not synced here yet") and `couch_deletion`
+     * (notebooks/folders deleted locally, so the tombstone still gets pushed after a restart).
+     *
+     * Hand-written, so this asserts what a destructive fallback would have hidden: the existing
+     * notebook survives untouched, and both new tables are present and writable.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate37To38_addsCouchTombstoneTablesWithoutLosingData() {
+        val dbName = "migration-test-38"
+
+        val oldDb = helper.createDatabase(dbName, 37)
+        oldDb.execSQL(
+            """
+            INSERT INTO Notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, linkedExternalUri, createdAt, updatedAt)
+            VALUES ('notebook1', 'Kept', NULL, '[]', NULL, 'blank', 'native', NULL,
+                1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(MIGRATION_37_38)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // Nothing was dropped on the way.
+        migratedDb.query("SELECT title FROM Notebook WHERE id = 'notebook1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Kept", it.getString(it.getColumnIndexOrThrow("title")))
+        }
+
+        migratedDb.execSQL(
+            "INSERT INTO DeletedStroke (strokeId, pageId, deletedAt) VALUES ('s1', 'p1', 1620000000010)"
+        )
+        migratedDb.query("SELECT pageId, deletedAt FROM DeletedStroke WHERE strokeId = 's1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("p1", it.getString(it.getColumnIndexOrThrow("pageId")))
+            assertEquals(1620000000010L, it.getLong(it.getColumnIndexOrThrow("deletedAt")))
+        }
+
+        migratedDb.execSQL(
+            "INSERT INTO couch_deletion (docId, deletedAt) VALUES ('notebook:nb1', '2026-02-02T00:00:00Z')"
+        )
+        migratedDb.query("SELECT deletedAt FROM couch_deletion WHERE docId = 'notebook:nb1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("2026-02-02T00:00:00Z", it.getString(it.getColumnIndexOrThrow("deletedAt")))
         }
 
         roomDb.close()

@@ -108,3 +108,39 @@ val MIGRATION_32_33 = object : Migration(32, 33) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_Stroke_pageId` ON `Stroke` (`pageId`)")
     }
 }
+
+// Migration 37 -> 38: the two tables CouchDB sync needs in order to express *absence*.
+//
+// Hand-written rather than an AutoMigration because both tables are new and purely additive, and a
+// spelled-out CREATE is the thing a reviewer can compare against `schemas/38.json` directly. It is
+// emphatically not `fallbackToDestructiveMigration` territory: these tables arrive in the same
+// release as the sync feature, so the databases that hit this path are full of users' notebooks.
+//
+// - `DeletedStroke` records erasures, so a merge can tell "erased here" from "not synced here yet".
+// - `couch_deletion` records notebooks/folders deleted locally, so the tombstone still gets pushed
+//   after a restart (deleting while offline).
+val MIGRATION_37_38 = object : Migration(37, 38) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `DeletedStroke` (
+                `strokeId` TEXT NOT NULL,
+                `pageId` TEXT NOT NULL,
+                `deletedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`strokeId`)
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_DeletedStroke_pageId` ON `DeletedStroke` (`pageId`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `couch_deletion` (
+                `docId` TEXT NOT NULL,
+                `deletedAt` TEXT NOT NULL,
+                PRIMARY KEY(`docId`)
+            )
+            """.trimIndent()
+        )
+    }
+}

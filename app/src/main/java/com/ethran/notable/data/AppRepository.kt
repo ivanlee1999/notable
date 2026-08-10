@@ -4,6 +4,8 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.ImageRepository
@@ -36,6 +38,8 @@ class AppRepository @Inject constructor(
     val folderRepository: FolderRepository,
     val notebookSyncStateRepository: NotebookSyncStateRepository,
     val pageSyncStateRepository: PageSyncStateRepository,
+    val deletedStrokeRepository: DeletedStrokeRepository,
+    val couchDeletionRepository: CouchDeletionRepository,
     val kvProxy: KvProxy,
     private val db: AppDatabase
 ) {

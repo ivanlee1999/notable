@@ -1035,10 +1035,22 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    fun removeStrokesFromDb(strokes: List<String>) {
+    /**
+     * Erases strokes, leaving a tombstone behind for each one.
+     *
+     * The tombstone is what makes an erasure syncable: the row is hard-deleted, and absence alone
+     * cannot be told apart from "that stroke has not arrived on this device yet", so without it the
+     * peer's copy comes back on the next merge (couch protocol §6.6).
+     *
+     * [pageId] is passed rather than read from [pageFromDb] because the two are not always the same
+     * page — the field tracks whatever page is currently open, while these ids belong to the page
+     * the edit was made on.
+     */
+    fun removeStrokesFromDb(strokes: List<String>, pageId: String) {
         launchDbWrite("removeStrokes(${strokes.size})") {
             appRepository.strokeRepository.deleteAll(strokes)
-            bumpEditTimestamps()
+            appRepository.deletedStrokeRepository.record(pageId, strokes)
+            bumpEditTimestamps(pageId)
         }
     }
 
@@ -1049,15 +1061,20 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    // Bump the edit timestamps after a content write on the current page. The page timestamp is
-    // the per-page dirty signal (for incremental upload); the notebook timestamp drives the
-    // per-notebook sync Upload/Download decision. Both advance together on any stroke/image edit.
-    private suspend fun bumpEditTimestamps() {
-        val pageId = pageFromDb?.id
-        if (!pageId.isNullOrEmpty()) {
-            appRepository.pageRepository.touchUpdatedAt(pageId)
-        }
-        val notebookId = pageFromDb?.notebookId ?: return
+    // Bump the edit timestamps after a content write. The page timestamp is the per-page dirty
+    // signal (for incremental upload); the notebook timestamp drives the per-notebook sync
+    // Upload/Download decision. Both advance together on any stroke/image edit.
+    //
+    // [pageId] defaults to the currently open page, which is what every caller that does not know
+    // better means. Callers that hold the edited page's id should pass it: the two differ whenever
+    // an edit lands on a page other than the open one, and bumping the wrong page leaves the edited
+    // one looking clean to sync.
+    private suspend fun bumpEditTimestamps(pageId: String? = pageFromDb?.id) {
+        if (pageId.isNullOrEmpty()) return
+        appRepository.pageRepository.touchUpdatedAt(pageId)
+        val page = if (pageId == pageFromDb?.id) pageFromDb
+        else appRepository.pageRepository.getById(pageId)
+        val notebookId = page?.notebookId ?: return
         val notebook = appRepository.bookRepository.getById(notebookId) ?: return
         appRepository.bookRepository.update(notebook)
     }

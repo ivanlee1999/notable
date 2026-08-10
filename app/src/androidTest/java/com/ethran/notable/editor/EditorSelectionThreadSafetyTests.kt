@@ -11,7 +11,9 @@ import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.datastore.EditorSettingCacheManager
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CryptoHelper
+import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
@@ -173,6 +175,8 @@ class EditorSelectionThreadSafetyTests {
             folderRepository = folderRepository,
             notebookSyncStateRepository = notebookSyncStateRepository,
             pageSyncStateRepository = pageSyncStateRepository,
+            deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
+            couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
             kvProxy = kvProxy,
             db = db,
         )
