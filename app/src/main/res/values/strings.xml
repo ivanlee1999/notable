@@ -111,6 +111,26 @@
     <string name="sync_behavior_title">Sync Behavior</string>
     <string name="sync_manual_actions_title">Manual Actions</string>
 
+    <!-- CouchDB backend -->
+    <string name="sync_backend_title">Sync Backend</string>
+    <string name="sync_backend_webdav">WebDAV</string>
+    <string name="sync_backend_couchdb">CouchDB</string>
+    <string name="sync_backend_hint">CouchDB syncs each page as you draw and merges edits made on both devices. WebDAV uploads whole notebooks.</string>
+    <string name="sync_couch_title">CouchDB Synchronization</string>
+    <string name="sync_couch_url_label">Server URL</string>
+    <string name="sync_couch_url_placeholder">http://192.168.1.10:5984</string>
+    <string name="sync_couch_database_label">Database</string>
+    <string name="sync_couch_username_label">Username</string>
+    <string name="sync_couch_password_label">Password</string>
+    <string name="sync_couch_device_id_label">Device name</string>
+    <string name="sync_couch_device_id_hint">Identifies this device\'s edits. It must differ from your other device\'s name.</string>
+    <string name="sync_couch_save_button">Save CouchDB settings</string>
+    <string name="sync_couch_sync_now_button">Sync now</string>
+    <string name="sync_couch_upload_all_button">Upload everything on this BOOX</string>
+    <string name="sync_couch_upload_all_hint">Queues every notebook, page and folder held here. Needed once, the first time you point at a new server.</string>
+    <string name="sync_couch_missing_config_hint">Enter a CouchDB URL to start syncing.</string>
+    <string name="sync_couch_idle">Up to date</string>
+
     <!-- Sync Field Labels -->
     <string name="sync_server_url_note">Note: \"/notable\" will be appended to your path to keep files organized.</string>
     <string name="sync_server_url_label">Server URL</string>

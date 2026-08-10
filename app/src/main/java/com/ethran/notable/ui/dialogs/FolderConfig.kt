@@ -37,7 +37,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.FolderRepository
+import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.noRippleClickable
+import com.ethran.notable.ui.rememberCouchSyncController
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.launch
 
@@ -48,6 +50,7 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                        folderId: String,
                        onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val couchSync = rememberCouchSyncController()
     var folder by remember { mutableStateOf<Folder?>(null) }
     var folderTitle by remember { mutableStateOf("") }
 
@@ -151,6 +154,9 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                     text = "Delete Folder",
                     textAlign = TextAlign.Center,
                     modifier = Modifier.noRippleClickable {
+                        // Same reason as a notebook deletion: absence is not a syncable fact, so
+                        // the intent is recorded as a tombstone that survives being offline.
+                        couchSync.noteDeleted(CouchDocId.folder(folderId))
                         scope.launch {
                             folderRepository.delete(folderId)
                             onClose()

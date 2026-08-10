@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import dagger.hilt.android.EntryPointAccessors
@@ -33,6 +34,13 @@ class SyncWorker(
 
         val kvProxy = entryPoint.kvProxy()
         val syncSettings = kvProxy.getSyncSettings()
+
+        // The CouchDB backend replaces the WebDAV run entirely, and none of the checks below apply
+        // to it: it has its own credentials, and its background job is one catch-up pass rather
+        // than a whole-tree reconcile. Everything else in this worker is the WebDAV path.
+        if (syncSettings.backend == SyncBackend.COUCHDB) {
+            return runCouchCatchUp(entryPoint, syncSettings, connectivityChecker)
+        }
 
         if (!syncSettings.syncEnabled) {
             Log.i(TAG, "Sync disabled in settings, skipping")
@@ -136,6 +144,49 @@ class SyncWorker(
                     )
                 )
             }
+        }
+    }
+
+    /**
+     * The CouchDB background job: catch up on the change feed, then send whatever is queued.
+     *
+     * Deliberately not a long poll — a periodic worker has a budget and must return, and the
+     * near-real-time path is the foreground loop's job ([CouchSyncController.start]). What this run
+     * exists for is the gap: everything that changed on the other device while notable was closed,
+     * and everything drawn here that the app was killed before it could send.
+     */
+    private suspend fun runCouchCatchUp(
+        entryPoint: SyncOrchestratorEntryPoint,
+        settings: SyncSettings,
+        connectivityChecker: ConnectivityChecker,
+    ): Result {
+        if (!settings.couchConfigured) {
+            Log.i(TAG, "CouchDB selected but not configured, skipping")
+            return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
+        }
+        if (settings.wifiOnly && !connectivityChecker.isUnmeteredConnected()) {
+            Log.i(TAG, "WiFi-only sync enabled but not on unmetered network, skipping")
+            return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
+        }
+
+        val controller = entryPoint.couchSyncController()
+        controller.syncNow()
+
+        val status = controller.status
+        return if (status is CouchSyncController.Status.Failed) {
+            // Queued work is not lost work: the outbox survives, so a failure here is worth a
+            // retry rather than a hard failure that would need the user to notice it.
+            Log.w(TAG, "CouchDB catch-up failed: ${status.message}")
+            if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
+                Result.retry()
+            } else {
+                Result.failure(
+                    workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to status.message)
+                )
+            }
+        } else {
+            Log.i(TAG, "CouchDB catch-up completed, ${controller.pendingCount} still queued")
+            Result.success(workDataOf(OUTPUT_KEY_SUCCESS to true))
         }
     }
 

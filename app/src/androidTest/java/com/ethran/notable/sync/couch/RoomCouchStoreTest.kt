@@ -28,6 +28,9 @@ import com.ethran.notable.data.db.encodeStrokePoints
 import com.ethran.notable.data.events.DefaultAppEventBus
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.testing.TestDatabaseFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -341,6 +344,10 @@ class RoomCouchStoreTest {
             appEventBus = DefaultAppEventBus(),
             backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
             viewport = PageViewportState(),
+            // This test is about what the *store* sees after an erasure. The controller's own
+            // behaviour is covered by CouchSyncControllerTest, so it is wired to a dead backend
+            // here rather than allowed to reach for a server that is not part of this scenario.
+            couchSync = inertCouchSync(),
         )
 
         runBlocking {
@@ -499,3 +506,20 @@ class RoomCouchStoreTest {
 
     // endregion
 }
+
+/**
+ * A [CouchSyncController] that can never do anything: its backend reports itself disabled, which
+ * is exactly the state notable is in until someone selects CouchDB in settings.
+ */
+private fun inertCouchSync(): CouchSyncController = CouchSyncController(
+    scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    backend = object : CouchSyncBackend {
+        override suspend fun isEnabled(): Boolean = false
+        override suspend fun flush() = CouchSyncEngine.FlushReport()
+        override suspend fun pull(longpoll: Boolean) = CouchSyncEngine.PullReport()
+        override suspend fun markPageDirty(pageId: String) = Unit
+        override suspend fun markEverythingDirty() = Unit
+        override suspend fun recordDeletion(documentId: String) = Unit
+    },
+    clock = CouchSyncClock(),
+)
