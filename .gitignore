@@ -19,3 +19,11 @@ app/libs
 
 # Kotlin build-session scratch
 .kotlin/
+
+# Signing key material. Release builds read the keystore from $STORE_FILE, which CI decodes from a
+# secret, so one should never be committed -- and the release setup generates a keystore in the
+# working tree, leaving it a single `git add .` away from being published irrecoverably.
+*.jks
+*.p12
+*.keystore
+/secrets/
