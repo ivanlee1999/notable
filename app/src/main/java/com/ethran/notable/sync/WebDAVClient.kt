@@ -124,7 +124,7 @@ class WebDAVClient(
      */
     fun testConnection(): AppResult<ConnectionTestResult, DomainError> =
         execute("Connection test", {
-            Request.Builder().url(serverUrl).head().header("Authorization", credentials).build()
+            propfindAbsolute(serverUrl, PROPFIND_PROPS, depth = "0")
         }) { response ->
             when {
                 response.isSuccessful -> {
@@ -145,10 +145,10 @@ class WebDAVClient(
      */
     fun getServerTime(): AppResult<Long, DomainError> =
         execute("Server time", {
-            Request.Builder().url(serverUrl).head().header("Authorization", credentials).build()
+            propfindAbsolute(serverUrl, PROPFIND_PROPS, depth = "0")
         }) { response ->
             if (!response.isSuccessful) {
-                AppResult.Error(DomainError.SyncError("Server time HEAD failed: ${response.code}"))
+                AppResult.Error(DomainError.SyncError("Server time probe failed: ${response.code}"))
             } else {
                 response.header("Date")?.let { parseHttpDate(it) }
                     ?.let { AppResult.Success(it) }
@@ -165,13 +165,13 @@ class WebDAVClient(
      * trigger an unguarded upload over a possibly-newer remote.
      */
     fun exists(path: String): AppResult<Boolean, DomainError> =
-        execute("HEAD", {
-            Request.Builder().url(buildUrl(path)).head().header("Authorization", credentials).build()
+        execute("PROPFIND", {
+            propfindRequest(path, PROPFIND_PROPS, depth = "0")
         }) { response ->
             when {
                 response.isSuccessful -> AppResult.Success(true)
                 response.code == HttpURLConnection.HTTP_NOT_FOUND -> AppResult.Success(false)
-                else -> AppResult.Error(DomainError.SyncError("HEAD failed: ${response.code}"))
+                else -> AppResult.Error(DomainError.SyncError("PROPFIND failed: ${response.code}"))
             }
         }
 
@@ -749,9 +749,26 @@ class WebDAVClient(
         if (createOnly) header("If-None-Match", "*") else applyWriteGuard(ifMatch)
     }
 
-    private fun propfindRequest(path: String, body: String, depth: String = "1"): Request {
+    private fun propfindRequest(path: String, body: String, depth: String = "1"): Request =
+        propfindAbsolute(buildUrl(path), body, depth)
+
+    /**
+     * PROPFIND against an already-absolute [url], for the preflight probes that target [serverUrl]
+     * itself rather than a path beneath it.
+     *
+     * Probes use PROPFIND rather than HEAD because HEAD/GET on a WebDAV *collection* is not
+     * required to succeed, and several servers refuse it. Synology's Apache-based WebDAV Server
+     * answers 403 for every collection -- its vhost runs `Options -Indexes`, so there is no
+     * directory index to serve -- and 404 at the server root, while answering PROPFIND on those
+     * same paths with 207. Because `exists` maps 404 to "absent" but any other status to a hard
+     * error, that 403 failed the connection test, the clock-skew preflight, and every directory
+     * check in [ensureParentDirectories], even though the sync verbs themselves would have worked.
+     * PROPFIND Depth: 0 is the RFC 4918 resource probe and is answered by every compliant server
+     * for files and collections alike.
+     */
+    private fun propfindAbsolute(url: String, body: String, depth: String): Request {
         val requestBody = body.toRequestBody("application/xml".toMediaType())
-        return Request.Builder().url(buildUrl(path)).method("PROPFIND", requestBody)
+        return Request.Builder().url(url).method("PROPFIND", requestBody)
             .header("Authorization", credentials).header("Depth", depth).build()
     }
 
