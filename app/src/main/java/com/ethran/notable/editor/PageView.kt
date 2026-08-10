@@ -445,7 +445,7 @@ class PageView(
 
 
     private fun removeStrokesFromPersistLayer(strokeIds: List<String>) =
-        pageDataManager.removeStrokesFromDb(strokeIds)
+        pageDataManager.removeStrokesFromDb(strokeIds, currentPageId)
 
     private fun removeImagesFromPersistLayer(imageIds: List<String>) =
         pageDataManager.removeImagesFromDb(imageIds)

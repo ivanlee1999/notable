@@ -109,6 +109,12 @@ android {
     namespace = 'com.ethran.notable'
     sourceSets {
         androidTest.assets.srcDirs += files("${project.projectDir}/schemas")
+        // Test helpers both suites need. FakeCouchTransport is exercised by the plain JVM engine
+        // tests and by the Room-backed store tests, which have to be instrumentation tests (Room
+        // needs a real Context) and so cannot see src/test. One copy, two consumers, rather than a
+        // fake server that drifts between them.
+        test.kotlin.srcDirs += files("${project.projectDir}/src/sharedTest/java")
+        androidTest.kotlin.srcDirs += files("${project.projectDir}/src/sharedTest/java")
     }
     testOptions {
         unitTests {

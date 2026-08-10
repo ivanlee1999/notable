@@ -54,8 +54,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class],
-    version = 37,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, CouchDeletion::class],
+    version = 38,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -76,6 +76,7 @@ class Converters {
         AutoMigration(35, 36, spec = AutoMigration35to36::class),
         // Adds the nullable `remoteDirEtag` / `remoteDirServerKey` bulk-detection baseline columns.
         AutoMigration(36, 37)
+        // 37 -> 38 is hand-written: see MIGRATION_37_38 in Migrations.kt.
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -89,6 +90,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun ImageDao(): ImageDao
     abstract fun notebookSyncStateDao(): NotebookSyncStateDao
     abstract fun pageSyncStateDao(): PageSyncStateDao
+    abstract fun deletedStrokeDao(): DeletedStrokeDao
+    abstract fun couchDeletionDao(): CouchDeletionDao
 
 //    companion object {
 //        private var INSTANCE: AppDatabase? = null
@@ -146,7 +149,8 @@ object DatabaseModule {
                 MIGRATION_16_17,
                 MIGRATION_17_18,
                 MIGRATION_22_23,
-                MIGRATION_32_33
+                MIGRATION_32_33,
+                MIGRATION_37_38
             )
             .build()
     }
@@ -182,6 +186,14 @@ object DatabaseModule {
     @Provides
     fun providePageSyncStateDao(db: AppDatabase): PageSyncStateDao =
         db.pageSyncStateDao()
+
+    @Provides
+    fun provideDeletedStrokeDao(db: AppDatabase): DeletedStrokeDao =
+        db.deletedStrokeDao()
+
+    @Provides
+    fun provideCouchDeletionDao(db: AppDatabase): CouchDeletionDao =
+        db.couchDeletionDao()
 
 
 
