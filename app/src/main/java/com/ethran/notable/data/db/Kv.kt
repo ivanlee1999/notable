@@ -150,31 +150,44 @@ class KvProxy @Inject constructor(
             ?.let { json.decodeFromString(SyncSettings.serializer(), it.value) }
             ?: return@withContext SyncSettings()
 
-        if (settings.password.isBlank()) return@withContext settings
+        // Both backends' passwords are stored encrypted; each is decrypted independently so a
+        // corrupt WebDAV secret cannot take the CouchDB one down with it (or the reverse).
+        settings.copy(
+            password = decryptOrBlank(settings.password, "WebDAV"),
+            couchPassword = decryptOrBlank(settings.couchPassword, "CouchDB"),
+        )
+    }
 
-        when (val decrypted = cryptoHelper.decrypt(settings.password)) {
-            is AppResult.Success -> settings.copy(password = decrypted.data)
+    private fun decryptOrBlank(stored: String, what: String): String {
+        if (stored.isBlank()) return ""
+        return when (val decrypted = cryptoHelper.decrypt(stored)) {
+            is AppResult.Success -> decrypted.data
             is AppResult.Error -> {
-                log.w("Failed to decrypt sync password: ${decrypted.error.userMessage}")
-                settings.copy(password = "")
+                log.w("Failed to decrypt $what sync password: ${decrypted.error.userMessage}")
+                ""
             }
         }
     }
 
     suspend fun setSyncSettings(value: SyncSettings) {
-        val encryptedPassword = when (val encrypted = cryptoHelper.encrypt(value.password)) {
-            is AppResult.Success -> encrypted.data
-            is AppResult.Error -> {
-                throw IllegalStateException("Unable to encrypt sync password: ${encrypted.error.userMessage}")
-            }
-        }
-
         setKv(
             SYNC_SETTINGS_KEY,
-            value.copy(password = encryptedPassword),
+            value.copy(
+                password = encryptOrThrow(value.password, "WebDAV"),
+                couchPassword = encryptOrThrow(value.couchPassword, "CouchDB"),
+            ),
             SyncSettings.serializer()
         )
     }
+
+    private fun encryptOrThrow(plain: String, what: String): String =
+        when (val encrypted = cryptoHelper.encrypt(plain)) {
+            is AppResult.Success -> encrypted.data
+            is AppResult.Error ->
+                throw IllegalStateException(
+                    "Unable to encrypt $what sync password: ${encrypted.error.userMessage}"
+                )
+        }
 
     // Measured server capabilities. A separate KV entry, not a field on SyncSettings: it is a fact
     // about the server, not a user preference, and callers must check its serverKey before trusting

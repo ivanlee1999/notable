@@ -61,7 +61,9 @@ import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.getLinkedFilesDir
 import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.SyncRequest
+import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
+import com.ethran.notable.ui.rememberCouchSyncController
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.components.BreadCrumb
 import com.ethran.notable.ui.components.PagePreview
@@ -83,6 +85,7 @@ fun NotebookConfigDialog(
     val book by bookRepository.getByIdLive(bookId).observeAsState()
     val scope = rememberCoroutineScope()
     val snackManager = LocalSnackContext.current
+    val couchSync = rememberCouchSyncController()
 
     if (book == null) return
 
@@ -139,6 +142,12 @@ fun NotebookConfigDialog(
             title = "Confirm Deletion",
             message = "Are you sure you want to delete \"${book!!.title}\"?",
             onConfirm = {
+                // Record the deletion as a durable fact rather than as a queued request. An absent
+                // notebook is also what a device that never saw it looks like, so without a
+                // tombstone the peer's copy simply comes back on the next merge — and because the
+                // row survives a restart, deleting while offline still reaches the server later.
+                couchSync.noteDeleted(CouchDocId.notebook(bookId))
+
                 scope.launch {
                     bookRepository.delete(bookId)
                 }

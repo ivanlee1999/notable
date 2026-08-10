@@ -42,6 +42,7 @@ import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.sync.SyncScheduler
+import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.ui.AppEventUiBridge
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.SnackConf
@@ -94,6 +95,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var syncScheduler: dagger.Lazy<SyncScheduler>
+
+    @Inject
+    lateinit var couchSyncController: dagger.Lazy<CouchSyncController>
 
     @Inject
     lateinit var snackDispatcher: SnackDispatcher
@@ -232,6 +236,29 @@ class MainActivity : ComponentActivity() {
                 Log.i(TAG, "Periodic sync reconcile failed: ${e.message}")
             }
         }
+    }
+
+    /**
+     * The CouchDB change feed runs only while notable is on screen.
+     *
+     * This is the activity's own `onStart`/`onStop` rather than a process-lifecycle observer:
+     * `androidx.lifecycle:lifecycle-process` is not a dependency, and notable is a single-activity
+     * app, so these two callbacks *are* "foregrounded" and "not foregrounded". A long poll held
+     * open by a backgrounded app is a socket and a wakelock nobody asked for.
+     */
+    override fun onStart() {
+        super.onStart()
+        // No-op unless CouchDB is the selected backend; the controller checks for itself.
+        couchSyncController.get().start()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        val controller = couchSyncController.get()
+        controller.stop()
+        // Last chance before the process may be killed. The push is per-document, so a truncated
+        // run leaves the rest queued rather than a half-written notebook.
+        controller.requestPushNow()
     }
 
     override fun onRestart() {

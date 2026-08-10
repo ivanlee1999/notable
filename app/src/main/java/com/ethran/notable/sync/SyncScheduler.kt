@@ -30,7 +30,9 @@ class SyncScheduler @Inject constructor(
      * Reconcile periodic sync schedule against persisted sync settings.
      */
     fun reconcilePeriodicSync(settings: SyncSettings) {
-        if (settings.syncEnabled && settings.autoSync) {
+        // CouchDB has no separate on/off switch: selecting it and pointing it somewhere *is* the
+        // opt-in, and its background job is a cheap catch-up rather than a whole-tree reconcile.
+        if (settings.couchActive || (settings.syncEnabled && settings.autoSync)) {
             enablePeriodicSync(
                 intervalMinutes = settings.syncInterval.toLong(),
                 wifiOnly = settings.wifiOnly
@@ -96,11 +98,14 @@ class SyncScheduler @Inject constructor(
 
         val uniqueName = "${SyncWorker.WORK_NAME}-immediate-${request.typeKey}-${request.identifier}"
 
-        // KEEP, not REPLACE: a sync already running for this unique name satisfies the request.
-        // REPLACE would cancel an in-flight worker mid-sync (e.g. app restarted during a sync).
+        // REPLACE, not KEEP. KEEP silently *drops* the new request when one is already in flight,
+        // which is wrong for a manual trigger: the user tapped "Sync now" because of something
+        // they just did, and a run that started before that edit cannot carry it. Dropping the tap
+        // is how an edit came to look like it had vanished. The cost is cancelling a run that was
+        // already going, which is safe — sync is restartable and per-document.
         workManager.enqueueUniqueWork(
             uniqueName,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             syncWorkRequest
         )
 

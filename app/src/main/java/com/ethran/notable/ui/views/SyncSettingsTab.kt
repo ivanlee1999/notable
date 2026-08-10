@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
 import com.ethran.notable.sync.ConnectionTestResult
 import com.ethran.notable.sync.ServerCapabilities
+import com.ethran.notable.sync.SyncBackend
 import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.sync.SyncState
@@ -95,6 +96,13 @@ data class SyncSettingsCallbacks(
     val onCancelSync: () -> Unit = {},
     val onClearSyncLogs: () -> Unit = {},
     val danger: SyncDangerCallbacks = SyncDangerCallbacks(),
+    val couch: CouchSyncCallbacks = CouchSyncCallbacks(),
+)
+
+data class CouchSyncCallbacks(
+    val onSave: () -> Unit = {},
+    val onSyncNow: () -> Unit = {},
+    val onUploadEverything: () -> Unit = {},
 )
 
 private val EInkFieldShape = RoundedCornerShape(4.dp)
@@ -151,45 +159,63 @@ fun SyncSettings(
             .padding(16.dp)
     ) {
         Text(
-            text = stringResource(R.string.sync_title),
+            text = stringResource(
+                if (state.syncSettings.backend == SyncBackend.COUCHDB) R.string.sync_couch_title
+                else R.string.sync_title
+            ),
             style = MaterialTheme.typography.h6,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colors.onSurface,
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
-        ConnectionSection(
-            state = state,
-            callbacks = callbacks,
-            sectionTitle = serverSectionTitle,
-            isConfigured = isConfigured,
-            showServerConfig = showServerConfig,
-            onToggleSection = { showServerConfig = !showServerConfig }
+        BackendSelectorSection(
+            selected = state.syncSettings.backend,
+            onSelect = { backend ->
+                callbacks.onUpdateSyncSettings(state.syncSettings.copy(backend = backend), true)
+            }
         )
 
-        if (isConfigured) {
-            Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-            SyncBehaviorSection(state = state, onUpdate = callbacks.onUpdateSyncSettings)
-
-            if (state.syncSettings.syncEnabled) {
-                Spacer(modifier = Modifier.height(24.dp))
-
-                SyncActionsSection(state = state, callbacks = callbacks)
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                var logsExpanded by remember { mutableStateOf(false) }
-                SyncLogsSection(
-                    state = state,
-                    callbacks = callbacks,
-                    isExpanded = logsExpanded,
-                    onToggleExpanded = { logsExpanded = !logsExpanded }
-                )
-            }
+        // The two backends are alternatives, not layers: showing WebDAV's whole-tree controls while
+        // CouchDB is driving would offer actions that do nothing.
+        if (state.syncSettings.backend == SyncBackend.COUCHDB) {
+            CouchSection(state = state, callbacks = callbacks)
         } else {
-            Spacer(modifier = Modifier.height(24.dp))
-            MissingConfigurationHint()
+            ConnectionSection(
+                state = state,
+                callbacks = callbacks,
+                sectionTitle = serverSectionTitle,
+                isConfigured = isConfigured,
+                showServerConfig = showServerConfig,
+                onToggleSection = { showServerConfig = !showServerConfig }
+            )
+
+            if (isConfigured) {
+                Spacer(modifier = Modifier.height(24.dp))
+
+                SyncBehaviorSection(state = state, onUpdate = callbacks.onUpdateSyncSettings)
+
+                if (state.syncSettings.syncEnabled) {
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    SyncActionsSection(state = state, callbacks = callbacks)
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    var logsExpanded by remember { mutableStateOf(false) }
+                    SyncLogsSection(
+                        state = state,
+                        callbacks = callbacks,
+                        isExpanded = logsExpanded,
+                        onToggleExpanded = { logsExpanded = !logsExpanded }
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(24.dp))
+                MissingConfigurationHint()
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -518,6 +544,211 @@ private fun SyncLogsSection(
         onHeaderClick = onToggleExpanded
     ) {
         SyncLogViewer(syncLogs = state.syncLogs, onClearLog = callbacks.onClearSyncLogs)
+    }
+}
+
+/**
+ * The backend switch. Two flat buttons rather than a dropdown or a segmented control: on e-ink a
+ * menu costs a full refresh to open and another to dismiss, and there are only ever two choices.
+ */
+@Composable
+private fun BackendSelectorSection(
+    selected: SyncBackend,
+    onSelect: (SyncBackend) -> Unit,
+) {
+    EInkSection(title = stringResource(R.string.sync_backend_title), icon = Icons.Default.Cloud) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            EInkActionButton(
+                text = stringResource(R.string.sync_backend_webdav),
+                onClick = { onSelect(SyncBackend.WEBDAV) },
+                modifier = Modifier.weight(1f),
+                isSecondary = selected != SyncBackend.WEBDAV,
+                isBold = selected == SyncBackend.WEBDAV,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            EInkActionButton(
+                text = stringResource(R.string.sync_backend_couchdb),
+                onClick = { onSelect(SyncBackend.COUCHDB) },
+                modifier = Modifier.weight(1f),
+                isSecondary = selected != SyncBackend.COUCHDB,
+                isBold = selected == SyncBackend.COUCHDB,
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.sync_backend_hint),
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+    }
+}
+
+/**
+ * CouchDB connection settings and the two actions that cannot be inferred: a manual catch-up, and
+ * the initial upload.
+ *
+ * "Upload everything" exists because a fresh server has no history to pull and this device has
+ * nothing queued — every document is already "sent" as far as the outbox is concerned. Without it
+ * the first sync against a new server would appear to do nothing at all.
+ */
+@Composable
+private fun CouchSection(
+    state: SyncSettingsUiState,
+    callbacks: SyncSettingsCallbacks,
+) {
+    val settings = state.syncSettings
+    val onUpdate = callbacks.onUpdateSyncSettings
+
+    EInkSection(
+        title = stringResource(R.string.sync_connection_setup),
+        icon = Icons.Default.Settings
+    ) {
+        EInkTextField(
+            label = stringResource(R.string.sync_couch_url_label),
+            value = settings.couchUrl,
+            onValueChange = { onUpdate(settings.copy(couchUrl = it), false) },
+            placeholder = stringResource(R.string.sync_couch_url_placeholder)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        EInkTextField(
+            label = stringResource(R.string.sync_couch_database_label),
+            value = settings.couchDatabase,
+            onValueChange = { onUpdate(settings.copy(couchDatabase = it), false) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        EInkTextField(
+            label = stringResource(R.string.sync_couch_username_label),
+            value = settings.couchUsername,
+            onValueChange = { onUpdate(settings.copy(couchUsername = it), false) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = stringResource(R.string.sync_couch_password_label),
+            style = MaterialTheme.typography.caption,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colors.onSurface
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colors.surface, EInkFieldShape)
+                .border(EInkFieldBorderWidth, MaterialTheme.colors.onSurface, EInkFieldShape)
+                .padding(start = 12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (settings.couchPassword.isEmpty() && state.isCouchPasswordSaved) {
+                        Text(
+                            text = stringResource(R.string.sync_password_unchanged),
+                            color = MaterialTheme.colors.onSurface.copy(alpha = 0.4f),
+                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                        )
+                    }
+                    BasicTextField(
+                        value = settings.couchPassword,
+                        onValueChange = { onUpdate(settings.copy(couchPassword = it), false) },
+                        textStyle = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colors.onSurface
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colors.onSurface),
+                        singleLine = true,
+                        visualTransformation =
+                            if (state.passwordVisible) VisualTransformation.None
+                            else PasswordVisualTransformation(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp)
+                    )
+                }
+                IconButton(onClick = callbacks.onTogglePasswordVisibility) {
+                    Icon(
+                        if (state.passwordVisible) Icons.Default.VisibilityOff
+                        else Icons.Default.Visibility,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        EInkTextField(
+            label = stringResource(R.string.sync_couch_device_id_label),
+            value = settings.deviceId,
+            onValueChange = { onUpdate(settings.copy(deviceId = it), false) }
+        )
+        Text(
+            text = settings.deviceIdWarning ?: stringResource(R.string.sync_couch_device_id_hint),
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(
+                alpha = if (settings.deviceIdWarning != null) 1f else 0.5f
+            ),
+            modifier = Modifier.padding(top = 2.dp, start = 4.dp)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        EInkActionButton(
+            text = stringResource(R.string.sync_couch_save_button),
+            onClick = callbacks.couch.onSave,
+            modifier = Modifier.fillMaxWidth(),
+            isBold = true,
+        )
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    EInkSection(
+        title = stringResource(R.string.sync_manual_actions_title),
+        icon = Icons.Default.Sync
+    ) {
+        EInkActionButton(
+            text = stringResource(R.string.sync_couch_sync_now_button),
+            onClick = callbacks.couch.onSyncNow,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = settings.couchConfigured,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        EInkActionButton(
+            text = stringResource(R.string.sync_couch_upload_all_button),
+            onClick = callbacks.couch.onUploadEverything,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = settings.couchConfigured,
+            isSecondary = true,
+        )
+        Text(
+            text = stringResource(R.string.sync_couch_upload_all_hint),
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(alpha = 0.5f),
+            modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = if (settings.couchConfigured) {
+                state.couchState.detail ?: stringResource(R.string.sync_couch_idle)
+            } else {
+                stringResource(R.string.sync_couch_missing_config_hint)
+            },
+            style = MaterialTheme.typography.caption,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colors.onSurface,
+            modifier = Modifier.padding(start = 4.dp)
+        )
     }
 }
 

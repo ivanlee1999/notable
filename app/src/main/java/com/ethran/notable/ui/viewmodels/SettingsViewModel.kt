@@ -22,6 +22,7 @@ import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.sync.SyncState
 import com.ethran.notable.sync.WebDavClientFactoryPort
+import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.SnackDispatcher
 import com.ethran.notable.utils.AppResult
@@ -52,7 +53,10 @@ data class SyncSettingsUiState(
     val syncLogs: List<SyncLogger.LogEntry> = emptyList(),
     val syncState: SyncState = SyncState.Idle,
     val showForceUploadConfirm: Boolean = false,
-    val showForceDownloadConfirm: Boolean = false
+    val showForceDownloadConfirm: Boolean = false,
+    /** Live push/pull state of the CouchDB backend; inert while WebDAV is selected. */
+    val couchState: CouchSyncController.UiState = CouchSyncController.UiState(),
+    val isCouchPasswordSaved: Boolean = false,
 ) {
     val credentialsDirty: Boolean
         get() = syncSettings.serverUrl != lastSavedSettings.serverUrl ||
@@ -70,6 +74,7 @@ class SettingsViewModel @Inject constructor(
     private val capabilityProbeService: CapabilityProbeService,
     private val snackDispatcher: SnackDispatcher,
     private val appEventBus: AppEventBus,
+    private val couchSyncController: CouchSyncController,
     @param:ApplicationScope private val appScope: CoroutineScope
 ) : ViewModel() {
 
@@ -98,16 +103,27 @@ class SettingsViewModel @Inject constructor(
             }
         }
 
+        // Observe the CouchDB pumps
+        viewModelScope.launch {
+            couchSyncController.state.collect { state ->
+                syncUiState = syncUiState.copy(couchState = state)
+            }
+        }
+
         // Load persisted sync settings from KvProxy.
         viewModelScope.launch(Dispatchers.IO) {
             val persisted = kvProxy.getSyncSettings()
             val hasPassword = persisted.password.isNotEmpty()
-            val uiSettings = persisted.copy(password = "")
+            val hasCouchPassword = persisted.couchPassword.isNotEmpty()
+            // Neither password is ever put back into the UI; the field shows "(unchanged)" and an
+            // empty edit means "keep what is stored".
+            val uiSettings = persisted.copy(password = "", couchPassword = "")
             withContext(Dispatchers.Main) {
                 syncUiState = syncUiState.copy(
                     syncSettings = uiSettings,
                     lastSavedSettings = uiSettings,
-                    isPasswordSaved = hasPassword
+                    isPasswordSaved = hasPassword,
+                    isCouchPasswordSaved = hasCouchPassword
                 )
             }
         }
@@ -149,12 +165,13 @@ class SettingsViewModel @Inject constructor(
 
         if (saveToDb) {
             viewModelScope.launch(Dispatchers.IO) {
-                // Retrieve password
-                val password =
-                    newSettings.password.ifBlank {
-                        kvProxy.getSyncSettings().password
-                    }
-                val settingWithPassword = newSettings.copy(password = password)
+                // Retrieve passwords. A blank field means "leave the stored one alone", for both
+                // backends — the UI never holds either secret.
+                val stored = kvProxy.getSyncSettings()
+                val settingWithPassword = newSettings.copy(
+                    password = newSettings.password.ifBlank { stored.password },
+                    couchPassword = newSettings.couchPassword.ifBlank { stored.couchPassword },
+                )
 
                 try {
                     kvProxy.setSyncSettings(settingWithPassword)
@@ -164,11 +181,16 @@ class SettingsViewModel @Inject constructor(
                         oldSettings.syncEnabled != settingWithPassword.syncEnabled ||
                                 oldSettings.autoSync != settingWithPassword.autoSync ||
                                 oldSettings.syncInterval != settingWithPassword.syncInterval ||
-                                oldSettings.wifiOnly != settingWithPassword.wifiOnly
+                                oldSettings.wifiOnly != settingWithPassword.wifiOnly ||
+                                oldSettings.backend != settingWithPassword.backend
 
                     if (scheduleChanged) {
                         syncScheduler.reconcilePeriodicSync(settingWithPassword)
                     }
+
+                    // The engine captures its credentials and device id at construction, so a
+                    // settings change has to restart the feed to take effect.
+                    restartCouchFeed()
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         snackDispatcher.showOrUpdateSnack(SnackConf(text = "Failed to save: ${e.message}"))
@@ -276,6 +298,51 @@ class SettingsViewModel @Inject constructor(
      */
     fun onManualSync() {
         syncScheduler.triggerImmediateSync(SyncRequest.SyncAll)
+    }
+
+    // ----------------- //
+    // CouchDB backend
+    // ----------------- //
+
+    /**
+     * Persists the CouchDB fields. Separate from [onSaveCredentials] only because it also has to
+     * remember that a password is now stored, which is what the "(unchanged)" placeholder keys off.
+     */
+    fun onSaveCouchSettings() {
+        val current = syncUiState.syncSettings
+        updateSyncSettings(current, saveToDb = true)
+        syncUiState = syncUiState.copy(
+            lastSavedSettings = current.copy(password = "", couchPassword = ""),
+            isCouchPasswordSaved =
+                current.couchPassword.isNotEmpty() || syncUiState.isCouchPasswordSaved,
+            syncSettings = current.copy(couchPassword = ""),
+        )
+        appScope.launch {
+            snackDispatcher.showOrUpdateSnack(SnackConf(text = "CouchDB settings saved", duration = 3000))
+        }
+    }
+
+    /** One catch-up pass plus a push — no long poll, so it finishes rather than waiting. */
+    fun onCouchSyncNow() {
+        appScope.launch { couchSyncController.syncNow() }
+    }
+
+    /**
+     * Queues every document on this device and sends it. Needed once, against a fresh server: at
+     * that point nothing is dirty and nothing has been sent, so an ordinary sync has nothing to do.
+     */
+    fun onCouchUploadEverything() {
+        appScope.launch {
+            snackDispatcher.showOrUpdateSnack(
+                SnackConf(text = "Queueing everything on this device…", duration = 3000)
+            )
+            couchSyncController.pushEverything()
+        }
+    }
+
+    private fun restartCouchFeed() {
+        couchSyncController.stop()
+        couchSyncController.start()
     }
 
     // ----------------- //

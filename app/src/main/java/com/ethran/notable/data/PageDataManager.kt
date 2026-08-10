@@ -26,6 +26,7 @@ import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
 import com.ethran.notable.io.loadBackgroundBitmap
+import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.utils.chunked
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.ShipBook
@@ -110,6 +111,7 @@ class PageDataManager @Inject constructor(
     private val appEventBus: AppEventBus,
     private val backgroundFileWatcher: BackgroundFileWatcher,
     private val viewport: PageViewportState,
+    private val couchSync: CouchSyncController,
 ) {
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -982,7 +984,7 @@ class PageDataManager @Inject constructor(
      * escaping the coroutine and killing the process. For now this only logs and no-ops: the
      * in-memory state is untouched, so the next successful write re-persists it.
      */
-    private fun launchDbWrite(op: String, block: suspend () -> Unit) {
+    private fun launchDbWrite(op: String, pageIds: Collection<String>, block: suspend () -> Unit) {
         dataScope.launch {
             try {
                 block()
@@ -991,26 +993,32 @@ class PageDataManager @Inject constructor(
                     "DB write '$op' failed on page $currentPage " +
                             "(notebook ${pageFromDb?.notebookId}): ${e.message}", e
                 )
+                return@launch
             }
+            // The write landed, so the pages it touched are now out of step with the server.
+            // Queueing them and starting the debounce here is what makes a stroke leave the device
+            // without anyone pressing anything; the call is fire-and-forget so no drawing path ever
+            // waits on the database, let alone on the network.
+            for (pageId in pageIds.distinct()) couchSync.notePageEdited(pageId)
         }
     }
 
     fun updateStrokesInDb(strokes: List<Stroke>) {
-        launchDbWrite("updateStrokes(${strokes.size})") {
+        launchDbWrite("updateStrokes(${strokes.size})", strokes.map { it.pageId }) {
             appRepository.strokeRepository.update(strokes)
             bumpEditTimestamps()
         }
     }
 
     fun updateImagesInDb(images: List<Image>) {
-        launchDbWrite("updateImages(${images.size})") {
+        launchDbWrite("updateImages(${images.size})", images.map { it.pageId }) {
             appRepository.imageRepository.update(images)
             bumpEditTimestamps()
         }
     }
 
     fun saveStrokesToDb(strokes: List<Stroke>) {
-        launchDbWrite("saveStrokes(${strokes.size})") {
+        launchDbWrite("saveStrokes(${strokes.size})", strokes.map { it.pageId }) {
             try {
                 appRepository.strokeRepository.create(strokes)
             } catch (_: SQLiteConstraintException) {
@@ -1029,7 +1037,7 @@ class PageDataManager @Inject constructor(
     }
 
     fun saveImagesToDb(images: List<Image>) {
-        launchDbWrite("saveImages(${images.size})") {
+        launchDbWrite("saveImages(${images.size})", images.map { it.pageId }) {
             appRepository.imageRepository.create(images)
             bumpEditTimestamps()
         }
@@ -1047,17 +1055,22 @@ class PageDataManager @Inject constructor(
      * the edit was made on.
      */
     fun removeStrokesFromDb(strokes: List<String>, pageId: String) {
-        launchDbWrite("removeStrokes(${strokes.size})") {
+        launchDbWrite("removeStrokes(${strokes.size})", listOf(pageId)) {
             appRepository.strokeRepository.deleteAll(strokes)
             appRepository.deletedStrokeRepository.record(pageId, strokes)
             bumpEditTimestamps(pageId)
         }
     }
 
-    fun removeImagesFromDb(images: List<String>) {
-        launchDbWrite("removeImages(${images.size})") {
+    /**
+     * [pageId] is passed rather than read from [pageFromDb], for the same reason as
+     * [removeStrokesFromDb]: the field names whatever page is currently open, while these ids
+     * belong to the page the edit was made on.
+     */
+    fun removeImagesFromDb(images: List<String>, pageId: String) {
+        launchDbWrite("removeImages(${images.size})", listOf(pageId)) {
             appRepository.imageRepository.deleteAll(images)
-            bumpEditTimestamps()
+            bumpEditTimestamps(pageId)
         }
     }
 
@@ -1079,8 +1092,10 @@ class PageDataManager @Inject constructor(
         appRepository.bookRepository.update(notebook)
     }
 
+    // Scroll is device-local and deliberately not synced (see RoomCouchStore.applyPage), so this
+    // write queues nothing.
     fun setScrollInDb() {
-        launchDbWrite("scroll") {
+        launchDbWrite("scroll", emptyList()) {
             appRepository.pageRepository.updateScroll(
                 currentPage,
                 getPageScroll(currentPage).y.toInt()

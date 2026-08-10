@@ -124,6 +124,11 @@ fun SettingsView(
                 onConfirmForceUpload = viewModel::onConfirmForceUpload,
                 onConfirmForceDownload = viewModel::onConfirmForceDownload,
             ),
+            couch = CouchSyncCallbacks(
+                onSave = viewModel::onSaveCouchSettings,
+                onSyncNow = viewModel::onCouchSyncNow,
+                onUploadEverything = viewModel::onCouchUploadEverything,
+            ),
         )
     )
 }
