@@ -132,6 +132,21 @@ tasks.withType(Test).configureEach {
             '--add-opens=java.base/jdk.internal.reflect=ALL-UNNAMED',
             '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED',
     ]
+
+    // The CouchDB integration/interop suites skip themselves (org.junit.Assume) unless these are
+    // set. A forked test JVM does not reliably inherit Gradle's own environment, so forward them
+    // explicitly — spelling them out here keeps "which variables reach the tests" answerable from
+    // the build file rather than from whatever the shell happened to export.
+    ['NOTABLE_COUCH_URL',
+     'NOTABLE_COUCH_USER',
+     'NOTABLE_COUCH_PASSWORD',
+     'NOTABLE_COUCH_DATABASE',
+     'COUCH_INTEROP_ID'].each { name ->
+        def value = System.getenv(name)
+        if (value != null) {
+            environment name, value
+        }
+    }
 }
 
 dependencies {
