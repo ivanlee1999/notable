@@ -1,10 +1,12 @@
 package com.ethran.notable.editor
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +25,7 @@ import com.ethran.notable.editor.ui.HorizontalScrollIndicator
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.toolbar.PositionedToolbar
+import com.ethran.notable.editor.ui.toolbar.toolbarInset
 import com.ethran.notable.gestures.EditorGestureReceiver
 import com.ethran.notable.navigation.NavigationDestination
 import com.ethran.notable.ui.LocalSnackContext
@@ -241,17 +244,23 @@ fun EditorView(
             SelectedBitmap(
                 context = context, controlTower = editorControlTower
             )
+            // Both indicators hug an edge, so they are inset by the rail's own band —
+            // otherwise a left- or right-docked rail sits on top of them.
+            val railInset = toolbarInset(toolbarState.isToolbarOpen)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight()
+                    .padding(railInset)
             ) {
                 Spacer(modifier = Modifier.weight(1f))
                 ScrollIndicator(viewModel = viewModel, page = page)
             }
             PositionedToolbar(
                 viewModel = viewModel, onDrawingStateCheck = { viewModel.updateDrawingState() })
-            HorizontalScrollIndicator(viewModel = viewModel, page = page)
+            Box(Modifier.padding(railInset)) {
+                HorizontalScrollIndicator(viewModel = viewModel, page = page)
+            }
         }
     }
 }

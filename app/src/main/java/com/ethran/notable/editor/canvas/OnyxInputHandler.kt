@@ -6,6 +6,7 @@ import android.graphics.RectF
 import android.util.Log
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toRect
+import com.ethran.notable.data.datastore.TOOLBAR_THICKNESS
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.PageView
@@ -211,12 +212,16 @@ class OnyxInputHandler(
         log.i("Update editable surface")
         coroutineScope.launch {
             onSurfaceInit(drawCanvas)
-            val toolbarHeight =
-                if (toolbarState.isToolbarOpen) convertDpToPixel(40.dp, drawCanvas.context).toInt() else 0
+            // Across the rail's short edge: its height when docked top/bottom, its width
+            // when docked left/right. setupSurface reads the position itself.
+            val toolbarThickness =
+                if (toolbarState.isToolbarOpen)
+                    convertDpToPixel(TOOLBAR_THICKNESS.dp, drawCanvas.context).toInt()
+                else 0
             setupSurface(
                 drawCanvas,
                 touchHelper,
-                toolbarHeight
+                toolbarThickness
             )
             // setupSurface resets the framework stroke style to firmware defaults. Re-send the
             // pen style here, inside the same coroutine and after the surface is armed: a caller

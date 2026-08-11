@@ -30,16 +30,12 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.data.datastore.AppSettings
-import com.ethran.notable.data.datastore.BUTTON_SIZE
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.utils.PenSetting
-import com.ethran.notable.ui.convertDpToPixel
 import kotlin.math.roundToInt
 
 
@@ -51,7 +47,7 @@ fun StrokeMenu(
     sizeOptions: List<Pair<String, Float>>,
     colorOptions: List<Color>,
 ) {
-    val context = LocalContext.current
+    val placement = toolbarPopupPlacement()
 
     val columnModifier =
         if (GlobalAppSettings.current.continuousStrokeSlider) Modifier
@@ -59,22 +55,24 @@ fun StrokeMenu(
             .border(1.dp, Color.Black)
         else Modifier
     Popup(
-        offset = IntOffset(0, convertDpToPixel(43.dp, context).toInt()),
+        offset = placement.offset,
         onDismissRequest = { onClose() },
         properties = PopupProperties(focusable = true),
-        alignment = Alignment.TopCenter
+        alignment = placement.alignment
     ) {
 
         Column(
             modifier = columnModifier
                 .width(IntrinsicSize.Min) // match the widest child (ColorPicker Row)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
-                .padding(bottom = (BUTTON_SIZE + 5).dp) // For toolbar is located at the button,
+                .padding(placement.padding) // keeps the menu on screen against the docked edge
         ) {
 
             val widthOfPicker = (35 * colorOptions.size.coerceAtLeast(5))
             val heightOfPicker = 40
 
+            // Docked at the bottom the menu grows upwards, so the sizes — the thing the
+            // thumb is already near — come first.
             val isBottom =
                 GlobalAppSettings.current.toolbarPosition == AppSettings.Position.Bottom
 

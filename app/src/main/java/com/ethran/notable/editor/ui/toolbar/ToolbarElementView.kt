@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,13 +21,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -49,7 +47,6 @@ import com.ethran.notable.editor.ui.toolbar.model.PenElement
 import com.ethran.notable.editor.ui.toolbar.model.ShapeElement
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElement
 import com.ethran.notable.editor.utils.Eraser
-import com.ethran.notable.ui.convertDpToPixel
 import com.ethran.notable.ui.noRippleClickable
 
 /**
@@ -68,7 +65,7 @@ fun ToolbarElementView(
     onPickImage: () -> Unit,
 ) {
     when (element) {
-        is DividerElement -> ToolbarVerticalDivider()
+        is DividerElement -> ToolbarDivider()
 
         is PenElement -> PenElementView(element, uiState, onAction)
 
@@ -110,20 +107,25 @@ fun ToolbarElementView(
                     onSelect = onPickImage,
                 )
 
-            CustomKind.PAGE_NAV ->
+            CustomKind.PAGE_NAV -> {
+                // A vertical rail is one button wide, so "3/128" has to set smaller and
+                // lose its side padding to fit.
+                val vertical = isToolbarVertical()
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .height(35.dp)
-                        .padding(horizontal = 10.dp)
+                        .padding(horizontal = if (vertical) 0.dp else 10.dp)
                 ) {
                     Text(
                         text = uiState.pageNumberInfo,
                         fontWeight = FontWeight.Light,
+                        fontSize = if (vertical) 11.sp else TextUnit.Unspecified,
                         modifier = Modifier.noRippleClickable { onAction(ToolbarAction.NavigateToPages) },
                         textAlign = TextAlign.Center
                     )
                 }
+            }
 
             CustomKind.MENU ->
                 Column {
@@ -230,17 +232,17 @@ private fun EraserSubmenu(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
 ) {
-    val context = LocalContext.current
+    val placement = toolbarPopupPlacement()
 
     Popup(
-        offset = IntOffset(0, convertDpToPixel(43.dp, context).toInt()),
+        offset = placement.offset,
         onDismissRequest = { onAction(ToolbarAction.ToggleEraserManu(false)) },
         properties = PopupProperties(focusable = true),
-        alignment = Alignment.TopCenter
+        alignment = placement.alignment
     ) {
         Column(
             modifier = Modifier
-                .padding(bottom = (BUTTON_SIZE + 5).dp) // For toolbar is located at the button,
+                .padding(placement.padding) // keeps the menu on screen against the docked edge
                 .background(Color.White)
                 .border(1.dp, Color.Black)
                 .height(IntrinsicSize.Max)
@@ -291,12 +293,3 @@ private fun EraserSubmenu(
     }
 }
 
-@Composable
-internal fun ToolbarVerticalDivider() {
-    Box(
-        Modifier
-            .fillMaxHeight()
-            .width(0.5.dp)
-            .background(Color.Black)
-    )
-}

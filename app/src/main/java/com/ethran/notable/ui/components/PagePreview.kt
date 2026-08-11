@@ -31,13 +31,20 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun PagePreview(
-    modifier: Modifier = Modifier, pageId: String, onPreviewMissing: (String) -> Unit = {}
+    modifier: Modifier = Modifier,
+    pageId: String,
+    onPreviewMissing: (String) -> Unit = {},
+    /**
+     * What shows through until the thumbnail loads. Transparent lets a caller draw its own
+     * placeholder underneath — the notebook cover paints the book's paper template there.
+     */
+    background: Color = Color.LightGray,
 ) {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current
 
     if (isPreview) {
-        Box(modifier = modifier.background(Color.LightGray))
+        Box(modifier = modifier.background(background))
         return
     }
 
@@ -85,6 +92,6 @@ fun PagePreview(
         painter = painter,
         contentDescription = "Page Preview",
         contentScale = ContentScale.FillWidth,
-        modifier = modifier.background(Color.LightGray)
+        modifier = modifier.background(background)
     )
 }

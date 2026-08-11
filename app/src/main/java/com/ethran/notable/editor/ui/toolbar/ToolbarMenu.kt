@@ -3,6 +3,7 @@ package com.ethran.notable.editor.ui.toolbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -16,10 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -31,7 +30,6 @@ import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.io.ExportFormat
-import com.ethran.notable.ui.convertDpToPixel
 import com.ethran.notable.ui.noRippleClickable
 
 /**
@@ -43,22 +41,20 @@ fun ToolbarMenu(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
 ) {
-    val context = LocalContext.current
+    val placement = toolbarMenuPlacement()
 
     Popup(
-        alignment = Alignment.TopEnd,
+        alignment = placement.alignment,
         onDismissRequest = {
                 onAction(ToolbarAction.ToggleMenu)
         },
-        offset = IntOffset(
-            convertDpToPixel((-10).dp, context).toInt(),
-            convertDpToPixel(50.dp, context).toInt()
-        ),
+        offset = placement.offset,
         properties = PopupProperties(focusable = true),
     ) {
         ToolbarMenuContent(
             uiState = uiState,
-            onAction = onAction
+            onAction = onAction,
+            padding = placement.padding,
         )
     }
 }
@@ -66,11 +62,12 @@ fun ToolbarMenu(
 @Composable
 private fun ToolbarMenuContent(
     uiState: ToolbarUiState,
-    onAction: (ToolbarAction) -> Unit
+    onAction: (ToolbarAction) -> Unit,
+    padding: PaddingValues = PaddingValues(bottom = (BUTTON_SIZE + 5).dp),
 ) {
     Column(
         Modifier
-            .padding(bottom = (BUTTON_SIZE + 5).dp)
+            .padding(padding) // keeps the menu on screen against the docked edge
             .border(1.dp, Color.Black, RectangleShape)
             .background(Color.White)
             .width(IntrinsicSize.Max)
