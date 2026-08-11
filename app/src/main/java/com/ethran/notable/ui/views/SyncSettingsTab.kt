@@ -211,21 +211,30 @@ fun SyncSettings(
                     Spacer(modifier = Modifier.height(24.dp))
 
                     SyncActionsSection(state = state, callbacks = callbacks)
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    var logsExpanded by remember { mutableStateOf(false) }
-                    SyncLogsSection(
-                        state = state,
-                        callbacks = callbacks,
-                        isExpanded = logsExpanded,
-                        onToggleExpanded = { logsExpanded = !logsExpanded }
-                    )
                 }
             } else {
                 Spacer(modifier = Modifier.height(24.dp))
                 MissingConfigurationHint()
             }
+        }
+
+        // Outside the backend branches, and gated on nothing but a backend being chosen.
+        //
+        // It used to sit inside the WebDAV branch behind "configured and enabled", which put it out
+        // of reach of everyone it is most useful to: CouchDB records its decisions in this same log
+        // and could never show them, and the reasons a sync did not run — not configured, switched
+        // off — were hidden behind being configured and switched on. The panel that explains why
+        // nothing happened cannot require that everything already be set up correctly.
+        if (state.syncSettings.backend != SyncBackend.OFF) {
+            Spacer(modifier = Modifier.height(24.dp))
+
+            var logsExpanded by remember { mutableStateOf(false) }
+            SyncLogsSection(
+                state = state,
+                callbacks = callbacks,
+                isExpanded = logsExpanded,
+                onToggleExpanded = { logsExpanded = !logsExpanded }
+            )
         }
 
         Spacer(modifier = Modifier.height(32.dp))

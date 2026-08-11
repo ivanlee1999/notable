@@ -25,6 +25,8 @@ import com.ethran.notable.data.events.AppEventBus
 import com.ethran.notable.sync.NotebookSyncStatusStore
 import com.ethran.notable.sync.SyncBadge
 import com.ethran.notable.sync.SyncScheduler
+import com.ethran.notable.sync.couch.CouchDocId
+import com.ethran.notable.sync.couch.CouchSyncController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +75,7 @@ class LibraryViewModel @Inject constructor(
     private val snackDispatcher: SnackDispatcher,
     val syncScheduler: SyncScheduler,
     private val syncStatusStore: NotebookSyncStatusStore,
+    private val couchSync: CouchSyncController,
     @param:ApplicationContext private val context: Context // Kept strictly for ImportEngine
 ) : ViewModel() {
 
@@ -171,6 +174,7 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val folder = Folder(title = title, parentFolderId = _folderId.value)
             folderRepository.create(folder)
+            couchSync.noteDocumentChanged(CouchDocId.folder(folder.id))
         }
     }
 
@@ -190,6 +194,10 @@ class LibraryViewModel @Inject constructor(
                 defaultBackgroundType = BackgroundType.Native.key
             )
             bookRepository.create(notebook)
+            // Queue it now rather than waiting for someone to draw in it. Nothing else here ever
+            // did, so a notebook made and left alone was invisible to the server: the outbox is fed
+            // by ink edits, and creating a notebook is not one.
+            couchSync.noteDocumentChanged(CouchDocId.notebook(notebook.id))
         }
     }
 

@@ -236,6 +236,24 @@ class CouchSyncEngine(
         persist()
     }
 
+    /**
+     * Which of [candidates] this device has neither sent nor received, and is not already holding
+     * in the outbox.
+     *
+     * [revs] records a revision for every document that has been through the server in either
+     * direction, so its absence is a reliable "the server has never seen this from us". That makes
+     * a document created locally and never edited afterwards — a notebook made and left alone,
+     * a folder, an import — detectable without a per-row dirty flag.
+     *
+     * This is a safety net under [markDirty], not a replacement for it. Enqueueing on the edit is
+     * what makes a change push *promptly*; this is what stops one being lost for good when a
+     * mutation site forgets to. It cannot see a change to a document already sent once, which still
+     * has to be queued at the point of the edit.
+     */
+    suspend fun neverSent(candidates: List<String>): List<String> = mutex.withLock {
+        candidates.filter { it !in revs && it !in dirty }
+    }
+
     // region Push
 
     suspend fun flush(): FlushReport = mutex.withLock {

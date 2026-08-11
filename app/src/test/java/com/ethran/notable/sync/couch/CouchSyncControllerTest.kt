@@ -45,8 +45,20 @@ class CouchSyncControllerTest {
         var enabled = true
 
         val markedPages = mutableListOf<String>()
+
+        /** Notebook/folder documents queued without any page being drawn in. */
+        val markedDocuments = mutableListOf<String>()
         val deletions = mutableListOf<String>()
         val everythingMarked = AtomicInteger(0)
+
+        /** How many times a sync scanned for documents the server has never seen. */
+        val unsentScans = AtomicInteger(0)
+
+        @Volatile
+        var unsentCount = 0
+
+        @Volatile
+        var unsentError: Throwable? = null
 
         val flushCount: Int get() = synchronized(lock) { flushes }
 
@@ -72,6 +84,16 @@ class CouchSyncControllerTest {
 
         override suspend fun markEverythingDirty() {
             everythingMarked.incrementAndGet()
+        }
+
+        override suspend fun markDocumentDirty(documentId: String) {
+            synchronized(lock) { markedDocuments += documentId }
+        }
+
+        override suspend fun markUnsentDirty(): Int {
+            unsentScans.incrementAndGet()
+            unsentError?.let { throw it }
+            return unsentCount
         }
 
         override suspend fun recordDeletion(documentId: String) {
@@ -374,6 +396,53 @@ class CouchSyncControllerTest {
         runBlocking { controller.syncNow() }
 
         assertEquals("Sync now should not wait on a long poll", listOf(false), backend.pullCalls)
+        assertEquals(1, backend.flushCount)
+    }
+
+    /**
+     * The outbox is fed by edits, and a notebook created and left alone is never edited — so it was
+     * never sent, however many times sync ran. Every sync now looks for documents the server has
+     * never seen, which is the only thing that catches a document no edit ever queued.
+     */
+    @Test
+    fun `syncNow queues documents the server has never seen`() {
+        val backend = BackendSpy()
+        backend.unsentCount = 1
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.syncNow() }
+
+        assertEquals("every sync should scan for unsent documents", 1, backend.unsentScans.get())
+        assertEquals("and then push what it found", 1, backend.flushCount)
+    }
+
+    /**
+     * A notebook created or renamed without anyone drawing in it still has to travel. Only ink
+     * edits used to queue anything, so this was the difference between a name that syncs and one
+     * that stays on the device it was typed on.
+     */
+    @Test
+    fun `a notebook change queues that document and starts the debounce`() {
+        val backend = BackendSpy()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        controller.noteDocumentChanged(CouchDocId.notebook("nb1"))
+        settle(200)
+
+        assertEquals(listOf("notebook:nb1"), backend.markedDocuments)
+        assertEquals("the change should have been pushed once the timer elapsed", 1, backend.flushCount)
+    }
+
+    /** A scan that throws must not cost the run its pull and push. */
+    @Test
+    fun `syncNow still runs when the unsent scan fails`() {
+        val backend = BackendSpy()
+        backend.unsentError = IllegalStateException("database unavailable")
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.syncNow() }
+
+        assertEquals(listOf(false), backend.pullCalls)
         assertEquals(1, backend.flushCount)
     }
 

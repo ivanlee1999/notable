@@ -50,6 +50,7 @@ import androidx.core.net.toUri
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Folder
+import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.getLinkedFilesDir
@@ -87,6 +88,15 @@ fun NotebookConfigDialog(
     val kvProxy = rememberKvProxy()
     val context = LocalContext.current
 
+    // Every write below changes the notebook document, and CouchDB only ever learns about a change
+    // that was queued — its outbox is fed by explicit calls, not by watching the database. Pairing
+    // the two here rather than at each call site is the point: the same discipline applied
+    // per-site is what left renames, moves and template changes unsynced in the first place.
+    val saveBook: suspend (Notebook) -> Unit = { updated ->
+        bookRepository.update(updated)
+        couchSync.noteDocumentChanged(CouchDocId.notebook(updated.id))
+    }
+
     if (book == null) return
 
     var isRenaming by remember { mutableStateOf(false) }
@@ -118,7 +128,7 @@ fun NotebookConfigDialog(
                             defaultBackgroundType = backgroundType
                         )
                         scope.launch {
-                            bookRepository.update(updatedBook)
+                            saveBook(updatedBook)
                         }
                     }
                 } else if (book!!.defaultBackgroundType != backgroundType || book!!.defaultBackground != background) {
@@ -127,7 +137,7 @@ fun NotebookConfigDialog(
                         defaultBackground = background
                     )
                     scope.launch {
-                        bookRepository.update(updatedBook)
+                        saveBook(updatedBook)
                     }
                 }
             }) {
@@ -199,7 +209,7 @@ fun NotebookConfigDialog(
                 bookFolder = selectedFolder
                 scope.launch {
                     // be careful, not to cause race condition.
-                    bookRepository.update(updatedBook)
+                    saveBook(updatedBook)
                 }
             })
     }
@@ -212,7 +222,7 @@ fun NotebookConfigDialog(
                 isRenaming = false
                 val current = book!!
                 if (current.title != name) {
-                    scope.launch { bookRepository.update(current.copy(title = name)) }
+                    scope.launch { saveBook(current.copy(title = name)) }
                 }
             },
             onDismiss = { isRenaming = false }
@@ -331,7 +341,7 @@ fun NotebookConfigDialog(
                         onLinkChanged = { newUri ->
                             val updated = book!!.copy(linkedExternalUri = newUri)
                             scope.launch {
-                                bookRepository.update(updated)
+                                saveBook(updated)
                             }
                         })
 
