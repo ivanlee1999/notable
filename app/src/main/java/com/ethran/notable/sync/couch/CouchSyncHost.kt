@@ -46,6 +46,8 @@ class CouchSyncHost @Inject constructor(
 
     private class Stack(
         val settingsKey: String,
+        /** Where this server's checkpoint is persisted — see [stateKey]. */
+        val stateKey: String,
         val store: RoomCouchStore,
         val engine: CouchSyncEngine,
     )
@@ -71,12 +73,12 @@ class CouchSyncHost @Inject constructor(
      * of order and resurrect an older `lastSeq`; a conflated channel keeps only the newest state
      * and writes them in order.
      */
-    private val stateWrites = Channel<CouchSyncState>(Channel.CONFLATED)
+    private val stateWrites = Channel<Pair<String, CouchSyncState>>(Channel.CONFLATED)
 
     init {
         scope.launch {
-            for (state in stateWrites) {
-                runCatching { kvProxy.setKv(COUCH_SYNC_STATE_KEY, state, CouchSyncState.serializer()) }
+            for ((key, state) in stateWrites) {
+                runCatching { kvProxy.setKv(key, state, CouchSyncState.serializer()) }
                     .onFailure { log.w("Could not persist couch sync state: ${it.message}") }
             }
         }
@@ -173,6 +175,7 @@ class CouchSyncHost @Inject constructor(
 
         val key = settingsKey(settings)
         stack?.takeIf { it.settingsKey == key }?.let { return@withLock it }
+        val stateKey = stateKey(settings)
 
         val deviceId = settings.deviceId.ifBlank { DEFAULT_DEVICE_ID }
         val transport = runCatching {
@@ -205,21 +208,21 @@ class CouchSyncHost @Inject constructor(
             // The engine applies changes off the UI thread; the canvas has to be told to reload.
             onApplied = { scope.launch { CanvasEventBus.reloadFromDb.emit(Unit) } },
         )
-        val initial = loadState()
+        val initial = loadState(stateKey)
         val engine = CouchSyncEngine(
             client = CouchDbClient(transport, database = settings.couchDatabase),
             store = store,
             deviceId = deviceId,
             state = initial,
             onStateChange = {
-                stateWrites.trySend(it)
+                stateWrites.trySend(stateKey to it)
                 // The badge follows the engine, not the persisted copy: it should change the moment
                 // a document is queued or accepted, not once the checkpoint write lands.
                 publish(it)
             },
         )
         publish(initial)
-        Stack(key, store, engine).also { stack = it }
+        Stack(key, stateKey, store, engine).also { stack = it }
     }
 
     /**
@@ -242,11 +245,33 @@ class CouchSyncHost @Inject constructor(
     ).joinToString("\u0000")
 
     /**
+     * Where this server's sync state lives. Namespaced by the server and database, because that is
+     * what the state describes: `lastSeq` is a position in *one* server's change feed, and the
+     * revisions are that server's revisions.
+     *
+     * All of it was previously kept under a single key, so pointing the app at a different server
+     * — or a different database on the same one — handed the new server the old one's checkpoint.
+     * A foreign `since` skips changes rather than failing loudly, and stale revisions suppress real
+     * updates as though they were this device's own echoes.
+     *
+     * Credentials and the device id are deliberately *not* part of the name: changing a password
+     * does not change what is on the server, and discarding the checkpoint would mean replaying the
+     * whole feed for nothing.
+     *
+     * Hashed to keep a URL's punctuation out of the key. Anyone upgrading replays from the start
+     * once, which is slow and correct rather than fast and wrong.
+     */
+    private fun stateKey(settings: SyncSettings): String {
+        val identity = listOf(settings.couchUrl, settings.couchDatabase).joinToString("\u0000")
+        return "$COUCH_SYNC_STATE_KEY:" + CouchAssetId.sha256Hex(identity.toByteArray())
+    }
+
+    /**
      * A missing or unreadable checkpoint is not an error: every document re-pushes and the feed
      * replays from the start, which is slow but correct because every merge is idempotent.
      */
-    private suspend fun loadState(): CouchSyncState =
-        runCatching { kvProxy.get(COUCH_SYNC_STATE_KEY, CouchSyncState.serializer()) }
+    private suspend fun loadState(key: String): CouchSyncState =
+        runCatching { kvProxy.get(key, CouchSyncState.serializer()) }
             .getOrNull()
             ?: CouchSyncState().also {
                 // Correct but expensive, and it looks identical to a hung sync from outside: every
