@@ -104,7 +104,11 @@ class SyncWorker(
                 SyncRequest.ForceUpload -> entryPoint.syncOrchestrator().forceUploadAll()
                 SyncRequest.ForceDownload -> entryPoint.syncOrchestrator().forceDownloadAll()
                 is SyncRequest.UploadDeletion -> entryPoint.syncOrchestrator().uploadDeletion(syncRequest.notebookId)
-                is SyncRequest.SyncNotebook -> entryPoint.syncOrchestrator().syncNotebook(syncRequest.notebookId)
+                // Only the per-notebook "Sync now" action enqueues this, so it waits for the lock
+                // rather than skipping — the user is looking at a message saying it is syncing.
+                is SyncRequest.SyncNotebook ->
+                    entryPoint.syncOrchestrator()
+                        .syncNotebook(syncRequest.notebookId, userInitiated = true)
                 is SyncRequest.SyncFromPageId -> {
                     entryPoint.syncOrchestrator().syncFromPageId(syncRequest.pageId)
                     AppResult.Success(Unit)

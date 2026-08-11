@@ -270,15 +270,31 @@ class SyncOrchestrator @Inject constructor(
         }
     }
 
-    suspend fun syncNotebook(notebookId: String): AppResult<Unit, DomainError> =
+    /**
+     * Sync one notebook, holding [syncMutex] for the whole operation (a bare `isLocked` check is
+     * check-then-act, and let a sync-on-close race a full sync).
+     *
+     * [userInitiated] decides what happens when the lock is already held, and the two answers are
+     * genuinely different. An *automatic* sync — closing a note — skips: the run in flight covers
+     * the same ground and another will follow, so waiting would only queue background work behind
+     * background work. A sync the user *asked for* waits instead, the same reasoning the conflict
+     * -resolution entry points already use: dropping it would report "syncing…" for something that
+     * never happened, which is exactly the silence this is meant to end.
+     */
+    suspend fun syncNotebook(
+        notebookId: String,
+        userInitiated: Boolean = false,
+    ): AppResult<Unit, DomainError> =
         withContext(ioDispatcher) {
-            // Actually hold the mutex for the whole operation. A bare isLocked check is
-            // check-then-act: it let a sync-on-close race a full/periodic sync. Skip-if-busy
-            // is still the right behavior for a single-notebook sync, so a failed tryLock succeeds.
-            if (!syncMutex.tryLock()) {
-                // Skip-if-busy is the right behavior, but a *silent* skip is how "I closed the note
-                // and it never synced" becomes unexplainable: the full sync that held the lock had
-                // already read this notebook, so the close-time edit waits for the next run.
+            if (userInitiated) {
+                if (syncMutex.isLocked) {
+                    log.i(TAG, "Notebook $notebookId queued behind the sync already running")
+                }
+                syncMutex.lock()
+            } else if (!syncMutex.tryLock()) {
+                // A *silent* skip is how "I closed the note and it never synced" becomes
+                // unexplainable: the full sync that held the lock had already read this notebook,
+                // so the close-time edit waits for the next run.
                 log.i(TAG, "Notebook $notebookId not synced now: another sync holds the lock")
                 return@withContext AppResult.Success(Unit)
             }
@@ -291,10 +307,11 @@ class SyncOrchestrator @Inject constructor(
 
     /**
      * The single-notebook sync body — preflight then reconcile — WITHOUT touching [syncMutex]. The
-     * caller owns the mutex around it: [syncNotebook] via a skip-if-busy `tryLock`, and the
-     * conflict-resolution entry points by *waiting* for it so an explicit user choice is applied for
-     * real rather than dropped on contention. Reconciliation no longer checks clock skew per
-     * notebook, so this gates on it itself.
+     * caller owns the mutex around it: [syncNotebook] via a skip-if-busy `tryLock` or a wait,
+     * depending on whether the user asked for it, and the conflict-resolution entry points by
+     * *waiting* for it so an explicit user choice is applied for real rather than dropped on
+     * contention. Reconciliation no longer checks clock skew per notebook, so this gates on it
+     * itself.
      */
     private suspend fun runSingleNotebookSync(notebookId: String): AppResult<Unit, DomainError> {
         val settings = kvProxy.getSyncSettings()
