@@ -26,6 +26,7 @@
     <string name="vertical_navigation_continuous">Scrolling</string>
     <string name="vertical_navigation_paged">Pagination</string>
     <string name="continuous_zoom">Continuous Zoom</string>
+    <string name="fit_page_width">Fit page width to screen width</string>
     <string name="continuous_stroke_slider">Continuous Stroke Slider</string>
     <string name="rename_on_create">Open properties on new notebook</string>
     <string name="paginate_pdf">Paginate PDF</string>
@@ -123,9 +124,12 @@
 
     <!-- CouchDB backend -->
     <string name="sync_backend_title">Sync Backend</string>
+    <string name="sync_backend_off">Off</string>
     <string name="sync_backend_webdav">WebDAV</string>
     <string name="sync_backend_couchdb">CouchDB</string>
     <string name="sync_backend_hint">CouchDB syncs each page as you draw and merges edits made on both devices. WebDAV uploads whole notebooks.</string>
+    <string name="sync_backend_off_hint">Nothing is sent anywhere. Your notes stay on this device, and your server settings are kept for when you turn sync back on.</string>
+    <string name="sync_off_title">Sync Off</string>
     <string name="sync_couch_title">CouchDB Synchronization</string>
     <string name="sync_couch_url_label">Server URL</string>
     <string name="sync_couch_url_placeholder">http://192.168.1.10:5984</string>

@@ -64,7 +64,7 @@ class SyncOrchestrator @Inject constructor(
                     ", fastSync=${settings.fastSyncEnabled}, wifiOnly=${settings.wifiOnly}"
             )
 
-            if (!settings.syncEnabled) {
+            if (!settings.webdavActive) {
                 return@withContext failStep(DomainError.SyncConfigError)
             }
 
@@ -292,7 +292,7 @@ class SyncOrchestrator @Inject constructor(
      */
     private suspend fun runSingleNotebookSync(notebookId: String): AppResult<Unit, DomainError> {
         val settings = kvProxy.getSyncSettings()
-        if (!settings.syncEnabled) return AppResult.Success(Unit)
+        if (!settings.webdavActive) return AppResult.Success(Unit)
         // Wifi constraint not satisfied -> planned no-op, the same policy as any other sync.
         if (syncPreflightService.checkWifiConstraint() is AppResult.Error) return AppResult.Success(Unit)
         if (settings.username.isBlank() || settings.password.isBlank()) {
@@ -310,7 +310,7 @@ class SyncOrchestrator @Inject constructor(
 
     suspend fun syncFromPageId(pageId: String) {
         val settings = kvProxy.getSyncSettings()
-        if (!settings.syncEnabled || !settings.syncOnNoteClose) return
+        if (!settings.webdavActive || !settings.syncOnNoteClose) return
         try {
             val page = appRepository.pageRepository.getById(pageId) ?: return
             page.notebookId?.let { syncNotebook(it) }
@@ -327,7 +327,7 @@ class SyncOrchestrator @Inject constructor(
      */
     suspend fun isRemoteNewer(notebookId: String): Boolean = withContext(ioDispatcher) {
         val settings = kvProxy.getSyncSettings()
-        if (!settings.syncEnabled || !settings.checkOnOpen ||
+        if (!settings.webdavActive || !settings.checkOnOpen ||
             settings.username.isBlank() || settings.password.isBlank()
         ) {
             return@withContext false
@@ -357,7 +357,7 @@ class SyncOrchestrator @Inject constructor(
     suspend fun uploadDeletion(notebookId: String): AppResult<Unit, DomainError> =
         withContext(ioDispatcher) {
             val settings = kvProxy.getSyncSettings()
-            if (!settings.syncEnabled) return@withContext AppResult.Success(Unit)
+            if (!settings.webdavActive) return@withContext AppResult.Success(Unit)
 
             return@withContext syncPreflightService.checkWifiConstraint().flatMap {
                 if (settings.username.isBlank() || settings.password.isBlank()) {
@@ -440,7 +440,7 @@ class SyncOrchestrator @Inject constructor(
     suspend fun notebookConflict(notebookId: String): AppResult<NotebookConflict, DomainError> =
         withContext(ioDispatcher) {
             val settings = kvProxy.getSyncSettings()
-            if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+            if (!settings.webdavActive || settings.username.isBlank() || settings.password.isBlank()) {
                 return@withContext AppResult.Success(NotebookConflict(emptyList(), structural = false))
             }
             val notebook = appRepository.bookRepository.getById(notebookId)
@@ -523,7 +523,7 @@ class SyncOrchestrator @Inject constructor(
     private suspend fun resolutionPreflight(
         settings: SyncSettings
     ): AppResult<WebDAVClient, DomainError> {
-        if (!settings.syncEnabled || settings.username.isBlank() || settings.password.isBlank()) {
+        if (!settings.webdavActive || settings.username.isBlank() || settings.password.isBlank()) {
             return AppResult.Error(DomainError.SyncConfigError)
         }
         if (settings.uploadOnly || settings.downloadOnly) {

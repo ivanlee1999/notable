@@ -42,7 +42,15 @@ class SyncWorker(
             return runCouchCatchUp(entryPoint, syncSettings, connectivityChecker)
         }
 
-        if (!syncSettings.syncEnabled) {
+        // OFF is caught by `webdavActive` too, but naming it separately keeps the log honest: a
+        // run skipped because sync is off is not the same complaint as one skipped because WebDAV
+        // was never switched on.
+        if (syncSettings.backend == SyncBackend.OFF) {
+            Log.i(TAG, "Sync turned off in settings, skipping")
+            return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
+        }
+
+        if (!syncSettings.webdavActive) {
             Log.i(TAG, "Sync disabled in settings, skipping")
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }

@@ -160,8 +160,11 @@ fun SyncSettings(
     ) {
         Text(
             text = stringResource(
-                if (state.syncSettings.backend == SyncBackend.COUCHDB) R.string.sync_couch_title
-                else R.string.sync_title
+                when (state.syncSettings.backend) {
+                    SyncBackend.OFF -> R.string.sync_off_title
+                    SyncBackend.COUCHDB -> R.string.sync_couch_title
+                    SyncBackend.WEBDAV -> R.string.sync_title
+                }
             ),
             style = MaterialTheme.typography.h6,
             fontWeight = FontWeight.Bold,
@@ -178,11 +181,13 @@ fun SyncSettings(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // The two backends are alternatives, not layers: showing WebDAV's whole-tree controls while
-        // CouchDB is driving would offer actions that do nothing.
+        // The backends are alternatives, not layers: showing WebDAV's whole-tree controls while
+        // CouchDB is driving would offer actions that do nothing. Off shows neither set, and the
+        // selector's own hint already says what that means — a second panel repeating it would
+        // cost an e-ink refresh to say nothing.
         if (state.syncSettings.backend == SyncBackend.COUCHDB) {
             CouchSection(state = state, callbacks = callbacks)
-        } else {
+        } else if (state.syncSettings.backend == SyncBackend.WEBDAV) {
             ConnectionSection(
                 state = state,
                 callbacks = callbacks,
@@ -548,8 +553,11 @@ private fun SyncLogsSection(
 }
 
 /**
- * The backend switch. Two flat buttons rather than a dropdown or a segmented control: on e-ink a
- * menu costs a full refresh to open and another to dismiss, and there are only ever two choices.
+ * The backend switch. Flat buttons rather than a dropdown or a segmented control: on e-ink a menu
+ * costs a full refresh to open and another to dismiss, and there are only ever three choices.
+ *
+ * Off is one of them, and it is the whole switch — nothing syncs until a backend is picked again.
+ * Both backends' settings survive it, so it is a pause rather than a reset.
  */
 @Composable
 private fun BackendSelectorSection(
@@ -558,6 +566,14 @@ private fun BackendSelectorSection(
 ) {
     EInkSection(title = stringResource(R.string.sync_backend_title), icon = Icons.Default.Cloud) {
         Row(modifier = Modifier.fillMaxWidth()) {
+            EInkActionButton(
+                text = stringResource(R.string.sync_backend_off),
+                onClick = { onSelect(SyncBackend.OFF) },
+                modifier = Modifier.weight(1f),
+                isSecondary = selected != SyncBackend.OFF,
+                isBold = selected == SyncBackend.OFF,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
             EInkActionButton(
                 text = stringResource(R.string.sync_backend_webdav),
                 onClick = { onSelect(SyncBackend.WEBDAV) },
@@ -576,7 +592,10 @@ private fun BackendSelectorSection(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = stringResource(R.string.sync_backend_hint),
+            text = stringResource(
+                if (selected == SyncBackend.OFF) R.string.sync_backend_off_hint
+                else R.string.sync_backend_hint
+            ),
             style = MaterialTheme.typography.caption,
             color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
             modifier = Modifier.padding(horizontal = 4.dp)
