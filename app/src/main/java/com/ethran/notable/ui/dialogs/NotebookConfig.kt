@@ -330,6 +330,7 @@ fun NotebookConfigDialog(
                     NotebookLinkRow(
                         isLinkedInit = book!!.linkedExternalUri != null,
                         linkedUriInit = book!!.linkedExternalUri,
+                        bookTitle = bookTitle,
                         defaultPath = defaultPath,
                         onLinkChanged = { newUri ->
                             val updated = book!!.copy(linkedExternalUri = newUri)
@@ -400,13 +401,17 @@ fun ActionButton(text: String, onClick: () -> Unit) {
 fun NotebookLinkRow(
     isLinkedInit: Boolean,
     linkedUriInit: String?,
+    bookTitle: String,
     defaultPath: String,
     onLinkChanged: (String?) -> Unit
 ) {
     var isLinked by remember { mutableStateOf(isLinkedInit) }
 
+    // The linked uri is a folder; the export lands in it under the notebook's title, so show the
+    // destination file rather than just the directory. Long uris keep only their head and tail.
     val linkText = linkedUriInit?.let {
-        if (it.length > 32) "${it.take(5)}...${it.takeLast(7)}/\${bookTitle}" else it
+        val folder = if (it.length > 32) "${it.take(5)}...${it.takeLast(7)}" else it
+        "$folder/$bookTitle"
     } ?: "none"
 
     Row(
