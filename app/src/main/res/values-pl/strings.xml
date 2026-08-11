@@ -2,8 +2,13 @@
 <resources>
     <string name="home_quick_pages">Szybkie notatki</string>
     <string name="home_notebooks">Zeszyty</string>
+    <string name="home_folders">Foldery</string>
+    <string name="home_all_notes">Wszystkie notatki</string>
     <string name="home_add_new_folder">Dodaj nowy folder</string>
     <string name="home_new_folder">Nowy folder</string>
+    <string name="home_new_notebook">Nowy zeszyt</string>
+    <string name="home_import_notebook">Importuj zeszyt</string>
+    <string name="home_quick_note">Szybka notatka</string>
     <string name="home_view_name">Biblioteka</string>
     <string name="settings_title">Ustawienia</string>
     <string name="settings_tab_general_name">Główne</string>
@@ -47,6 +52,8 @@
     <string name="work_in_progress">(w trakcie implementacji)</string>
     <string name="toolbar_position_top">Góra</string>
     <string name="toolbar_position_bottom">Dół</string>
+    <string name="toolbar_position_left">Lewo</string>
+    <string name="toolbar_position_right">Prawo</string>
     <string name="sponsor_button_text">Wesprzyj</string>
 
     <!-- Notebook details -->
