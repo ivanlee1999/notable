@@ -268,7 +268,7 @@ class SyncForceService @Inject constructor(
             val local = localById[folder.id]
             when {
                 local == null -> appRepository.folderRepository.create(folder)
-                local != folder -> appRepository.folderRepository.update(folder)
+                local != folder -> appRepository.folderRepository.updateVerbatim(folder)
             }
         }
     }

@@ -55,7 +55,7 @@ class FolderSyncService @Inject constructor(
                     for (folder in mergedFolders) {
                         val existing = appRepository.folderRepository.get(folder.id)
                         if (existing != null) {
-                            appRepository.folderRepository.update(folder)
+                            appRepository.folderRepository.updateVerbatim(folder)
                         } else {
                             appRepository.folderRepository.create(folder)
                         }

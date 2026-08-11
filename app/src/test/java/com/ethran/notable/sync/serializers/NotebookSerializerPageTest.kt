@@ -56,6 +56,7 @@ class NotebookSerializerPageTest {
         notebookId: String? = "nb-1",
         scroll: Int = 0,
         parentFolderId: String? = null,
+        title: String? = null,
         createdAt: Date = Date(1_700_000_000_000),
         updatedAt: Date = Date(1_700_000_456_000),
     ) = Page(
@@ -65,6 +66,7 @@ class NotebookSerializerPageTest {
         background = "blank",
         backgroundType = "native",
         parentFolderId = parentFolderId,
+        title = title,
         createdAt = createdAt,
         updatedAt = updatedAt,
     )
@@ -177,6 +179,28 @@ class NotebookSerializerPageTest {
         assertEquals("images/abc123.jpg", restoredImages[0].uri)
         // Null URI must survive as null.
         assertEquals(null, restoredImages[1].uri)
+    }
+
+    /**
+     * A page's name has to survive export/import, or renaming a page and then backing it up
+     * quietly loses the rename. Null is covered separately because the DTO omits it when absent —
+     * an unnamed page must decode as unnamed, not as the string "null".
+     */
+    @Test
+    fun page_round_trip_preserves_title_including_absence() {
+        val named = samplePage(id = "named", title = "Shopping list")
+        val namedResult = NotebookSerializer.deserializePage(
+            NotebookSerializer.serializePage(named, emptyList(), emptyList())
+        )
+        assertTrue("expected Success, got $namedResult", namedResult is AppResult.Success)
+        assertEquals("Shopping list", (namedResult as AppResult.Success).data.first.title)
+
+        val unnamed = samplePage(id = "unnamed", title = null)
+        val unnamedResult = NotebookSerializer.deserializePage(
+            NotebookSerializer.serializePage(unnamed, emptyList(), emptyList())
+        )
+        assertTrue("expected Success, got $unnamedResult", unnamedResult is AppResult.Success)
+        assertEquals(null, (unnamedResult as AppResult.Success).data.first.title)
     }
 
     @Test

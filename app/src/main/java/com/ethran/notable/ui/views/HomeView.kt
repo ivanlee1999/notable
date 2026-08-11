@@ -69,6 +69,7 @@ import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
 import com.ethran.notable.ui.dialogs.FolderConfigDialog
+import com.ethran.notable.ui.dialogs.NamePromptDialog
 import com.ethran.notable.ui.dialogs.NotebookConfigDialog
 import com.ethran.notable.ui.dialogs.PdfImportChoiceDialog
 import com.ethran.notable.ui.noRippleClickable
@@ -108,25 +109,42 @@ fun Library(
     viewModel: LibraryViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val newlyCreatedBookId by viewModel.newlyCreatedBookId.collectAsStateWithLifecycle()
 
     LaunchedEffect(folderId) {
         viewModel.loadFolder(folderId)
     }
 
-    // Show config dialog for newly created notebooks so user can rename immediately
-    if (newlyCreatedBookId != null) {
-        if (GlobalAppSettings.current.renameOnCreate && uiState.books.any { it.id == newlyCreatedBookId }) {
-            NotebookConfigDialog(
-                appRepository = viewModel.appRepository,
-                exportEngine = viewModel.exportEngine,
-                syncScheduler = viewModel.syncScheduler,
-                bookId = newlyCreatedBookId!!,
-                onClose = { viewModel.clearNewlyCreatedBookId() }
-            )
-        } else {
-            viewModel.clearNewlyCreatedBookId()
-        }
+    // Naming happens before the row exists, not after. Asking first costs one dialog refresh;
+    // creating first and renaming after costs two, and in between the library shows an item under
+    // a name the user did not choose.
+    var pendingNewFolder by remember { mutableStateOf(false) }
+    var pendingNewNotebook by remember { mutableStateOf(false) }
+
+    val defaultFolderName = stringResource(R.string.home_new_folder)
+    val defaultNotebookName = stringResource(R.string.home_new_notebook)
+
+    if (pendingNewFolder) {
+        NamePromptDialog(
+            title = stringResource(R.string.name_prompt_folder_title),
+            initialValue = defaultFolderName,
+            onConfirm = { name ->
+                pendingNewFolder = false
+                viewModel.createNewFolder(name)
+            },
+            onDismiss = { pendingNewFolder = false }
+        )
+    }
+
+    if (pendingNewNotebook) {
+        NamePromptDialog(
+            title = stringResource(R.string.name_prompt_notebook_title),
+            initialValue = defaultNotebookName,
+            onConfirm = { name ->
+                pendingNewNotebook = false
+                viewModel.onCreateNewNotebook(name)
+            },
+            onDismiss = { pendingNewNotebook = false }
+        )
     }
 
     LibraryContent(
@@ -141,9 +159,17 @@ fun Library(
         },
         goToPage = goToPage,
         onCreateNewQuickPage = { onCreateNewQuickPage(uiState.folderId) },
-        onCreateNewFolder = viewModel::createNewFolder,
+        // The prompt is a preference, not a requirement: with it off, creation stays a single tap
+        // and the item is named from the long-press menu if and when the user cares.
+        onCreateNewFolder = {
+            if (GlobalAppSettings.current.renameOnCreate) pendingNewFolder = true
+            else viewModel.createNewFolder(defaultFolderName)
+        },
         onDeleteEmptyBook = viewModel::deleteEmptyBook,
-        onCreateNewNotebook = viewModel::onCreateNewNotebook,
+        onCreateNewNotebook = {
+            if (GlobalAppSettings.current.renameOnCreate) pendingNewNotebook = true
+            else viewModel.onCreateNewNotebook(defaultNotebookName)
+        },
         onImportPdf = viewModel::onPdfFile,
         onImportXopp = viewModel::onXoppFile,
         onPreviewMissing = viewModel::onPreviewRequested

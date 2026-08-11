@@ -209,6 +209,7 @@ class RoomCouchStore(
         val data = appRepository.pageRepository.getWithDataById(id) ?: return null
         return CouchPage(
             notebookId = data.page.notebookId,
+            title = data.page.title,
             background = data.page.background,
             backgroundType = data.page.backgroundType,
             strokes = data.strokes.mapNotNull(::couchStroke),
@@ -322,6 +323,7 @@ class RoomCouchStore(
             // every incoming change would scroll the reader back to the top.
             scroll = existing?.page?.scroll ?: 0,
             notebookId = notebookId,
+            title = page.title,
             background = page.background,
             backgroundType = page.backgroundType,
             parentFolderId = existing?.page?.parentFolderId,
@@ -370,7 +372,7 @@ class RoomCouchStore(
             updatedAt = date(folder.updatedAt),
         )
         if (existing == null) appRepository.folderRepository.create(row)
-        else appRepository.folderRepository.update(row)
+        else appRepository.folderRepository.updateVerbatim(row)
     }
 
     /**

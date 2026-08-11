@@ -9,17 +9,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.deletePage
+import com.ethran.notable.ui.dialogs.NamePromptDialog
 import com.ethran.notable.ui.noRippleClickable
 import kotlinx.coroutines.launch
 
@@ -35,6 +42,29 @@ fun PageMenu(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // The existing name is fetched before the prompt opens, not alongside it: the dialog captures
+    // its initial value on first composition, so a title arriving a frame later would be missed.
+    var renameInitialValue by remember { mutableStateOf<String?>(null) }
+
+    if (renameInitialValue != null) {
+        NamePromptDialog(
+            title = stringResource(R.string.name_prompt_page_title),
+            initialValue = renameInitialValue!!,
+            onConfirm = { name ->
+                // Closing from inside the coroutine, not beside it: `onClose` unmounts this
+                // composable, and `scope` dies with it — a rename launched and *then* closed can
+                // be cancelled before the write lands.
+                scope.launch {
+                    appRepository.pageRepository.rename(pageId, name)
+                    onClose()
+                }
+            },
+            onDismiss = { onClose() }
+        )
+        return
+    }
+
     Popup(
         alignment = Alignment.TopStart,
         onDismissRequest = { onClose() },
@@ -87,6 +117,18 @@ fun PageMenu(
                         }) {
                     Text("Insert after")
                 }
+            }
+
+            Box(
+                Modifier
+                    .padding(10.dp)
+                    .noRippleClickable {
+                        scope.launch {
+                            renameInitialValue =
+                                appRepository.pageRepository.getById(pageId)?.title.orEmpty()
+                        }
+                    }) {
+                Text(stringResource(R.string.rename))
             }
 
             Box(

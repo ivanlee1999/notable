@@ -291,4 +291,57 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 38 -> 39 adds the nullable `title` column to `page`, so quick pages can be named.
+     *
+     * The column is nullable rather than defaulted to a string, and every page that predates the
+     * feature has to come out the other side as *unnamed* — the library shows the creation date in
+     * that case, and a non-null default would make every old page look deliberately titled.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate38To39_addsNullablePageTitleWithoutLosingData() {
+        val dbName = "migration-test-39"
+
+        val oldDb = helper.createDatabase(dbName, 38)
+        oldDb.execSQL(
+            """
+            INSERT INTO Notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, linkedExternalUri, createdAt, updatedAt)
+            VALUES ('notebook1', 'Kept', NULL, '[]', NULL, 'blank', 'native', NULL,
+                1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType,
+                parentFolderId, createdAt, updatedAt)
+            VALUES ('page1', 42, 'notebook1', 'blank', 'native', NULL,
+                1620000000000, 1620000000005)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        // No addMigrations call: 38 -> 39 is an auto-migration declared on @Database.
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // The page survives intact, and is unnamed rather than blank-named.
+        migratedDb.query("SELECT scroll, title, updatedAt FROM Page WHERE id = 'page1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(42, it.getInt(it.getColumnIndexOrThrow("scroll")))
+            assertTrue(it.isNull(it.getColumnIndexOrThrow("title")))
+            assertEquals(1620000000005L, it.getLong(it.getColumnIndexOrThrow("updatedAt")))
+        }
+
+        // And the new column actually accepts a name.
+        migratedDb.execSQL("UPDATE Page SET title = 'Shopping list' WHERE id = 'page1'")
+        migratedDb.query("SELECT title FROM Page WHERE id = 'page1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Shopping list", it.getString(it.getColumnIndexOrThrow("title")))
+        }
+
+        roomDb.close()
+    }
 }
