@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -37,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -55,8 +57,11 @@ import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.SyncRequest
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
+import com.ethran.notable.ui.ManualSyncOutcome
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
+import com.ethran.notable.ui.rememberKvProxy
+import com.ethran.notable.ui.requestNotebookSync
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.components.BreadCrumb
 import com.ethran.notable.ui.components.PagePreview
@@ -79,6 +84,8 @@ fun NotebookConfigDialog(
     val scope = rememberCoroutineScope()
     val snackManager = LocalSnackContext.current
     val couchSync = rememberCouchSyncController()
+    val kvProxy = rememberKvProxy()
+    val context = LocalContext.current
 
     if (book == null) return
 
@@ -342,10 +349,13 @@ fun NotebookConfigDialog(
 
             Spacer(Modifier.height(16.dp))
 
-            // Grid Actions Section
-            Row(
+            // Grid Actions Section. FlowRow, not Row: the actions are fixed-width and there are now
+            // enough of them to overflow a narrow dialog, where a Row would clip the last one
+            // off-screen rather than wrap it.
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 ActionButton(stringResource(R.string.details_notebook_buttons_delete)) {
                     showDeleteDialog = true
@@ -363,12 +373,38 @@ fun NotebookConfigDialog(
                         )
                     }
                 }
-
+                // Sync this one notebook on demand. Until now the only ways to get a notebook to
+                // the server were the periodic run, a full "Sync now" in settings, or closing the
+                // note with sync-on-close enabled — none of which is reachable from the notebook
+                // you are actually looking at and wondering about.
+                ActionButton(stringResource(R.string.details_notebook_buttons_sync)) {
+                    scope.launch {
+                        val outcome = requestNotebookSync(kvProxy, syncScheduler, bookId)
+                        snackManager.displaySnack(
+                            SnackConf(text = context.getString(outcome.messageRes()), duration = 3000)
+                        )
+                    }
+                }
             }
         }
 
     }
 
+}
+
+/**
+ * The snack text for a manual sync request. A request no backend will act on says which switch to
+ * change — "nothing happened" with no reason is the complaint this whole action exists to answer.
+ */
+private fun ManualSyncOutcome.messageRes(): Int = when (this) {
+    ManualSyncOutcome.QueuedForNotebook -> R.string.sync_manual_queued
+    ManualSyncOutcome.QueuedForEverything -> R.string.sync_manual_queued_all
+    is ManualSyncOutcome.NotConfigured -> when (reason) {
+        ManualSyncOutcome.NotConfigured.Reason.BACKEND_OFF -> R.string.sync_manual_backend_off
+        ManualSyncOutcome.NotConfigured.Reason.WEBDAV_DISABLED -> R.string.sync_manual_webdav_disabled
+        ManualSyncOutcome.NotConfigured.Reason.COUCH_UNCONFIGURED ->
+            R.string.sync_manual_couch_unconfigured
+    }
 }
 
 @Composable

@@ -606,7 +606,12 @@ class EditorViewModel @Inject constructor(
                                         snackDispatcher.showOrUpdateSnack(
                                             SnackConf(id = progressId, text = "Syncing notebook…", duration = null)
                                         )
-                                        val result = syncOrchestrator.syncNotebook(bookIdForCheck)
+                                        // The user tapped this and is watching a "Syncing…" snack:
+                                        // wait for the lock rather than skip, or the snack would
+                                        // report a sync that never ran.
+                                        val result = syncOrchestrator.syncNotebook(
+                                            bookIdForCheck, userInitiated = true
+                                        )
                                         snackDispatcher.showOrUpdateSnack(
                                             SnackConf(
                                                 id = progressId,

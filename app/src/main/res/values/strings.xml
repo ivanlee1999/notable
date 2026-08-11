@@ -276,6 +276,13 @@
     <string name="sync_log_title">Activity Log</string>
     <string name="sync_log_empty">No recent activity.</string>
     <string name="sync_verbose_log_label">Detailed logging</string>
+    <!-- Manual per-notebook sync -->
+    <string name="details_notebook_buttons_sync">Sync now</string>
+    <string name="sync_manual_queued">Syncing this notebook…</string>
+    <string name="sync_manual_queued_all">Syncing — CouchDB syncs all notes together</string>
+    <string name="sync_manual_backend_off">Sync is turned off. Pick a backend in Settings ▸ Sync.</string>
+    <string name="sync_manual_webdav_disabled">WebDAV sync is switched off in Settings ▸ Sync.</string>
+    <string name="sync_manual_couch_unconfigured">CouchDB needs a server URL and database in Settings ▸ Sync.</string>
     <string name="sync_verbose_log_hint">Records every notebook decision and each page transferred. Turn on while investigating a sync problem, then off again — it fills the log quickly.</string>
 
     <!-- Experimental Sync warning -->
