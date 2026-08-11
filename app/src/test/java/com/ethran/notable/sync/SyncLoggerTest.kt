@@ -112,6 +112,33 @@ class SyncLoggerTest {
         assertFalse(SyncLogger.logs.value.single().isRestored)
     }
 
+    /**
+     * A restored line whose own text is unparsable still came from disk. Deriving that from its
+     * timestamp got it wrong — a parse failure leaves no timestamp, so the line rendered as if this
+     * session had just produced it.
+     */
+    @Test
+    fun a_restored_line_with_an_unreadable_timestamp_is_still_history() {
+        val garbled = SyncLogger.parseFileLineForTest("not a log line at all")
+
+        assertTrue(garbled.isRestored)
+        assertEquals(0L, garbled.atMillis)
+        assertEquals("not a log line at all", garbled.message)
+    }
+
+    /** A well-formed line round-trips through the file format, and is marked as history. */
+    @Test
+    fun a_persisted_line_parses_back_to_its_entry() {
+        val parsed =
+            SyncLogger.parseFileLineForTest("2026-08-11 14:30:02 W/SyncWorker: no network")
+
+        assertEquals(SyncLogger.LogLevel.WARNING, parsed.level)
+        assertEquals("SyncWorker", parsed.tag)
+        assertEquals("no network", parsed.message)
+        assertTrue(parsed.isRestored)
+        assertTrue(parsed.atMillis > 0L)
+    }
+
     private companion object {
         /** Mirrors SyncLogger.MAX_LOGS, which is private. */
         const val MAX_LOGS = 400

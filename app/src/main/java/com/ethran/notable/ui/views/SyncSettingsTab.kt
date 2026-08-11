@@ -46,6 +46,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,6 +81,9 @@ import com.ethran.notable.ui.theme.InkaTheme
 import com.ethran.notable.ui.viewmodels.SyncSettingsUiState
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SyncDangerCallbacks(
     val onForceUploadRequested: (Boolean) -> Unit = {},
@@ -1285,6 +1289,7 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val copiedMessage = stringResource(R.string.sync_log_copied)
+    val scope = rememberCoroutineScope()
 
     Column {
         Box(
@@ -1325,11 +1330,16 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
         ) {
             // Copy everything retained on disk, not just what's on screen or even what this process
             // holds — a bug report about background sync needs the runs from before the last launch.
+            // Reading it is up to half a megabyte of file, so it happens off the main thread and
+            // only the clipboard write comes back to it.
             EInkActionButton(
                 text = stringResource(R.string.sync_copy_log),
                 onClick = {
-                    clipboardManager.setText(AnnotatedString(SyncLogger.dump()))
-                    Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
+                    scope.launch {
+                        val text = withContext(Dispatchers.IO) { SyncLogger.dump() }
+                        clipboardManager.setText(AnnotatedString(text))
+                        Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
+                    }
                 },
                 enabled = syncLogs.isNotEmpty(),
                 isSecondary = true,
