@@ -137,18 +137,29 @@ class RoomCouchStore(
      * user a duplicate rather than their work.
      */
     override fun applyConflictCopy(documentId: String, json: JsonObject) = runBlocking<Unit> {
-        val type = CouchDocId.split(documentId)?.first ?: return@runBlocking
-        if (type != CouchDocType.PAGE && type != CouchDocType.NOTEBOOK) return@runBlocking
+        // Every shape gets a copy, folders included. §6.5's promise is that nothing is discarded,
+        // and a folder quietly dropped here is a folder the user never learns went missing.
+        CouchDocId.split(documentId) ?: return@runBlocking
 
         val stamp = DAY_FORMAT.format(Instant.now())
-        val notebookId = UUID.randomUUID().toString()
-        val pageId = UUID.randomUUID().toString()
+        // Derived from the document and its bytes rather than minted fresh, so re-reading the same
+        // unreadable document produces the same copy instead of another one. The feed is replayed
+        // from the start whenever a checkpoint is lost — which this design treats as safe — and
+        // fresh ids turned every replay into a fresh set of duplicates in the library. Content is
+        // part of the name because a *new* unreadable revision genuinely is a different thing.
+        val identity = CouchAssetId.sha256Hex(
+            (documentId + couchJson.encodeToString(JsonObject.serializer(), json)).toByteArray()
+        )
+        val notebookId = uuidShaped(identity.take(32))
+        val pageId = uuidShaped(identity.takeLast(32))
         val now = Date()
+
+        if (appRepository.bookRepository.getById(notebookId) != null) return@runBlocking
 
         appRepository.bookRepository.createEmpty(
             Notebook(
                 id = notebookId,
-                title = "Unreadable sync copy ($stamp)",
+                title = "Unreadable sync copy (conflict $stamp $deviceId)",
                 pageIds = listOf(pageId),
                 createdAt = now,
                 updatedAt = now,
@@ -323,6 +334,13 @@ class RoomCouchStore(
     } catch (e: Exception) {
         log.e("Skipping stroke ${stroke.id}, its points will not encode: ${e.message}")
         null
+    }
+
+    /** Lays 32 hex characters out in the 8-4-4-4-12 shape the rest of the app expects of an id. */
+    private fun uuidShaped(hex: String): String {
+        if (hex.length != 32) return UUID.randomUUID().toString()
+        return listOf(0..7, 8..11, 12..15, 16..19, 20..31)
+            .joinToString("-") { hex.substring(it.first, it.last + 1) }
     }
 
     private fun couchImage(image: Image): CouchImage = CouchImage(
