@@ -149,6 +149,7 @@ object CouchMerge {
             type = CouchDocType.PAGE,
             schema = maxOf(a.schema, b.schema),
             notebookId = winner.notebookId,
+            title = winner.title,
             background = winner.background,
             backgroundType = winner.backgroundType,
             strokes = strokes,

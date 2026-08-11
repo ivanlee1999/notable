@@ -111,6 +111,8 @@ data class CouchPage(
     val type: String = CouchDocType.PAGE,
     val schema: Int = COUCH_SCHEMA_VERSION,
     val notebookId: String? = null,
+    // Defaulted so documents written before pages could be named still decode.
+    val title: String? = null,
     val background: String = "blank",
     val backgroundType: String = "native",
     val strokes: List<CouchStroke> = emptyList(),

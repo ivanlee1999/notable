@@ -38,6 +38,10 @@ data class Page(
     @ColumnInfo(defaultValue = "blank") val background: String = "blank", // path or native subtype
     @ColumnInfo(defaultValue = "native") val backgroundType: String = "native", // image, imageRepeating, coverImage, native
     @ColumnInfo(index = true) val parentFolderId: String? = null,
+    // Null, not "", for a page the user never named: the library then falls back to the creation
+    // date instead of showing a blank label, and an empty string stays available as a real (if
+    // odd) choice rather than being indistinguishable from "untitled".
+    val title: String? = null,
     val createdAt: Date = Date(), val updatedAt: Date = Date()
 )
 
@@ -72,6 +76,12 @@ interface PageDao {
     @Query("UPDATE page SET scroll=:scroll WHERE id =:pageId")
     suspend fun updateScroll(pageId: String, scroll: Int)
 
+    // Renaming touches one column, so it does not read-modify-write the row and cannot race a
+    // concurrent stroke save into overwriting the page's drawing state. updatedAt is stored as
+    // epoch millis (Date <-> Long converter), matching [touchUpdatedAt].
+    @Query("UPDATE page SET title=:title, updatedAt=:updatedAt WHERE id =:pageId")
+    suspend fun updateTitle(pageId: String, title: String?, updatedAt: Long)
+
     // Bump only the edit timestamp, without a read-modify-write of the whole row. updatedAt is
     // stored as epoch millis (Date <-> Long converter), so a Long here matches the column format.
     @Query("UPDATE page SET updatedAt=:updatedAt WHERE id =:pageId")
@@ -102,6 +112,15 @@ class PageRepository @Inject constructor(
 
     suspend fun updateScroll(id: String, scroll: Int) {
         return db.updateScroll(id, scroll)
+    }
+
+    /**
+     * Name a page, or clear its name with null. Bumps `updatedAt` so the rename is picked up as a
+     * per-page change by incremental sync, the same way an edit to the drawing would be.
+     */
+    suspend fun rename(pageId: String, title: String?) {
+        if (pageId.isEmpty()) return
+        db.updateTitle(pageId, title, System.currentTimeMillis())
     }
 
     /** Advance a page's edit timestamp — the per-page dirty signal for incremental sync. */

@@ -3,6 +3,7 @@ package com.ethran.notable.sync.couch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -135,6 +136,9 @@ class MergeTest {
         }
         return CouchPage(
             notebookId = "nb", background = if (rng.next(2) == 0) "blank" else "grid",
+            // Sometimes null: an unnamed page is the common case, and it has to survive a merge
+            // against a named one without either side depending on argument order.
+            title = if (rng.next(3) == 0) null else "page ${rng.next(4)}",
             strokes = strokes, deletedStrokes = tombs,
             createdAt = stamp(0), updatedAt = stamp(rng.next(60)), updatedBy = deviceId,
         )
@@ -170,6 +174,32 @@ class MergeTest {
             val again = CouchMerge.mergePage(merged, a)
             assertTrue(again.strokes.none { it.id in removed })
         }
+    }
+
+    /**
+     * A page's name follows the same last-writer-wins rule as its other scalars, in both argument
+     * orders. Renaming on one device and leaving the page untouched on the other must land on the
+     * new name — including when the rename is what *clears* the name.
+     */
+    @Test
+    fun later_page_rename_wins_in_either_order() {
+        val unnamed = CouchPage(
+            notebookId = "nb", title = null,
+            createdAt = "2026-08-10T06:00:00Z", updatedAt = "2026-08-10T06:00:00Z",
+            updatedBy = "boox",
+        )
+        val renamed = unnamed.copy(
+            title = "Shopping list", updatedAt = "2026-08-10T06:05:00Z", updatedBy = "ipad",
+        )
+
+        assertEquals("Shopping list", CouchMerge.mergePage(unnamed, renamed).title)
+        assertEquals("Shopping list", CouchMerge.mergePage(renamed, unnamed).title)
+
+        val cleared = renamed.copy(
+            title = null, updatedAt = "2026-08-10T06:10:00Z", updatedBy = "boox",
+        )
+        assertNull(CouchMerge.mergePage(renamed, cleared).title)
+        assertNull(CouchMerge.mergePage(cleared, renamed).title)
     }
 
     @Test

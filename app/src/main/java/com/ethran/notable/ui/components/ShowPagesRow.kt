@@ -1,9 +1,11 @@
 package com.ethran.notable.ui.components
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,7 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Page
@@ -86,30 +90,43 @@ fun ShowPagesRow(
             items(pages.reversed()) { page ->
                 val pageId = page.id
                 var isPageSelected by remember { mutableStateOf(false) }
-                Box {
-                    PagePreview(
-                        modifier = Modifier
-                            .combinedClickable(
-                                onClick = {
-                                    onSelectPage(pageId)
-                                },
-                                onLongClick = {
-                                    isPageSelected = true
-                                },
-                            )
-                            .width(100.dp)
-                            .aspectRatio(3f / 4f)
-                            .border(
-                                if (currentPageId == pageId) 4.dp else 1.dp,
-                                Color.Black,
-                                RectangleShape
-                            ),
-                        pageId = pageId,
-                        onPreviewMissing = onPreviewMissing
+                Column(Modifier.width(100.dp)) {
+                    Box {
+                        PagePreview(
+                            modifier = Modifier
+                                .combinedClickable(
+                                    onClick = {
+                                        onSelectPage(pageId)
+                                    },
+                                    onLongClick = {
+                                        isPageSelected = true
+                                    },
+                                )
+                                .fillMaxWidth()
+                                .aspectRatio(3f / 4f)
+                                .border(
+                                    if (currentPageId == pageId) 4.dp else 1.dp,
+                                    Color.Black,
+                                    RectangleShape
+                                ),
+                            pageId = pageId,
+                            onPreviewMissing = onPreviewMissing
+                        )
+                        if (isPageSelected) PageMenu(
+                            appRepository = appRepository,
+                            pageId = pageId, canDelete = true, onClose = { isPageSelected = false })
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    // An unnamed page falls back to its creation date rather than to "Untitled"
+                    // repeated down the row — the date is the thing that actually tells two
+                    // otherwise identical thumbnails apart.
+                    Text(
+                        text = page.title?.takeIf { it.isNotBlank() }
+                            ?: DateFormat.format("dd MMM yyyy", page.createdAt).toString(),
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    if (isPageSelected) PageMenu(
-                        appRepository = appRepository,
-                        pageId = pageId, canDelete = true, onClose = { isPageSelected = false })
                 }
             }
         }

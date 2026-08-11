@@ -72,7 +72,22 @@ class FolderRepository @Inject constructor(
         db.create(folder)
     }
 
+    /**
+     * Stamps `updatedAt = now()`, because folder sync resolves a conflict by comparing it
+     * (`FolderSyncService`, `Merge.mergeFolder`). A rename written with the old timestamp loses
+     * that comparison against any peer copy and silently reverts.
+     */
     suspend fun update(folder: Folder) {
+        db.update(folder.copy(updatedAt = Date()))
+    }
+
+    /**
+     * Write the folder exactly as given, unlike [update], which stamps `updatedAt = now()`.
+     * Used during sync when downloading from the server, to keep the remote timestamp — stamping
+     * it locally would make every received folder look newer than its source and push straight
+     * back out again.
+     */
+    suspend fun updateVerbatim(folder: Folder) {
         db.update(folder)
     }
 

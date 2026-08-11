@@ -10,9 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,20 +18,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.ethran.notable.R
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.sync.couch.CouchDocId
@@ -53,6 +48,7 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
     val couchSync = rememberCouchSyncController()
     var folder by remember { mutableStateOf<Folder?>(null) }
     var folderTitle by remember { mutableStateOf("") }
+    var isRenaming by remember { mutableStateOf(false) }
 
     LaunchedEffect(folderId) {
         val f = folderRepository.get(folderId)
@@ -67,14 +63,29 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
 
     if (folder == null) return
 
+    if (isRenaming) {
+        NamePromptDialog(
+            title = stringResource(R.string.name_prompt_folder_title),
+            initialValue = folderTitle,
+            onConfirm = { name ->
+                isRenaming = false
+                val current = folder
+                if (current != null && current.title != name) {
+                    folderTitle = name
+                    folder = current.copy(title = name)
+                    scope.launch { folderRepository.update(current.copy(title = name)) }
+                }
+            },
+            onDismiss = { isRenaming = false }
+        )
+    }
+
     Dialog(
         onDismissRequest = {
             log.i("Closing Directory Dialog - upstream")
             onClose()
         }
     ) {
-        val focusManager = LocalFocusManager.current
-
         Column(
             modifier = Modifier
                 .background(Color.White)
@@ -97,45 +108,26 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                 Modifier.padding(20.dp, 10.dp)
             ) {
 
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "Folder Title",
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.width(10.dp))
-                    BasicTextField(
-                        value = folderTitle,
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Light,
-                            fontSize = 16.sp
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Text,
-                            imeAction = ImeAction.Done
-                        ),
-                        onValueChange = { folderTitle = it },
-                        keyboardActions = KeyboardActions(onDone = {
-                            focusManager.clearFocus()
-                        }),
-                        modifier = Modifier
-                            .background(Color(230, 230, 230, 255))
-                            .padding(10.dp, 0.dp)
-                            .onFocusChanged { focusState ->
-                                if (!focusState.isFocused) {
-                                    val currentFolder = folder
-                                    if (currentFolder != null && currentFolder.title != folderTitle) {
-                                        scope.launch {
-                                            folderRepository.update(currentFolder.copy(title = folderTitle))
-                                        }
-                                    }
-                                }
-                            }
-
-
+                    Text(
+                        text = folderTitle,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Light,
+                        fontSize = 16.sp,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
-
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = stringResource(R.string.rename),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        modifier = Modifier.noRippleClickable { isRenaming = true }
+                    )
                 }
             }
 

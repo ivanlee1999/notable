@@ -28,7 +28,14 @@
     <string name="continuous_zoom">Continuous Zoom</string>
     <string name="fit_page_width">Fit page width to screen width</string>
     <string name="continuous_stroke_slider">Continuous Stroke Slider</string>
-    <string name="rename_on_create">Open properties on new notebook</string>
+    <string name="rename_on_create">Ask for a name when creating</string>
+    <string name="name_prompt_save">Save</string>
+    <string name="name_prompt_cancel">Cancel</string>
+    <string name="name_prompt_folder_title">Folder name</string>
+    <string name="name_prompt_notebook_title">Notebook name</string>
+    <string name="name_prompt_page_title">Page name</string>
+    <string name="rename">Rename</string>
+    <string name="page_untitled">Untitled</string>
     <string name="paginate_pdf">Paginate PDF</string>
     <string name="preview_pdf_pagination">Preview PDF Pagination</string>
     <string name="app_new_version">It seems a new version of Notable is available on GitHub!</string>
