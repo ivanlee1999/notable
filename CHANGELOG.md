@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0
+
+### Pictures sync
+
+- **An image placed on one device now appears on the other.** The page already recorded that a
+  picture was there — its position and size travelled correctly — but the bytes never did, so the
+  other device knew an image belonged on the page and had nothing to draw. This affected CouchDB
+  sync only; WebDAV has always copied the files.
+- **The same picture is uploaded once, however many pages place it.** An image is stored under a
+  fingerprint of its own contents, so two devices that hold the same photo agree on its name
+  without comparing notes, and neither sends it twice.
+- **Pictures are downloaded only for pages you have.** They are fetched when a page you hold
+  refers to one, rather than pulling every image in the library, and a download interrupted by a
+  flaky connection is retried on the next sync instead of leaving a blank space for good.
+
+### Upgrading
+
+No database change: the schema stays at 39.
+
+Images already on your pages are sent the next time their page changes. To bring across pictures
+on pages you are not about to edit, use "Upload everything on this BOOX" once in Settings → Sync.
+
+The iPad app needs its matching release to receive these — until then, this BOOX uploads the
+image data but the iPad has nothing that fetches it. Nothing is lost in the meantime: pages,
+ink and image positions sync as before, and the iPad leaves its own copies of pictures alone.
+
 ## 0.5.0
 
 ### Naming things
