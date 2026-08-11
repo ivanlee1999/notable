@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.2
+
+CouchDB only. If you sync over WebDAV, nothing here changes for you.
+
+### Sync stopped working a minute after opening the app
+
+- **Nothing was sent to the server once the app had been open for a moment**, and quitting and
+  reopening made it work again for another minute. notable asks the server to tell it about changes
+  as they happen, and it was asking in a way that let the server hold that request open forever
+  instead of answering within the minute it had asked for. Because everything else waits its turn
+  behind that one request, a server with nothing new to report left this device unable to send
+  anything at all — while a fresh start had not yet made the request, which is why restarting
+  helped. It now returns when it should.
+- **The sync status no longer sits on "Syncing…" indefinitely** for the same reason.
+
+### Upgrading
+
+No database change: the schema stays at 39.
+
+Anything that was waiting to be sent goes out on the next sync — there is nothing to do by hand.
+
+Two things this release does **not** fix, so you know what you are still looking at:
+
+- Notebooks are still labelled **"local only"** in the library even when they are on the server and
+  on your other device. That label is read from a record only the WebDAV engine keeps, so on
+  CouchDB it never says anything else. The label is wrong, not the sync.
+- After tapping **Sync now**, it can still take up to a minute to start, because it waits for the
+  request above to come back before doing anything. It no longer waits forever.
+
 ## 0.7.1
 
 All of this is the **CouchDB** backend. If you sync over WebDAV, nothing here changes for you.
