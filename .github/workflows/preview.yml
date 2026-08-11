@@ -38,15 +38,20 @@ jobs:
           fileName: "my.keystore"
           encodedString: ${{ secrets.KEYSTORE_FILE }}
 
-      - name: Remove `google-services.json`
-        run: rm ${{ github.workspace }}/app/google-services.json
-
+      # app/google-services.json is tracked in the repo, so this step is only an override for
+      # builds that want their own Firebase project. Running it unconditionally on a fork with no
+      # FIREBASE_CONFIG secret overwrote the tracked file with an empty one and failed the build
+      # at processDebugGoogleServices with "Malformed root json", so decode only when the secret
+      # is actually present. release.yml already does this; preview.yml was missed.
       - name: Decode and Replace `google-services.json`
         env:
           FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
         run: |
-          echo $FIREBASE_CONFIG | base64 --decode > ${{ github.workspace }}/app/google-services.json
-          wc -l ${{ github.workspace }}/app/google-services.json
+          if [ -n "$FIREBASE_CONFIG" ]; then
+            echo "$FIREBASE_CONFIG" | base64 --decode > "${{ github.workspace }}/app/google-services.json"
+          else
+            echo "FIREBASE_CONFIG not set - keeping the google-services.json tracked in the repo."
+          fi
 
       - name: Execute Gradle build
         run: |
