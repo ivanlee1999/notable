@@ -154,8 +154,16 @@ interface CouchLocalStore {
     /** Current local content, or null when this device has never held the document. */
     fun load(documentId: String): CouchDocBody?
 
-    /** Replaces local content with the merged result. */
-    fun apply(documentId: String, body: CouchDocBody)
+    /**
+     * Replaces local content with the merged result.
+     *
+     * [basedOn] is the local copy the merge actually consumed — null when this device held none.
+     * It is not the same thing as what is on disk now: computing a merge takes a network round
+     * trip, and the editor goes on committing strokes throughout. Only content the merge *saw* and
+     * chose to drop may be removed here; anything that arrived since is work this merge knows
+     * nothing about, and deleting it would destroy ink that was never given the chance to sync.
+     */
+    fun apply(documentId: String, body: CouchDocBody, basedOn: CouchDocBody?)
 
     /**
      * A document that could not be understood (undecodable, or a newer `schema`). The
@@ -341,7 +349,7 @@ class CouchSyncEngine(
                     dirty.remove(documentId)
                     return PushOutcome.NOTHING_TO_PUSH
                 }
-                if (merged != local) store.apply(documentId, merged)
+                if (merged != local) store.apply(documentId, merged, basedOn = local)
                 if (merged == remote.second) {
                     // The server already holds exactly this, so there is nothing left to send.
                     // Returning here is not just an optimization: when the merge resolves to the
@@ -520,7 +528,7 @@ class CouchSyncEngine(
                 merged = incoming
             }
 
-            store.apply(row.id, merged)
+            store.apply(row.id, merged, basedOn = local)
             applied += row.id
             // Record the server's revision either way: it is the base the next push must use.
             revs[row.id] = row.rev
@@ -572,7 +580,7 @@ class CouchSyncEngine(
             val asset = CouchAsset.of(
                 blob.bytes, at = now, updatedBy = deviceId, contentType = blob.contentType
             )
-            runCatching { store.apply(assetId, CouchDocBody.Asset(asset)) }
+            runCatching { store.apply(assetId, CouchDocBody.Asset(asset), basedOn = null) }
                 .onSuccess { fetched += assetId }
         }
         return fetched

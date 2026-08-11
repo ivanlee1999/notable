@@ -600,7 +600,9 @@ private class ScenarioStore(
 
     override fun load(documentId: String): CouchDocBody? = documents[documentId]
 
-    override fun apply(documentId: String, body: CouchDocBody) {
+    // A scenario step is single-threaded — nothing edits between load and apply — so plain
+    // replacement honours the contract: everything on disk is exactly what the merge saw.
+    override fun apply(documentId: String, body: CouchDocBody, basedOn: CouchDocBody?) {
         documents[documentId] = body
     }
 

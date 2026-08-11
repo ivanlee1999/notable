@@ -642,6 +642,14 @@ class RoomCouchStoreTest {
 }
 
 /**
+ * Seeds a document as plain local state. There is no snapshot a merge consumed, because no merge
+ * preceded it — which is what `basedOn = null` means, and what every arrival at a device that has
+ * never held the document looks like.
+ */
+private fun CouchLocalStore.apply(documentId: String, body: CouchDocBody) =
+    apply(documentId, body, basedOn = null)
+
+/**
  * A [CouchSyncController] that can never do anything: its backend reports itself disabled, which
  * is exactly the state notable is in until someone selects CouchDB in settings.
  */

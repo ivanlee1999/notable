@@ -312,10 +312,43 @@ class FakeLocalStore : CouchLocalStore {
 
     val conflictCopies: List<String> get() = copies.toList()
 
-    override fun load(documentId: String): CouchDocBody? = documents[documentId]
+    /** Runs on the next [load], to model the editor writing while a merge is in flight. */
+    var onLoad: (() -> Unit)? = null
 
-    override fun apply(documentId: String, body: CouchDocBody) {
-        documents[documentId] = body
+    override fun load(documentId: String): CouchDocBody? {
+        // The snapshot is taken first, *then* the hook runs: the engine is modelled as having read
+        // the document and gone off to the network, with the editor writing while it is away.
+        val snapshot = documents[documentId]
+        onLoad?.invoke()
+        return snapshot
+    }
+
+    /**
+     * Honours [CouchLocalStore.apply]'s contract the way a real store must: content that arrived
+     * after the merge took its snapshot is left alone, because the merge never saw it and so
+     * cannot have decided against it. A store that simply overwrote with the merged body would
+     * silently drop ink drawn during the round trip — and would hide that bug from these tests.
+     */
+    override fun apply(documentId: String, body: CouchDocBody, basedOn: CouchDocBody?) {
+        val current = documents[documentId]
+        documents[documentId] =
+            if (body is CouchDocBody.Page && current is CouchDocBody.Page) {
+                CouchDocBody.Page(
+                    reconcile(current.page, body.page, (basedOn as? CouchDocBody.Page)?.page)
+                )
+            } else {
+                body
+            }
+    }
+
+    private fun reconcile(current: CouchPage, merged: CouchPage, basedOn: CouchPage?): CouchPage {
+        if (basedOn == null) return merged
+        val seen = basedOn.strokes.map { it.id }.toSet()
+        val kept = merged.strokes.map { it.id }.toSet()
+        val tombstoned = merged.deletedStrokes.map { it.id }.toSet()
+        val survivors =
+            current.strokes.filter { it.id !in seen && it.id !in kept && it.id !in tombstoned }
+        return merged.copy(strokes = merged.strokes + survivors)
     }
 
     override fun applyConflictCopy(documentId: String, json: JsonObject) {
