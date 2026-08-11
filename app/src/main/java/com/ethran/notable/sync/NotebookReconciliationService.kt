@@ -9,6 +9,7 @@ import com.ethran.notable.utils.DomainError
 import com.ethran.notable.utils.ErrorAccumulator
 import com.ethran.notable.utils.getOrElse
 import com.ethran.notable.utils.getOrNull
+import com.ethran.notable.utils.map
 import com.ethran.notable.utils.onError
 import com.ethran.notable.utils.onFailure
 import kotlinx.coroutines.CancellationException
@@ -45,21 +46,32 @@ class NotebookReconciliationService @Inject constructor(
         val total = localNotebooks.size
         val errors = ErrorAccumulator()
 
+        val tally = OutcomeTally()
+
         localNotebooks.forEachIndexed { i, notebook ->
             reporter.beginItem(index = i + 1, total = total, name = notebook.title, id = notebook.id)
+            log.d(TAG, "[${i + 1}/$total] ${notebook.title}")
             // Individual notebook sync failures are non-fatal for the whole process.
-            reconcileNotebook(
+            val outcome = reconcileNotebook(
                 notebook.id, client, remoteNotebookIds.contains(notebook.id),
                 uploadOnly, downloadOnly,
                 bulkEnabled = bulkEnabled,
                 currentServerKey = currentServerKey,
                 listingEtag = dirEtags[notebook.id],
-            ).onError {
-                log.w(TAG, "✗ ${notebook.title} failed: ${it.userMessage}")
-                errors.add(it)
+            )
+            when (outcome) {
+                is AppResult.Success -> tally.record(outcome.data)
+                is AppResult.Error -> {
+                    log.w(TAG, "✗ ${notebook.title} failed: ${outcome.error.userMessage}")
+                    tally.recordFailure()
+                    errors.add(outcome.error)
+                }
             }
         }
         reporter.endItem()
+        // The one line that answers "did it actually do anything?". Always logged, including for a
+        // run where every notebook was skipped -- that is the run the user is asking about.
+        log.i(TAG, "Notebooks: ${tally.describe(total)}")
 
         return errors.asResult(preDownloadNotebookIds)
     }
@@ -81,9 +93,14 @@ class NotebookReconciliationService @Inject constructor(
             .onFailure { return AppResult.Error(it) }
         return reconcileNotebook(
             notebookId, client, remotePresent, uploadOnly, downloadOnly
-        )
+        ).map { }
     }
 
+    /**
+     * Returns *what it did* rather than plain success, so the caller can tally a run's outcomes
+     * without re-deriving them. Every path here is a legitimate success — the distinction the count
+     * captures is which one.
+     */
     private suspend fun reconcileNotebook(
         notebookId: String,
         client: WebDAVClient,
@@ -93,19 +110,27 @@ class NotebookReconciliationService @Inject constructor(
         bulkEnabled: Boolean = false,
         currentServerKey: String? = null,
         listingEtag: ETag? = null,
-    ): AppResult<Unit, DomainError> {
+    ): AppResult<NotebookOutcome, DomainError> {
         val localNotebook = appRepository.bookRepository.getById(notebookId)
             ?: return AppResult.Error(DomainError.NotFound("Notebook $notebookId"))
 
         // Remote absent -> straight upload (new to the server), no If-Match -- unless download-only.
         if (!remotePresent) {
-            if (downloadOnly) return AppResult.Success(Unit)
+            if (downloadOnly) {
+                log.i(
+                    TAG,
+                    "↓ Download-only: ${localNotebook.title} is not on the server yet and stays local"
+                )
+                return AppResult.Success(NotebookOutcome.SKIPPED_DIRECTION)
+            }
+            log.i(TAG, "↑ ${localNotebook.title} is new to the server; uploading")
             // No directory baseline after an upload: our own write changed the directory ETag, and
             // re-reading it could capture a *concurrent* writer's ETag that local never converged
             // with -- which would false-skip that notebook next sync. The following sync establishes
             // the baseline from the listing instead, but only after a manifest 304 confirms
             // convergence. One extra manifest GET on the sync after an upload; uploads are rare.
             return notebookSyncService.uploadNotebook(localNotebook, client)
+                .map { NotebookOutcome.UPLOADED }
         }
 
         val syncState = appRepository.notebookSyncStateRepository.get(notebookId)
@@ -188,18 +213,21 @@ class NotebookReconciliationService @Inject constructor(
             downloadOnly = downloadOnly,
         )
 
+        log.d(TAG, "${localNotebook.title}: ${action.explain(remoteChanged, knownRemoteUnchanged)}")
+
         return when (action) {
             is NotebookAction.Upload -> {
                 reportWriteGuard(localNotebook.title, action.ifMatch)
                 // No baseline after an upload -- see the remote-absent branch above; the next sync
                 // establishes it from the listing once a manifest 304 confirms convergence.
                 notebookSyncService.uploadNotebook(localNotebook, client, action.ifMatch)
+                    .map { NotebookOutcome.UPLOADED }
             }
 
             NotebookAction.Download -> notebookSyncService.downloadNotebook(notebookId, client).also {
                 if (it is AppResult.Success)
                     storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
-            }
+            }.map { NotebookOutcome.DOWNLOADED }
 
             NotebookAction.Reconcile -> reconcileConcurrentEdits(
                 notebookId = notebookId,
@@ -222,7 +250,7 @@ class NotebookReconciliationService @Inject constructor(
                     remoteUpdatedAt = remote?.updatedAt?.let { Date(it) } ?: syncState?.remoteUpdatedAt,
                     remoteEtag = (if (remoteChanged) remote?.etag else storedEtag)?.raw,
                 )
-                AppResult.Success(Unit)
+                AppResult.Success(NotebookOutcome.SKIPPED_DIRECTION)
             }
 
             NotebookAction.SkipDownloadOnly -> {
@@ -230,11 +258,17 @@ class NotebookReconciliationService @Inject constructor(
                 // do NOT markSynced, so the notebook keeps its NOT_SYNCED badge (local changes are
                 // genuinely not on the server).
                 log.i(TAG, "↓ Download-only: not pushing local changes of ${localNotebook.title}")
-                AppResult.Success(Unit)
+                AppResult.Success(NotebookOutcome.SKIPPED_DIRECTION)
             }
 
             NotebookAction.Skip -> {
-                log.i(TAG, "= No changes, skipping ${localNotebook.title}")
+                // The most common line in a healthy log, and the one most often misread as a
+                // failure — say which side was checked so "skipping" reads as "nothing to do".
+                log.i(
+                    TAG,
+                    "= No changes on either side, skipping ${localNotebook.title}" +
+                        if (knownRemoteUnchanged) " (folder ETag unchanged)" else ""
+                )
                 // Refresh the sync-state row so an unchanged notebook stays SYNCED and (re)stores the
                 // current ETag/timestamp for the next If-None-Match check.
                 val etagToStore = if (remoteChanged) remote?.etag else storedEtag
@@ -249,7 +283,7 @@ class NotebookReconciliationService @Inject constructor(
                 // markSynced reset the baseline columns; re-establish this converged directory
                 // baseline so the next sync's fast path can skip this notebook's manifest GET.
                 storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
-                AppResult.Success(Unit)
+                AppResult.Success(NotebookOutcome.UNCHANGED)
             }
         }
     }
@@ -314,7 +348,7 @@ class NotebookReconciliationService @Inject constructor(
         bulkEnabled: Boolean,
         currentServerKey: String?,
         listingEtag: ETag?,
-    ): AppResult<Unit, DomainError> {
+    ): AppResult<NotebookOutcome, DomainError> {
         val pageConflicts = notebookSyncService.detectPageConflicts(localNotebook, client)
             .getOrElse { return AppResult.Error(it) }
         val structural =
@@ -327,7 +361,7 @@ class NotebookReconciliationService @Inject constructor(
                     "${if (structural) ", structural" else ""}); flagging for the user"
             )
             appRepository.notebookSyncStateRepository.markConflict(notebookId)
-            return AppResult.Success(Unit)
+            return AppResult.Success(NotebookOutcome.CONFLICTED)
         }
 
         log.i(TAG, "⇄ Independent concurrent edits for ${localNotebook.title}; merging per page")
@@ -341,10 +375,11 @@ class NotebookReconciliationService @Inject constructor(
             // The merge pushed local pages, changing the directory ETag; no baseline here (see the
             // Upload branch -- the next sync establishes it after a manifest 304).
             notebookSyncService.uploadNotebook(refreshed, client, storedAfter)
+                .map { NotebookOutcome.MERGED }
         } else {
             // A download-only merge did not write, so the listing ETag is a valid converged baseline.
             storeListingBaseline(notebookId, bulkEnabled, currentServerKey, listingEtag)
-            AppResult.Success(Unit)
+            AppResult.Success(NotebookOutcome.MERGED)
         }
     }
 
@@ -359,14 +394,15 @@ class NotebookReconciliationService @Inject constructor(
         localNotebook: Notebook,
         client: WebDAVClient,
         downloadOnly: Boolean,
-    ): AppResult<Unit, DomainError> {
+    ): AppResult<NotebookOutcome, DomainError> {
         if (downloadOnly) {
             log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; skipping (download-only)")
-            return AppResult.Success(Unit)
+            return AppResult.Success(NotebookOutcome.SKIPPED_DIRECTION)
         }
         log.i(TAG, "⚠ Remote manifest missing for ${localNotebook.title}; re-uploading local copy to self-heal")
         // No baseline after the self-heal upload (see the Upload branch); the next sync establishes it.
         return notebookSyncService.uploadNotebook(localNotebook, client)
+            .map { NotebookOutcome.UPLOADED }
     }
 
     /**
@@ -399,6 +435,31 @@ class NotebookReconciliationService @Inject constructor(
     /** The fully parsed remote manifest, or null if it could not be deserialized. */
     private fun DownloadedFile.toNotebook(): Notebook? =
         NotebookSerializer.deserializeManifest(content.decodeToString()).getOrNull()
+
+    /**
+     * What a run did to the local notebooks, counted so the log can say it in one line. Reasons are
+     * kept apart because "unchanged" and "not pushed, download-only mode" look the same from outside
+     * and mean very different things.
+     */
+    private class OutcomeTally {
+        private val counts = mutableMapOf<NotebookOutcome, Int>()
+        private var failed = 0
+
+        fun record(outcome: NotebookOutcome) {
+            counts[outcome] = (counts[outcome] ?: 0) + 1
+        }
+
+        fun recordFailure() {
+            failed++
+        }
+
+        fun describe(total: Int): String {
+            val parts = NotebookOutcome.entries
+                .mapNotNull { outcome -> counts[outcome]?.let { "$it ${outcome.label}" } } +
+                listOfNotNull("$failed failed".takeIf { failed > 0 })
+            return if (parts.isEmpty()) "none" else "${parts.joinToString(", ")} (of $total)"
+        }
+    }
 
     companion object {
         private const val TAG = "NotebookReconciliationService"

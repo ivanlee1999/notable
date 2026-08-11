@@ -8,23 +8,35 @@ import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import dagger.hilt.android.EntryPointAccessors
-import io.shipbook.shipbooksdk.Log
 
 /**
  * Background worker for WebDAV synchronization.
  * Runs via WorkManager. Emits success/error data via WorkManager Results.
+ *
+ * Everything here logs through [SyncLogger], not the ShipBook logger directly. Every early return
+ * below is a reason a sync the user expected did not happen, and those are exactly the lines they
+ * come to the in-app activity log to find — a remote/logcat-only record answers the question for a
+ * developer with a cable, not for the person holding the device.
  */
 class SyncWorker(
     context: Context, params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
+    private val log = SyncLogger
+
     override suspend fun doWork(): Result {
-        Log.i(TAG, "SyncWorker started")
+        // A worker can start in a fresh process; make sure the log file is wired up before the
+        // first decision is recorded, rather than relying on an Activity having run.
+        SyncLogger.install(applicationContext)
+        val trigger = inputData.getString(KEY_SYNC_TRIGGER) ?: SYNC_TRIGGER_PERIODIC
+        SyncLogger.beginRun(
+            "$trigger sync" + if (runAttemptCount > 0) " (retry #$runAttemptCount)" else ""
+        )
 
         // 1. Dynamic Checks
         val connectivityChecker = ConnectivityChecker(applicationContext)
         if (!connectivityChecker.isNetworkAvailable()) {
-            Log.i(TAG, "No network available, will retry later")
+            log.i(TAG, "No network available, will retry later")
             return Result.retry()
         }
 
@@ -46,31 +58,44 @@ class SyncWorker(
         // run skipped because sync is off is not the same complaint as one skipped because WebDAV
         // was never switched on.
         if (syncSettings.backend == SyncBackend.OFF) {
-            Log.i(TAG, "Sync turned off in settings, skipping")
+            log.i(TAG, "Sync turned off in settings, skipping")
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
 
         if (!syncSettings.webdavActive) {
-            Log.i(TAG, "Sync disabled in settings, skipping")
+            log.i(
+                TAG,
+                "WebDAV selected but its Sync switch is off, skipping " +
+                    "(Settings ▸ Sync ▸ Enable sync)"
+            )
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
 
         if (syncSettings.wifiOnly && !connectivityChecker.isUnmeteredConnected()) {
-            Log.i(TAG, "WiFi-only sync enabled but not on unmetered network, skipping")
+            log.i(TAG, "WiFi-only sync enabled but not on unmetered network, skipping")
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
 
         if (syncSettings.username.isBlank() || syncSettings.password.isBlank()) {
-            Log.w(TAG, "No credentials stored, skipping sync")
+            val missing = listOfNotNull(
+                "username".takeIf { syncSettings.username.isBlank() },
+                "password".takeIf { syncSettings.password.isBlank() },
+            ).joinToString(" and ")
+            log.w(TAG, "No $missing stored, skipping sync — re-save your credentials")
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
 
         // 2. Parse Input
         val syncRequest = SyncRequest.fromData(inputData)
-            ?: return Result.failure(workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to "INVALID_INPUT"))
+            ?: run {
+                log.e(TAG, "Sync request could not be read from the work input; nothing ran")
+                return Result.failure(
+                    workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to "INVALID_INPUT")
+                )
+            }
 
-        val syncTrigger = inputData.getString(KEY_SYNC_TRIGGER) ?: SYNC_TRIGGER_PERIODIC
-        val isPeriodicSync = syncTrigger == SYNC_TRIGGER_PERIODIC
+        val isPeriodicSync = trigger == SYNC_TRIGGER_PERIODIC
+        log.d(TAG, "Running $syncRequest (attempt ${runAttemptCount + 1})")
 
         // 3. Execute Sync
         return try {
@@ -89,7 +114,7 @@ class SyncWorker(
             // 4. Handle Results
             when (result) {
                 is AppResult.Success -> {
-                    Log.i(TAG, "Sync $syncRequest completed successfully")
+                    log.i(TAG, "Sync $syncRequest completed successfully")
                     Result.success(
                         workDataOf(
                             OUTPUT_KEY_SUCCESS to true,
@@ -105,16 +130,18 @@ class SyncWorker(
 
                     when (error) {
                         is DomainError.SyncInProgress -> {
-                            Log.i(TAG, "Sync already in progress, skipping this run")
+                            log.i(TAG, "Sync already in progress, skipping this run")
                             // Returning success so it doesn't log as a strict failure, but marking success as false
                             Result.success(workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to errorStr))
                         }
 
                         is DomainError.NetworkError -> {
-                            Log.e(TAG, "Network error during sync: $failureMessage")
+                            log.e(TAG, "Network error during sync: $failureMessage")
                             if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
+                                log.i(TAG, "Will retry (attempt ${runAttemptCount + 1} of $MAX_RETRY_ATTEMPTS)")
                                 Result.retry()
                             } else {
+                                log.w(TAG, "Giving up after $MAX_RETRY_ATTEMPTS attempts")
                                 Result.failure(workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to failureMessage))
                             }
                         }
@@ -124,16 +151,22 @@ class SyncWorker(
                         is DomainError.SyncClockSkew,
                         is DomainError.SyncWifiRequired,
                         is DomainError.SyncConflict -> {
-                            Log.w(TAG, "Sync failed (non-retryable): $failureMessage")
+                            log.w(TAG, "Sync failed (non-retryable): $failureMessage")
                             // These are hard failures, mark them as such
                             Result.failure(workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to failureMessage))
                         }
 
                         else -> {
-                            Log.e(TAG, "Sync failed: $failureMessage")
+                            log.e(TAG, "Sync failed: $failureMessage")
                             if (runAttemptCount < MAX_RETRY_ATTEMPTS && error.recoverable) {
+                                log.i(TAG, "Will retry (attempt ${runAttemptCount + 1} of $MAX_RETRY_ATTEMPTS)")
                                 Result.retry()
                             } else {
+                                log.w(
+                                    TAG,
+                                    if (error.recoverable) "Giving up after $MAX_RETRY_ATTEMPTS attempts"
+                                    else "Not retryable; this run is over"
+                                )
                                 Result.failure(workDataOf(OUTPUT_KEY_SUCCESS to false, OUTPUT_KEY_ERROR to failureMessage))
                             }
                         }
@@ -141,7 +174,7 @@ class SyncWorker(
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error in SyncWorker: ${e.message}")
+            log.e(TAG, "Unexpected error in SyncWorker: ${e.message}")
             if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
                 Result.retry()
             } else {
@@ -169,23 +202,29 @@ class SyncWorker(
         connectivityChecker: ConnectivityChecker,
     ): Result {
         if (!settings.couchConfigured) {
-            Log.i(TAG, "CouchDB selected but not configured, skipping")
+            log.i(
+                TAG,
+                "CouchDB selected but not configured, skipping " +
+                    "(needs an http(s) URL and a database name)"
+            )
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
         if (settings.wifiOnly && !connectivityChecker.isUnmeteredConnected()) {
-            Log.i(TAG, "WiFi-only sync enabled but not on unmetered network, skipping")
+            log.i(TAG, "WiFi-only sync enabled but not on unmetered network, skipping")
             return Result.success(workDataOf(OUTPUT_KEY_SKIPPED to true))
         }
 
         val controller = entryPoint.couchSyncController()
+        log.i(TAG, "CouchDB catch-up starting (${controller.pendingCount} queued)")
         controller.syncNow()
 
         val status = controller.status
         return if (status is CouchSyncController.Status.Failed) {
             // Queued work is not lost work: the outbox survives, so a failure here is worth a
             // retry rather than a hard failure that would need the user to notice it.
-            Log.w(TAG, "CouchDB catch-up failed: ${status.message}")
+            log.w(TAG, "CouchDB catch-up failed: ${status.message}")
             if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
+                log.i(TAG, "Will retry (attempt ${runAttemptCount + 1} of $MAX_RETRY_ATTEMPTS)")
                 Result.retry()
             } else {
                 Result.failure(
@@ -193,7 +232,7 @@ class SyncWorker(
                 )
             }
         } else {
-            Log.i(TAG, "CouchDB catch-up completed, ${controller.pendingCount} still queued")
+            log.i(TAG, "CouchDB catch-up completed, ${controller.pendingCount} still queued")
             Result.success(workDataOf(OUTPUT_KEY_SUCCESS to true))
         }
     }

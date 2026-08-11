@@ -19,7 +19,18 @@ sealed class SyncState {
         SyncState()
 }
 
-data class ItemProgress(val index: Int, val total: Int, val name: String, val id: String? = null)
+/**
+ * The notebook currently being transferred, plus [detail] — what is happening *inside* it, e.g.
+ * "page 40 of 812". A large notebook takes minutes, and without the inner count the panel shows one
+ * unchanging line for all of it, which reads as a hang rather than as progress.
+ */
+data class ItemProgress(
+    val index: Int,
+    val total: Int,
+    val name: String,
+    val id: String? = null,
+    val detail: String? = null,
+)
 
 enum class SyncStep {
     INITIALIZING, SYNCING_FOLDERS, APPLYING_DELETIONS, SYNCING_NOTEBOOKS,

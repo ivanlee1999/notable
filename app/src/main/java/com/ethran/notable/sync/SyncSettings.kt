@@ -49,6 +49,12 @@ data class SyncSettings(
      * true *and* the server was measured to support it ([ServerCapabilities.collectionEtagPropagates]).
      */
     val fastSyncEnabled: Boolean = true,
+    /**
+     * Record per-notebook/per-page detail in the activity log. Off by default: that detail is what
+     * you want while diagnosing a specific sync, and enough noise the rest of the time to push the
+     * decisive lines out of the buffer. See [SyncLogger.d].
+     */
+    val verboseSyncLog: Boolean = false,
 
     // ---- CouchDB backend ----
     // Kept alongside the WebDAV fields rather than in their own record so one KV row still holds

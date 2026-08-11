@@ -13,6 +13,7 @@ class SyncOrchestratorTest {
 
         override fun beginStep(step: SyncStep, stepProgress: Float, details: String) = Unit
         override fun beginItem(index: Int, total: Int, name: String, id: String?) = Unit
+        override fun itemDetail(detail: String?) = Unit
         override fun endItem() = Unit
         override fun reset() = Unit
 
