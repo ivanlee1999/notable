@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.7.1
+
+All of this is the **CouchDB** backend. If you sync over WebDAV, nothing here changes for you.
+
+### A notebook you made was never sent
+
+- **Creating a notebook did not queue it for sync.** CouchDB is told about a change when something
+  explicitly reports one, and the only thing that reported anything was drawing. A notebook
+  travelled to the server as a side effect of ink being put on one of its pages — so a notebook you
+  created and did not draw in was never sent, however many times sync ran. Its date kept updating
+  on this device, which made it look like it had been picked up.
+- **The same was true of renaming a notebook or folder, creating a folder, moving a notebook,
+  changing its template, and importing.** Each of these now queues the change as it is made.
+- **Every sync also asks the server what it has never seen** and sends it. This is the safety net
+  under the above: if anything is ever missed again, the next sync catches it instead of losing it
+  for good.
+
+### You can now see what CouchDB sync is doing
+
+- **The activity log was not shown at all on CouchDB.** It lived with the WebDAV settings, and it
+  was hidden until sync was fully configured and switched on — which is backwards for the panel
+  whose job is to tell you that sync is *not* configured. It now appears for whichever backend you
+  have chosen.
+- **The engine barely wrote anything down.** Syncs now report what they sent and received, and
+  every document that failed is listed rather than only the first one.
+- **The reasons nothing can sync now say so** — no backend chosen, no server address, an address
+  that cannot be read. A mistyped URL in particular left **Sync now** looking like a working button
+  that did nothing at all and said nothing.
+- **"Upload everything on this BOOX" said it was queueing your notes when it was not**, if the
+  server settings were not usable.
+
+### Fixes
+
+- **A mistyped server address could have been written into the log with its password.** A CouchDB
+  address may contain a username and password, and the log is kept on disk, sent with crash
+  reports, and copied by the Copy Log button. The address is now shown with the credentials
+  replaced before it is written anywhere.
+
+### Correcting the 0.7.0 notes
+
+The 0.7.0 entry said quick pages are not synced "on either backend". That is right for WebDAV, and
+too absolute for CouchDB: a quick page you have **drawn on since setting up sync** is sent, but one
+you have not is not, and a quick page arriving from another device may not appear in your library.
+Quick pages remain outside proper sync on both backends — keep anything you want on both devices in
+a notebook.
+
+### Upgrading
+
+No database change: the schema stays at 39.
+
+If you have notebooks that never made it to the server, they go on the next sync — there is nothing
+to do by hand. A notebook that reached the server before this release is unaffected.
+
 ## 0.7.0
 
 ### Sync says what it is doing
