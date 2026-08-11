@@ -763,4 +763,110 @@ class CouchSyncEngineTest {
         feed.join()
     }
 
+
+
+
+    private fun tombstone(at: Int, by: String) = CouchDocBody.Deleted(
+        CouchDeletedDoc(type = CouchDocType.NOTEBOOK, deletedAt = stamp(at), updatedBy = by)
+    )
+
+
+    /**
+     * A catch-up from `0` — a fresh install, or any device whose checkpoint was lost — used to ask
+     * for the whole library in one response and hold it all in memory before applying any of it.
+     * It arrives in batches now, each one checkpointed as it lands.
+     */
+    @Test
+    fun a_catch_up_longer_than_one_batch_pages_through_the_whole_feed() = runBlocking {
+        val total = 125
+        val ids = (0 until total).map { index ->
+            val id = CouchDocId.page("p$index")
+            booxStore.set(
+                id,
+                CouchDocBody.Page(
+                    page(listOf(stroke("s$index", index, "boox")), updatedAt = 5, by = "boox")
+                )
+            )
+            id
+        }
+        boox.markDirty(ids)
+        boox.flush()
+
+        val report = ipad.pull()
+
+        assertEquals("every page should have arrived", total, report.applied.size)
+        // The point is the size of each response, not the number of them: an unpaged read is one
+        // big response followed by an empty one, which is also two requests.
+        assertTrue(
+            "no single response should have carried the whole library",
+            server.largestChangeBatch <= 100,
+        )
+        // A second pull has nothing left to do: the checkpoint moved past everything applied.
+        assertTrue(ipad.pull().applied.isEmpty())
+    }
+
+    /**
+     * Protocol §7. A plain GET of a tombstone is a 404, indistinguishable from a document that
+     * never existed — so a pusher that reads it as "absent" retries as a create, and a PUT with no
+     * `_rev` over a tombstone succeeds. That silently undoes whatever the peer deleted.
+     */
+    @Test
+    fun a_queued_edit_does_not_resurrect_a_deletion_the_peer_already_made() = runBlocking {
+        ipadStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "ipad")))
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        boox.pull()
+
+        // The BOOX edits it offline, at an instant *before* the deletion happens.
+        val known = booxStore.notebook(notebookId)!!
+        booxStore.set(
+            notebookId,
+            CouchDocBody.Notebook(known.copy(title = "renamed offline", updatedAt = stamp(5)))
+        )
+        boox.markDirty(listOf(notebookId))
+
+        // Meanwhile the iPad deletes it, and that lands first.
+        ipadStore.set(notebookId, tombstone(at = 10, by = "ipad"))
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        assertTrue(server.isDeleted(notebookId))
+
+        // The BOOX now flushes its older edit. The deletion is newer, so it stands.
+        boox.flush()
+
+        assertTrue("the deletion must survive the peer's queued edit", server.isDeleted(notebookId))
+        assertTrue(booxStore.body(notebookId)?.isDeleted ?: false)
+        assertEquals("nothing should be left waiting", 0, boox.pendingCount)
+    }
+
+    /**
+     * Protocol §7. CouchDB answers 409 to a `_deleted` write over an already-deleted document even
+     * when the revision is current, so a pusher that keeps retrying burns its attempts and leaves
+     * the id dirty forever — every later flush replaying the same doomed requests.
+     */
+    @Test
+    fun both_devices_deleting_the_same_document_settles_instead_of_wedging_the_outbox() =
+        runBlocking {
+            ipadStore.set(
+                notebookId,
+                CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "ipad"))
+            )
+            ipad.markDirty(listOf(notebookId))
+            ipad.flush()
+            boox.pull()
+
+            // Both devices delete it independently, at different instants.
+            ipadStore.set(notebookId, tombstone(at = 10, by = "ipad"))
+            ipad.markDirty(listOf(notebookId))
+            booxStore.set(notebookId, tombstone(at = 12, by = "boox"))
+            boox.markDirty(listOf(notebookId))
+
+            ipad.flush()
+            val report = boox.flush()
+
+            assertTrue("the second deletion should not fail", report.failures.isEmpty())
+            assertTrue(report.stillDirty.isEmpty())
+            assertEquals("the outbox must drain", 0, boox.pendingCount)
+            assertTrue(server.isDeleted(notebookId))
+        }
 }

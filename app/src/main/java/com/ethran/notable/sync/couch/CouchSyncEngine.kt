@@ -240,7 +240,17 @@ class CouchSyncEngine(
         /** Image blobs downloaded for pages that reference them (protocol §3.4). */
         val fetchedAssets: List<String> = emptyList(),
         val lastSeq: String = "0",
-    )
+    ) {
+        /** Folds a later batch of the same pull into this one. */
+        fun merge(next: PullReport) = PullReport(
+            applied = applied + next.applied,
+            pushBack = pushBack + next.pushBack,
+            skippedEchoes = skippedEchoes + next.skippedEchoes,
+            conflictCopies = conflictCopies + next.conflictCopies,
+            fetchedAssets = fetchedAssets + next.fetchedAssets,
+            lastSeq = next.lastSeq,
+        )
+    }
 
     private val mutex = Mutex()
     private var lastSeq: String = state.lastSeq
@@ -378,12 +388,17 @@ class CouchSyncEngine(
                     return PushOutcome.NOTHING_TO_PUSH
                 }
                 if (merged != local) store.apply(documentId, merged, basedOn = local)
-                if (merged == remote.second) {
-                    // The server already holds exactly this, so there is nothing left to send.
-                    // Returning here is not just an optimization: when the merge resolves to the
-                    // peer's tombstone, CouchDB answers 409 to a PUT that re-deletes an already
-                    // deleted document *even with its current revision* — so writing it back would
-                    // spin until the retries ran out and leave the id stuck in the outbox forever.
+                // The server already holds this, so there is nothing left to send. Returning here
+                // is not just an optimization: when the merge resolves to the peer's tombstone,
+                // CouchDB answers 409 to a PUT that re-deletes an already deleted document *even
+                // with its current revision* — so writing it back would spin until the retries ran
+                // out and leave the id stuck in the outbox forever.
+                //
+                // The deleted case needs its own test rather than plain equality: two devices that
+                // deleted the same document independently merge to a tombstone whose `updatedAt`
+                // and `updatedBy` differ from the stored one — equal deletions, unequal documents.
+                // There is nothing to send either way; the deletion is already recorded.
+                if (merged == remote.second || (merged.isDeleted && remote.second.isDeleted)) {
                     dirty.remove(documentId)
                     return PushOutcome.NOTHING_TO_PUSH
                 }
@@ -497,9 +512,33 @@ class CouchSyncEngine(
         longpoll: Boolean = false,
         timeoutMs: Long = CouchDbClient.DEFAULT_LONGPOLL_MS,
     ): PullReport {
-        val since = mutex.withLock { lastSeq }
-        val changes = client.changes(since = since, longpoll = longpoll, timeoutMs = timeoutMs)
-        val report = mutex.withLock { applyChanges(changes, since) }
+        // Read the feed in batches rather than in one response. A catch-up from `0` — a fresh
+        // install, or any device whose checkpoint was lost — otherwise asks for the entire library
+        // at once, every page with its base64 ink inlined, and holds the lot in memory before
+        // applying any of it. On a device with this one's memory that is the difference between
+        // slow and dead. Checkpointing each batch also means an interrupted catch-up resumes where
+        // it stopped instead of starting over.
+        //
+        // A longpoll is never paged: it is one wait for one notification, and the batch that
+        // follows is whatever changed while it waited.
+        var report = PullReport()
+        while (true) {
+            val since = mutex.withLock { lastSeq }
+            val changes = client.changes(
+                since = since,
+                longpoll = longpoll,
+                timeoutMs = timeoutMs,
+                limit = if (longpoll) null else CATCH_UP_BATCH_SIZE,
+            )
+            val batch = mutex.withLock { applyChanges(changes, since) }
+            report = report.merge(batch)
+            // The server is caught up when it returns a short batch; a full one may have more
+            // behind it. A full batch that did not move the checkpoint would ask the same question
+            // forever — no CouchDB does that, which is why it is worth refusing to loop on it here
+            // rather than finding out on a device with the battery draining.
+            if (longpoll || changes.rows.size < CATCH_UP_BATCH_SIZE) break
+            if (mutex.withLock { lastSeq } == since) break
+        }
         // Also outside the lock: this is a download queue, and the blobs belong to the store rather
         // than to any state this engine guards. Fetching them under the lock would reintroduce
         // exactly the stall the split above exists to remove, just with images instead of waiting.
@@ -674,6 +713,12 @@ class CouchSyncEngine(
 
         /** Protocol §6.6: below this many notebook tombstones, a flush is never refused. */
         private const val MASS_DELETION_FLOOR = 10
+
+        /**
+         * Rows per catch-up request. Small enough that a library of any size arrives in pieces this
+         * device can hold and apply, large enough that a routine catch-up is still one round trip.
+         */
+        private const val CATCH_UP_BATCH_SIZE = 100
     }
 }
 
