@@ -168,6 +168,9 @@ object SyncLogger {
      * The whole retained log as text — the persisted history plus this session's entries — for the
      * "Copy Log" button. A bug report wants everything on disk, not just the entries this process
      * happens to be holding.
+     *
+     * Reads both generations synchronously, so call it off the main thread: at the rotation ceiling
+     * that is half a megabyte of file, enough to stall a screen on slow e-ink storage.
      */
     fun dump(): String {
         val persisted = logFile?.let { file ->
@@ -233,12 +236,21 @@ object SyncLogger {
     /**
      * Seed the buffer with the tail of the persisted log. Parse failures are not worth failing over:
      * an unparsable line is surfaced as-is at INFO so nothing is silently dropped from the record.
+     *
+     * Reads across the rotation boundary. A run that rotated mid-way leaves the current file holding
+     * only its tail, and reading that file alone would restore a handful of lines while the ones
+     * that explain the run sat unread in the previous generation.
      */
     private fun restoreFrom(file: File) {
-        if (!file.exists()) return
-        val restored = runCatching {
-            file.readLines().takeLast(RESTORED_LINES).map { parseFileLine(it) }
-        }.getOrNull().orEmpty()
+        val recent = tailOf(file, RESTORED_LINES)
+        // Only reach back into the previous generation when the current file cannot fill the quota,
+        // which is exactly the just-rotated case.
+        val older = if (recent.size < RESTORED_LINES) {
+            tailOf(previousGeneration(file), RESTORED_LINES - recent.size)
+        } else {
+            emptyList()
+        }
+        val restored = older + recent
         if (restored.isEmpty()) return
         // Restored history goes *above* whatever this session already logged while the read was in
         // flight, and the cap still applies — history must never crowd out the live run.
@@ -247,24 +259,42 @@ object SyncLogger {
         }
     }
 
+    /** The last [count] lines of [file] as entries, or empty if it is absent or unreadable. */
+    private fun tailOf(file: File, count: Int): List<LogEntry> {
+        if (count <= 0 || !file.exists()) return emptyList()
+        return runCatching {
+            file.readLines().takeLast(count).map { parseFileLine(it) }
+        }.getOrNull().orEmpty()
+    }
+
     /** `2026-08-11 14:30:02 I/SyncWorker: message` — one line, greppable, stable to parse back. */
     private fun LogEntry.toFileLine(): String =
         "${fileFormat.get().format(Date(atMillis))} ${level.marker}/$tag: $message"
 
+    /**
+     * Every entry produced here is [LogEntry.isRestored], including one whose own text could not be
+     * parsed — where it came from is known for certain by the caller, so it must not be inferred
+     * from a timestamp the line may not have carried.
+     */
     private fun parseFileLine(line: String): LogEntry {
         val match = FILE_LINE.matchEntire(line) ?: return LogEntry(
-            atMillis = 0L, level = LogLevel.INFO, tag = TAG, message = line
+            atMillis = 0L, level = LogLevel.INFO, tag = TAG, message = line, isRestored = true
         )
         val (stamp, marker, tag, message) = match.destructured
         return LogEntry(
             atMillis = runCatching { fileFormat.get().parse(stamp)?.time }.getOrNull() ?: 0L,
             level = LogLevel.entries.firstOrNull { it.marker == marker } ?: LogLevel.INFO,
             tag = tag,
-            message = message
+            message = message,
+            isRestored = true,
         )
     }
 
     private val FILE_LINE = Regex("""^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([DIWE])/([^:]*): (.*)$""")
+
+    /** Exposes the file-line parser to tests; restoring from disk is otherwise unreachable there. */
+    @androidx.annotation.VisibleForTesting
+    internal fun parseFileLineForTest(line: String): LogEntry = parseFileLine(line)
 
     private const val TAG = "SyncLogger"
 
@@ -273,21 +303,20 @@ object SyncLogger {
         val atMillis: Long,
         val level: LogLevel,
         val tag: String,
-        val message: String
+        val message: String,
+        /**
+         * Whether this entry was read back from disk rather than logged by this process — set by
+         * whoever creates it, not inferred, so a restored line with an unreadable timestamp is still
+         * correctly dimmed as history.
+         */
+        val isRestored: Boolean = false,
     ) {
         /** Clock time for the on-screen log. */
         val timestamp: String
             get() = if (atMillis == 0L) "--:--:--" else clockFormat.get().format(Date(atMillis))
-
-        /** Whether this entry came from a previous session, restored from disk. */
-        val isRestored: Boolean
-            get() = atMillis in 1..<installedAt
     }
 
     enum class LogLevel(val marker: String) {
         DEBUG("D"), INFO("I"), WARNING("W"), ERROR("E")
     }
-
-    /** Process start, used to tell restored history from lines this session produced. */
-    private val installedAt = System.currentTimeMillis()
 }
