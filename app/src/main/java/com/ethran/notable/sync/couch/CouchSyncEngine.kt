@@ -155,6 +155,18 @@ interface CouchLocalStore {
     fun load(documentId: String): CouchDocBody?
 
     /**
+     * Every document this device holds, including tombstones it has yet to push. The denominator
+     * for §6.7's mass-deletion guard: "most of what this device knows" is a question about the
+     * library, and only the store can answer it.
+     *
+     * A store that cannot enumerate itself reports nothing, which makes the guard *more* cautious
+     * rather than less — with no library to compare against, any large batch of deletions looks
+     * like most of it. Erring towards asking is the right direction for a guard, and since it holds
+     * back only the deletions, a false positive costs nothing else.
+     */
+    fun allDocumentIds(): List<String> = emptyList()
+
+    /**
      * Replaces local content with the merged result.
      *
      * [basedOn] is the local copy the merge actually consumed — null when this device held none.
@@ -446,13 +458,15 @@ class CouchSyncEngine(
     private fun exceedsDeletionGuard(queue: List<String>): Boolean {
         val tombstones = queue.filter { isNotebookTombstone(it) }
         if (tombstones.size < MASS_DELETION_FLOOR) return false
-        // TODO(couch): measure against what the store actually holds, the way bopa now does.
-        // `revs` is never pruned, so this denominator grows with history and the guard slowly
-        // stops being able to trip. Needs `allDocumentIds` promoted onto CouchLocalStore.
-        val knownNotebooks = revs.keys.filter {
-            CouchDocId.split(it)?.first == CouchDocType.NOTEBOOK
-        }
-        return tombstones.size * 2 > knownNotebooks.size
+        // What this device actually holds, not every id it has ever synced. `revs` is never pruned,
+        // so a library that has seen a hundred notebooks come and go kept all hundred in the
+        // denominator — and the guard quietly stopped being able to trip at all, which is the one
+        // thing it must not do. Deleted notebooks count as known: they are what is being asked
+        // about.
+        val known = (runCatching { store.allDocumentIds() }.getOrNull().orEmpty() + tombstones)
+            .filter { CouchDocId.split(it)?.first == CouchDocType.NOTEBOOK }
+            .toSet()
+        return tombstones.size * 2 > known.size
     }
 
     // endregion

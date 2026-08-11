@@ -214,7 +214,7 @@ class RoomCouchStore(
      * (`notebookId == null`) belongs to no notebook and has nowhere to live on the other app, so it
      * is not offered for sync.
      */
-    fun allDocumentIds(): List<String> = runBlocking {
+    override fun allDocumentIds(): List<String> = runBlocking {
         val ids = mutableListOf<String>()
         appRepository.folderRepository.getAll().forEach { ids += CouchDocId.folder(it.id) }
         appRepository.bookRepository.getAll().forEach { notebook ->

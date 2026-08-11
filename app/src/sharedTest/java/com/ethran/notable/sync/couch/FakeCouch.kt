@@ -325,6 +325,9 @@ class FakeLocalStore : CouchLocalStore {
     /** Runs on the next [load], to model the editor writing while a merge is in flight. */
     var onLoad: (() -> Unit)? = null
 
+    override fun allDocumentIds(): List<String> = documents.keys.sorted()
+
+
     override fun load(documentId: String): CouchDocBody? {
         // The snapshot is taken first, *then* the hook runs: the engine is modelled as having read
         // the document and gone off to the network, with the editor writing while it is away.
@@ -391,6 +394,14 @@ class FakeLocalStore : CouchLocalStore {
 
     fun set(documentId: String, body: CouchDocBody) {
         documents[documentId] = body
+    }
+
+    /**
+     * Drops a document without tombstoning it — a notebook this device no longer holds, the way one
+     * looks after its deletion was applied and reaped.
+     */
+    fun remove(documentId: String) {
+        documents.remove(documentId)
     }
 
     fun page(documentId: String): CouchPage? = (documents[documentId] as? CouchDocBody.Page)?.page
