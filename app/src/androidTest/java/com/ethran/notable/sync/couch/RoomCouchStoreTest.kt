@@ -652,6 +652,8 @@ private fun inertCouchSync(): CouchSyncController = CouchSyncController(
         override suspend fun flush() = CouchSyncEngine.FlushReport()
         override suspend fun pull(longpoll: Boolean) = CouchSyncEngine.PullReport()
         override suspend fun markPageDirty(pageId: String) = Unit
+        override suspend fun markDocumentDirty(documentId: String) = Unit
+        override suspend fun markUnsentDirty(): Int = 0
         override suspend fun markEverythingDirty() = Unit
         override suspend fun recordDeletion(documentId: String) = Unit
     },
