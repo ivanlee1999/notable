@@ -4,6 +4,7 @@ import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
 import android.database.SQLException
+import androidx.annotation.VisibleForTesting
 import android.database.sqlite.SQLiteConstraintException
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -36,6 +37,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import java.io.File
 import java.lang.ref.SoftReference
@@ -984,6 +987,21 @@ class PageDataManager @Inject constructor(
      * escaping the coroutine and killing the process. For now this only logs and no-ops: the
      * in-memory state is untouched, so the next successful write re-persists it.
      */
+    /**
+     * Waits for the fire-and-forget database writes above to finish.
+     *
+     * Only tests need this. They close an in-memory database when they finish, and a write still
+     * queued at that moment fails against a closed connection pool — surfacing against whichever
+     * test happens to be running when it lands, which is why it looked like an unrelated flake.
+     * The trailing work is usually [bumpEditTimestamps], which nobody awaits by design.
+     *
+     * The app never calls it: its scope and its database both live as long as the process.
+     */
+    @VisibleForTesting
+    suspend fun awaitPendingDbWrites() {
+        dataScope.coroutineContext.job.children.toList().joinAll()
+    }
+
     private fun launchDbWrite(op: String, pageIds: Collection<String>, block: suspend () -> Unit) {
         dataScope.launch {
             try {

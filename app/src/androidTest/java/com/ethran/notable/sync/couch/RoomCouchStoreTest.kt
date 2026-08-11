@@ -368,6 +368,11 @@ class RoomCouchStoreTest {
         assertNotNull(loaded)
         assertEquals(listOf("s1"), loaded!!.page.strokes.map { it.id })
         assertEquals(listOf("s2"), loaded.page.deletedStrokes.map { it.id })
+    
+        // The manager's writes are fire-and-forget, and the trailing timestamp bump outlives the
+        // test body. Teardown closes the database, so an unawaited write fails against a closed
+        // pool — and lands against whatever test is running by then, not this one.
+        runBlocking { pageDataManager.awaitPendingDbWrites() }
     }
 
     private fun strokeRow(id: String, pageId: String) = Stroke(
