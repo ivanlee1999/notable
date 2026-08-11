@@ -200,6 +200,35 @@ class RoomCouchStoreTest {
     }
 
     /**
+     * With nowhere to put a picture, the row is left without a path rather than given one that
+     * resolves to no file — such a row would read as an outstanding download on every pull and be
+     * fetched again for good.
+     */
+    @Test
+    fun anImageWithNowhereToLandIsNotGivenAPathThatGoesNowhere() {
+        val stranded = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { error("storage is unreachable") },
+        )
+        stranded.apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 0, y = 0, width = 4,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(1),
+                        )
+                    )
+                )
+            ),
+        )
+
+        assertNull(runBlocking { repository.imageRepository.getUrisForPage("p1") }.first())
+        assertTrue(stranded.missingAssetIds().isEmpty())
+    }
+
+    /**
      * An image this device already holds under its own name keeps that name: renaming it to the
      * hash would orphan the copy the WebDAV backend syncs by filename.
      */

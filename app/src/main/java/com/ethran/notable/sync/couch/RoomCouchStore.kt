@@ -511,12 +511,15 @@ class RoomCouchStore(
             return heldAt
         }
         if (heldAt != null) return heldAt
-        val folder = runCatching { imagesFolder() }.getOrNull()
-            // Storage is unreachable — but the hash alone still names the bytes, and a bare hash
-            // is a uri [CouchImageFiles.assetIdFor] can read back. Writing null instead would make
-            // the next push describe this image as having no content, which erases the peer's
-            // reference to a picture that is merely undownloaded here.
-            ?: return CouchAssetId.sha256HexOfAssetId(assetId)
+        // Storage is unreachable, so there is no path this image could be drawn from and none
+        // this device could download it to. Recording a bare hash instead would be worse than
+        // recording nothing: it resolves to no file and never will, so every pull would see the
+        // download as still outstanding and fetch the picture again, for good.
+        //
+        // Nothing is lost by leaving it empty. The next push then names no asset for this image,
+        // and a reader that is told no asset keeps whatever it already had — so the peer's copy
+        // is not disturbed, and the next apply here fills the path in once storage is back.
+        val folder = runCatching { imagesFolder() }.getOrNull() ?: return null
         return CouchImageFiles.localUriFor(assetId, folder)
     }
 
