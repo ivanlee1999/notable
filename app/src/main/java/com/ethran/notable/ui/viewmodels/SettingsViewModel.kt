@@ -184,6 +184,14 @@ class SettingsViewModel @Inject constructor(
                                 oldSettings.wifiOnly != settingWithPassword.wifiOnly ||
                                 oldSettings.backend != settingWithPassword.backend
 
+                    // Work already enqueued belongs to whichever backend was selected when it was
+                    // queued. Reconciling the schedule only governs future runs, so without this
+                    // a run started under WebDAV would carry on after the user switched away —
+                    // the one thing choosing another backend is meant to prevent.
+                    if (oldSettings.backend != settingWithPassword.backend) {
+                        syncScheduler.cancelRunningSync()
+                    }
+
                     if (scheduleChanged) {
                         syncScheduler.reconcilePeriodicSync(settingWithPassword)
                     }

@@ -217,7 +217,16 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val settings = kvProxy.get().getSyncSettings()
-                if (settings.syncEnabled && settings.syncOnAppStart) {
+                // Each backend decides for itself. WebDAV honours "sync on app start", because a
+                // whole-tree reconcile is expensive enough to be worth a setting; CouchDB always
+                // catches up, because its startup pass is one cheap change-feed read. Neither
+                // fires when the backend is OFF.
+                val shouldSync = when {
+                    settings.couchActive -> true
+                    settings.webdavActive -> settings.syncOnAppStart
+                    else -> false
+                }
+                if (shouldSync) {
                     Log.i(TAG, "Triggering one-time sync on app startup via WorkManager")
                     syncScheduler.get().triggerImmediateSync()
                 }

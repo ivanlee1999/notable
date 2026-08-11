@@ -8,11 +8,15 @@ const val SYNC_SETTINGS_KEY = "SYNC_SETTINGS"
 const val COUCH_SYNC_STATE_KEY = "COUCH_SYNC_STATE"
 
 /**
- * Which sync transport notable uses. WebDAV stays the default while CouchDB is proven out; the
- * intent is for CouchDB to become the only option. bopa's `SyncBackend` is the twin of this enum.
+ * Which sync transport notable uses. Exactly one is live at a time, and [OFF] means none is — this
+ * is the single switch every sync path consults, so selecting one backend genuinely silences the
+ * other rather than merely hiding its settings.
+ *
+ * WebDAV stays the default while CouchDB is proven out; the intent is for CouchDB to become the
+ * only option. bopa's `SyncBackend` is the twin of this enum.
  */
 @Serializable
-enum class SyncBackend { WEBDAV, COUCHDB }
+enum class SyncBackend { OFF, WEBDAV, COUCHDB }
 
 /**
  * "boox" by default, to pair with bopa's "ipad". Distinctness is what matters, not the spelling —
@@ -70,6 +74,15 @@ data class SyncSettings(
 
     /** True when CouchDB is both selected and usable. */
     val couchActive: Boolean get() = backend == SyncBackend.COUCHDB && couchConfigured
+
+    /**
+     * True when WebDAV is both selected and switched on. Every WebDAV entry point gates on this
+     * rather than on [syncEnabled] alone: a saved server and `syncEnabled = true` survive a switch
+     * to CouchDB, and without the backend check the two engines would write the same notebooks
+     * through different transports — sync-on-note-close and check-on-open call the orchestrator
+     * directly, so they never see the periodic worker's routing.
+     */
+    val webdavActive: Boolean get() = backend == SyncBackend.WEBDAV && syncEnabled
 
     /** The one misconfiguration that silently breaks merging. */
     val deviceIdWarning: String?

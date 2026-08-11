@@ -32,7 +32,9 @@ class SyncScheduler @Inject constructor(
     fun reconcilePeriodicSync(settings: SyncSettings) {
         // CouchDB has no separate on/off switch: selecting it and pointing it somewhere *is* the
         // opt-in, and its background job is a cheap catch-up rather than a whole-tree reconcile.
-        if (settings.couchActive || (settings.syncEnabled && settings.autoSync)) {
+        // Neither branch fires when the backend is OFF, which is what makes that a real off switch
+        // rather than just a hidden settings page.
+        if (settings.couchActive || (settings.webdavActive && settings.autoSync)) {
             enablePeriodicSync(
                 intervalMinutes = settings.syncInterval.toLong(),
                 wifiOnly = settings.wifiOnly
