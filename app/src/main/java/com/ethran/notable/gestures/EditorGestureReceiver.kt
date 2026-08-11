@@ -232,7 +232,11 @@ private fun applyModeTransitions(recognizer: Recognizer, ctx: GestureContext) {
         )
         ctx.actions.showHint("Selection mode!")
     }
-    if (ctx.appSettings.smoothScroll && shouldEnterScroll(tracker, recognizer.mode, ctx.thresholds))
+    // Paged navigation never streams: the turn happens once, when the finger lifts, so
+    // there is nothing to follow mid-gesture and no partial refresh to pay for.
+    if (ctx.appSettings.smoothScroll && !ctx.appSettings.verticalNavigation.isPaged &&
+        shouldEnterScroll(tracker, recognizer.mode, ctx.thresholds)
+    )
         applyGestureMode(recognizer, GestureMode.Scroll, ctx)
     if (shouldEnterTransform(
             tracker,
@@ -321,6 +325,7 @@ private suspend fun AwaitPointerEventScope.handleGestureEnd(
         flags = GestureFlags(
             smoothScroll = ctx.appSettings.smoothScroll,
             continuousZoom = ctx.appSettings.continuousZoom,
+            pagedScroll = ctx.appSettings.verticalNavigation.isPaged,
         ),
         thresholds = ctx.thresholds,
     )
@@ -384,8 +389,14 @@ private fun dispatchEvent(event: GestureEvent, ctx: GestureContext) {
         }
 
         is GestureEvent.VerticalScroll -> {
-            log.d("Discrete scrolling, verticalDrag: ${event.delta}")
-            ctx.actions.requestScroll(Offset(0f, event.delta))
+            if (ctx.appSettings.verticalNavigation.isPaged) {
+                // A drag up asks for what is below, which is the next screen.
+                log.d("Paged step, verticalDrag: ${event.delta}")
+                ctx.actions.requestPageStep(if (event.delta < 0) 1 else -1)
+            } else {
+                log.d("Discrete scrolling, verticalDrag: ${event.delta}")
+                ctx.actions.requestScroll(Offset(0f, event.delta))
+            }
         }
     }
 

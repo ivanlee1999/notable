@@ -41,12 +41,27 @@ fun GeneralSettings(
                 onSettingsChange(settings.copy(scribbleToEraseEnabled = isChecked))
             })
 
-        SettingToggleRow(
-            label = stringResource(R.string.enable_smooth_scrolling),
-            value = settings.smoothScroll,
-            onToggle = { isChecked ->
-                onSettingsChange(settings.copy(smoothScroll = isChecked))
+        // Paged turns by a whole screen at a time, so a turn is one clean refresh rather
+        // than a run of partial ones. It supersedes smooth scrolling, which is why that
+        // toggle drops away below when it is selected.
+        SelectorRow(
+            label = stringResource(R.string.vertical_navigation), options = listOf(
+                AppSettings.VerticalNavigation.Continuous to
+                        stringResource(R.string.vertical_navigation_continuous),
+                AppSettings.VerticalNavigation.Paged to
+                        stringResource(R.string.vertical_navigation_paged),
+            ), value = settings.verticalNavigation, onValueChange = { mode ->
+                onSettingsChange(settings.copy(verticalNavigation = mode))
             })
+
+        if (!settings.verticalNavigation.isPaged) {
+            SettingToggleRow(
+                label = stringResource(R.string.enable_smooth_scrolling),
+                value = settings.smoothScroll,
+                onToggle = { isChecked ->
+                    onSettingsChange(settings.copy(smoothScroll = isChecked))
+                })
+        }
 
         SettingToggleRow(
             label = stringResource(R.string.continuous_zoom),

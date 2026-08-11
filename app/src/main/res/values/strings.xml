@@ -22,6 +22,9 @@
     <string name="hexagon_grid">Hexagon grid</string>
     <string name="enable_scribble_to_erase">Enable scribble-to-erase (scribble out your mistakes to erase them)</string>
     <string name="enable_smooth_scrolling">Enable smooth scrolling</string>
+    <string name="vertical_navigation">Vertical Navigation</string>
+    <string name="vertical_navigation_continuous">Scrolling</string>
+    <string name="vertical_navigation_paged">Pagination</string>
     <string name="continuous_zoom">Continuous Zoom</string>
     <string name="continuous_stroke_slider">Continuous Stroke Slider</string>
     <string name="rename_on_create">Open properties on new notebook</string>

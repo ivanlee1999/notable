@@ -48,6 +48,7 @@ data class AppSettings(
     val scribbleToEraseEnabled: Boolean = false,
     val toolbarPosition: Position = Position.Top,
     val smoothScroll: Boolean = true,
+    val verticalNavigation: VerticalNavigation = VerticalNavigation.Continuous,
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
     val paginatePdf: Boolean = true,
@@ -89,6 +90,25 @@ data class AppSettings(
     ) {
     enum class GestureAction {
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
+    }
+
+    /**
+     * How a one-finger vertical gesture moves the canvas.
+     *
+     * [Continuous] follows the finger — the canvas is one long surface and you stop
+     * wherever you let go. [Paged] advances exactly one screen per swipe regardless of how
+     * far the finger travelled, so a turn is a single full refresh instead of a run of
+     * partial ones. On an e-ink panel that is the difference between reading handwriting
+     * back cleanly and watching it smear; it also means a line always lands in the same
+     * place on screen.
+     *
+     * Both modes keep the horizontal axis as it was: left/right still turns between the
+     * notebook's pages.
+     */
+    enum class VerticalNavigation {
+        Continuous, Paged;
+
+        val isPaged: Boolean get() = this == Paged
     }
 
     /**
