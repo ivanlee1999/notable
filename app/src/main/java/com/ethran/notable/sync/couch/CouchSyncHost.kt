@@ -172,11 +172,13 @@ class CouchSyncHost @Inject constructor(
             // An unparseable URL is a typo in settings, not a reason to take the app down. It goes
             // to the in-app log as well as ShipBook: the Sync now button stays enabled on a bad
             // URL, so without this the user taps it and absolutely nothing happens or is said.
-            SyncLogger.w(
-                TAG,
-                "CouchDB URL '${settings.couchUrl}' is not usable (${it.message}); nothing can sync"
-            )
-            log.w("CouchDB URL '${settings.couchUrl}' is not usable: ${it.message}")
+            //
+            // Redacted, because the whole point of the sync log is that it is kept on disk, sent to
+            // ShipBook and copied into bug reports — and `https://user:password@host` is an ordinary
+            // way to write a CouchDB URL. Showing the typo must not publish the password with it.
+            val safeUrl = redactUserInfo(settings.couchUrl)
+            SyncLogger.w(TAG, "CouchDB URL '$safeUrl' is not usable (${it.message}); nothing can sync")
+            log.w("CouchDB URL '$safeUrl' is not usable: ${it.message}")
             stack = null
             return@withLock null
         }
@@ -236,3 +238,17 @@ class CouchSyncHost @Inject constructor(
         const val TAG = "CouchSync"
     }
 }
+
+/**
+ * Replace the `user:password@` part of a URL with `***@`, leaving the rest legible.
+ *
+ * Deliberately a regex over the authority rather than a URI parse: this is called precisely when a
+ * URL failed to parse, so anything that needs it to be well-formed would fall back to printing the
+ * raw string — the one outcome that must not happen. A string with no userinfo is returned
+ * unchanged, so a URL without embedded credentials stays fully readable in the log.
+ */
+internal fun redactUserInfo(url: String): String =
+    USER_INFO.replace(url) { "${it.groupValues[1]}***@" }
+
+/** `scheme://` then everything up to the first `@` that is still inside the authority. */
+private val USER_INFO = Regex("""^([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#]*@""")
