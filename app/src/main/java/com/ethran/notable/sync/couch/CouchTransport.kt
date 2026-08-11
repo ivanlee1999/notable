@@ -36,6 +36,10 @@ data class CouchQueryItem(val name: String, val value: String)
  * @property path server-absolute, resolved against the transport's base URL (`/notes/page:abc`).
  * @property readTimeoutMs per-call read timeout, or null for the shared client's. Set only by the
  *   longpoll path, which must outlast the window it asked the server to hold the connection open.
+ * @property callTimeoutMs hard ceiling on the whole call, or null for none. A read timeout alone
+ *   cannot bound the longpoll: CouchDB's heartbeat sends a byte every few seconds purely to keep
+ *   the connection alive, and every one of those resets the read timeout, so a feed that never
+ *   reports a change never returns either. Only a call-level deadline survives that.
  */
 class CouchRequest(
     val method: String,
@@ -44,6 +48,7 @@ class CouchRequest(
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray? = null,
     val readTimeoutMs: Long? = null,
+    val callTimeoutMs: Long? = null,
 )
 
 /** A response. Same `ByteArray` caveat as [CouchRequest]. */
@@ -99,9 +104,18 @@ class OkHttpCouchTransport(
         for ((name, value) in request.headers) builder.header(name, value)
         authorization?.let { builder.header("Authorization", it) }
 
-        val callClient = request.readTimeoutMs
-            ?.let { client.newBuilder().readTimeout(it, TimeUnit.MILLISECONDS).build() }
-            ?: client
+        val callClient =
+            if (request.readTimeoutMs == null && request.callTimeoutMs == null) {
+                client
+            } else {
+                client.newBuilder()
+                    .apply {
+                        request.readTimeoutMs?.let { readTimeout(it, TimeUnit.MILLISECONDS) }
+                        // Absolute, and deliberately not a read timeout: heartbeats reset that one.
+                        request.callTimeoutMs?.let { callTimeout(it, TimeUnit.MILLISECONDS) }
+                    }
+                    .build()
+            }
 
         return callClient.newCall(builder.build()).execute().use { response ->
             CouchResponse(
