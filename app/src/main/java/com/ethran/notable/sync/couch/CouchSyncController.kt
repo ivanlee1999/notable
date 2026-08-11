@@ -52,7 +52,27 @@ interface CouchSyncBackend {
 
     /** Records a locally-initiated deletion so a tombstone is pushed, including offline. */
     suspend fun recordDeletion(documentId: String)
+
+    /**
+     * Which documents the server has seen and which are still queued, or null when CouchDB is not
+     * the live backend. The library badge reads this: without it a notebook synced perfectly over
+     * CouchDB still showed "local only", because the only other record of sync state is a table
+     * that only the WebDAV engine writes.
+     */
+    val documentState: StateFlow<CouchDocumentState?>
 }
+
+/**
+ * The per-document facts the UI needs, lifted out of [CouchSyncState] so the badge does not depend
+ * on the engine's checkpoint format.
+ *
+ * @property known ids the server has a revision for — it has this document.
+ * @property queued ids changed here and not yet accepted by the server.
+ */
+data class CouchDocumentState(
+    val known: Set<String> = emptySet(),
+    val queued: Set<String> = emptySet(),
+)
 
 /**
  * The controller's tunables, injected as one value so production defaults live in a Hilt module and

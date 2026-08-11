@@ -13,6 +13,9 @@ import com.ethran.notable.sync.SyncSettings
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -49,6 +52,16 @@ class CouchSyncHost @Inject constructor(
 
     private val mutex = Mutex()
     private var stack: Stack? = null
+
+    private val _documentState = MutableStateFlow<CouchDocumentState?>(null)
+    override val documentState: StateFlow<CouchDocumentState?> = _documentState.asStateFlow()
+
+    /** Republish the per-document view whenever the engine's state moves, or the backend goes away. */
+    private fun publish(state: CouchSyncState?) {
+        _documentState.value = state?.let {
+            CouchDocumentState(known = it.revs.keys.toSet(), queued = it.dirty)
+        }
+    }
 
     /**
      * Checkpoint writes, conflated onto one consumer.
@@ -154,6 +167,7 @@ class CouchSyncHost @Inject constructor(
             if (stack != null) SyncLogger.i(TAG, "CouchDB no longer active; sync stack released")
             else SyncLogger.d(TAG, couchInactiveReason(settings))
             stack = null
+            publish(null)
             return@withLock null
         }
 
@@ -180,6 +194,7 @@ class CouchSyncHost @Inject constructor(
             SyncLogger.w(TAG, "CouchDB URL '$safeUrl' is not usable (${it.message}); nothing can sync")
             log.w("CouchDB URL '$safeUrl' is not usable: ${it.message}")
             stack = null
+            publish(null)
             return@withLock null
         }
 
@@ -190,13 +205,20 @@ class CouchSyncHost @Inject constructor(
             // The engine applies changes off the UI thread; the canvas has to be told to reload.
             onApplied = { scope.launch { CanvasEventBus.reloadFromDb.emit(Unit) } },
         )
+        val initial = loadState()
         val engine = CouchSyncEngine(
             client = CouchDbClient(transport, database = settings.couchDatabase),
             store = store,
             deviceId = deviceId,
-            state = loadState(),
-            onStateChange = { stateWrites.trySend(it) },
+            state = initial,
+            onStateChange = {
+                stateWrites.trySend(it)
+                // The badge follows the engine, not the persisted copy: it should change the moment
+                // a document is queued or accepted, not once the checkpoint write lands.
+                publish(it)
+            },
         )
+        publish(initial)
         Stack(key, store, engine).also { stack = it }
     }
 

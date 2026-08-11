@@ -2,6 +2,9 @@ package com.ethran.notable.sync
 
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.SyncStateValue
+import com.ethran.notable.sync.couch.CouchDocId
+import com.ethran.notable.sync.couch.CouchDocumentState
+import com.ethran.notable.sync.couch.CouchSyncBackend
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import javax.inject.Inject
@@ -40,12 +43,22 @@ enum class SyncBadge {
 class NotebookSyncStatusStore @Inject constructor(
     appRepository: AppRepository,
     reporter: SyncProgressReporter,
+    couchBackend: CouchSyncBackend,
 ) {
     val badges: Flow<Map<String, SyncBadge>> = combine(
         appRepository.bookRepository.getAllFlow(),
         appRepository.notebookSyncStateRepository.getAllFlow(),
         reporter.state,
-    ) { notebooks, states, syncState ->
+        couchBackend.documentState,
+    ) { notebooks, states, syncState, couch ->
+        // CouchDB keeps no `notebook_sync_state` rows — that table is the WebDAV engine's record of
+        // its own commits. Reading it while CouchDB is driving reported every notebook as never
+        // synced, however faithfully it was syncing, so when Couch is live its own outbox answers
+        // instead. Nothing else about the badge changes: it is still derived, never stored.
+        if (couch != null) return@combine notebooks.associate { nb ->
+            nb.id to couchBadge(CouchDocId.notebook(nb.id), couch)
+        }
+
         val syncing = syncState is SyncState.Syncing
         // The one notebook the engine is processing right now (null between items).
         val currentId = (syncState as? SyncState.Syncing)?.item?.id
@@ -76,7 +89,28 @@ class NotebookSyncStatusStore @Inject constructor(
         }
     }
 
+    /**
+     * The badge for one notebook under CouchDB.
+     *
+     * Queued outranks known: a document the server has *and* that has been changed here again is
+     * unsynced, which is the same precedence the WebDAV branch applies to a local edit. A document
+     * in neither set has never been sent, which reads as unsynced too — correctly, since that was
+     * the state the "never sent" scan exists to find.
+     *
+     * There is no CONFLICT badge here because the CouchDB engine does not produce one: a merge it
+     * cannot resolve is written as a separate conflict copy rather than held for the user.
+     */
+    private fun couchBadge(documentId: String, couch: CouchDocumentState): SyncBadge =
+        couchBadgeFor(documentId, couch)
+
     companion object {
         private const val TOLERANCE_MS = 1000L
+
+        /** See [couchBadge]; on the companion so it can be exercised without building the store. */
+        fun couchBadgeFor(documentId: String, couch: CouchDocumentState): SyncBadge = when {
+            documentId in couch.queued -> SyncBadge.NOT_SYNCED
+            documentId in couch.known -> SyncBadge.SYNCED
+            else -> SyncBadge.NOT_SYNCED
+        }
     }
 }

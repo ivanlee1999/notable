@@ -437,16 +437,43 @@ class CouchSyncEngine(
      * [longpoll] holds the request open until a change arrives — the near-real-time path. A
      * non-longpoll call returns immediately and is used to catch up on foreground/reconnect.
      */
+    /**
+     * Catch up with the server, optionally waiting for it to report something.
+     *
+     * The wait happens **outside** [mutex] on purpose. A long poll is a request designed to sit
+     * there until something changes — up to a minute of doing nothing — and holding the engine lock
+     * across it froze every push, every queued edit and every manual sync behind it for that whole
+     * window. The lock is taken twice instead: once to read the checkpoint, and once to apply what
+     * came back. Between those two, anything else that needs the engine can have it.
+     *
+     * Two pulls can therefore overlap, which is safe because applying a change is idempotent — a row
+     * already applied merges to the identical document, or is skipped as our own echo. The one thing
+     * that must not happen is the checkpoint going backwards, so [applyChanges] advances it only if
+     * nobody moved it while this pull was waiting.
+     */
     suspend fun pull(
         longpoll: Boolean = false,
         timeoutMs: Long = CouchDbClient.DEFAULT_LONGPOLL_MS,
-    ): PullReport = mutex.withLock {
+    ): PullReport {
+        val since = mutex.withLock { lastSeq }
+        val changes = client.changes(since = since, longpoll = longpoll, timeoutMs = timeoutMs)
+        val report = mutex.withLock { applyChanges(changes, since) }
+        // Also outside the lock: this is a download queue, and the blobs belong to the store rather
+        // than to any state this engine guards. Fetching them under the lock would reintroduce
+        // exactly the stall the split above exists to remove, just with images instead of waiting.
+        return report.copy(fetchedAssets = fetchMissingAssets())
+    }
+
+    /**
+     * Apply one feed batch. Callers hold [mutex].
+     *
+     * [since] is the checkpoint this batch was fetched from; see [pull] for why it is needed.
+     */
+    private suspend fun applyChanges(changes: CouchDbClient.Changes, since: String): PullReport {
         val applied = mutableListOf<String>()
         val pushBack = mutableListOf<String>()
         val skippedEchoes = mutableListOf<String>()
         val conflictCopies = mutableListOf<String>()
-
-        val changes = client.changes(since = lastSeq, longpoll = longpoll, timeoutMs = timeoutMs)
 
         for (row in changes.rows) {
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
@@ -504,15 +531,19 @@ class CouchSyncEngine(
             }
         }
 
-        lastSeq = changes.lastSeq
-        val fetchedAssets = fetchMissingAssets()
+        // Only if nothing moved it while this pull was waiting. An overlapping pull that already
+        // advanced the checkpoint is at least as far along as this batch, and overwriting it with
+        // an older sequence would replay changes we have already applied — harmless, since applying
+        // is idempotent, but it would do so on every pull from then on.
+        if (lastSeq == since) lastSeq = changes.lastSeq
         persist()
-        PullReport(
+        return PullReport(
             applied = applied,
             pushBack = pushBack,
             skippedEchoes = skippedEchoes,
             conflictCopies = conflictCopies,
-            fetchedAssets = fetchedAssets,
+            // Filled in by `pull`, which fetches blobs after releasing the lock.
+            fetchedAssets = emptyList(),
             lastSeq = changes.lastSeq,
         )
     }
