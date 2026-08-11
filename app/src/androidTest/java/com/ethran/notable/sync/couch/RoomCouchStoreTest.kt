@@ -13,6 +13,7 @@ import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
+import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.KvRepository
@@ -35,6 +36,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -43,9 +45,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.time.Instant
 import java.util.Base64
 import java.util.Date
+import java.util.UUID
 
 /**
  * [RoomCouchStore] against a real (in-memory) Room database, plus a round trip through the engine
@@ -67,16 +71,24 @@ class RoomCouchStoreTest {
     private lateinit var repository: AppRepository
     private lateinit var store: RoomCouchStore
 
+    /**
+     * Stands in for the app's images folder. A test has no "All files access", so the real one
+     * cannot be resolved — and pointing at it would leave pictures in the user's storage anyway.
+     */
+    private lateinit var images: File
+
     @Before
     fun setUp() {
         db = TestDatabaseFactory.createInMemory(context)
         repository = repositoryFor(db)
-        store = RoomCouchStore(repository, db.kvDao(), deviceId = "boox")
+        images = File(context.cacheDir, "couch-images-${UUID.randomUUID()}").apply { mkdirs() }
+        store = RoomCouchStore(repository, db.kvDao(), deviceId = "boox", imagesFolder = { images })
     }
 
     @After
     fun tearDown() {
         db.close()
+        images.deleteRecursively()
     }
 
     // region Fixtures
@@ -122,6 +134,94 @@ class RoomCouchStoreTest {
         notebookId = notebookId, strokes = strokes,
         createdAt = stamp(0), updatedAt = stamp(updatedAt), updatedBy = by,
     )
+
+    private val pictureBytes = "PNG-ish bytes, hashed exactly as they are".toByteArray()
+    private val pictureAssetId get() = CouchAssetId.forBytes(pictureBytes)
+
+    // endregion
+
+    // region Images
+
+    /**
+     * What a placed image looks like on the wire: a reference to the hash of its bytes, not to
+     * wherever this device happens to keep the file.
+     */
+    @Test
+    fun aPlacedImageTravelsAsTheHashOfItsBytes() {
+        val file = File(images, "holiday.png").apply { writeBytes(pictureBytes) }
+        val pageId = CouchDocId.page("p1")
+        store.apply(pageId, CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)))
+        runBlocking {
+            repository.imageRepository.create(
+                Image(id = "i1", x = 1, y = 2, width = 3, height = 4,
+                    uri = file.absolutePath, pageId = "p1")
+            )
+        }
+
+        val loaded = store.load(pageId) as? CouchDocBody.Page
+        assertNotNull("the page did not load", loaded)
+        assertEquals(listOf(pictureAssetId), loaded!!.page.images.map { it.assetId })
+
+        val asset = store.load(pictureAssetId) as? CouchDocBody.Asset
+        assertNotNull("the bytes behind the reference were not found", asset)
+        assertArrayEquals(pictureBytes, asset!!.asset.bytes)
+    }
+
+    /** The window this whole mechanism exists for: the page has arrived, the picture has not. */
+    @Test
+    fun anIncomingImageIsOwedUntilItsBytesArrive() {
+        val pageId = CouchDocId.page("p1")
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 0, y = 0, width = 4,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(1),
+                        )
+                    )
+                )
+            ),
+        )
+
+        assertEquals(listOf(pictureAssetId), store.missingAssetIds())
+        assertNull("nothing should claim to hold the bytes yet", store.load(pictureAssetId))
+
+        store.apply(
+            pictureAssetId,
+            CouchDocBody.Asset(CouchAsset.of(pictureBytes, at = stamp(2), updatedBy = "boox")),
+        )
+
+        assertTrue(store.missingAssetIds().isEmpty())
+        // And it landed where the row says to look for it, so the canvas finds it.
+        val uri = runBlocking { repository.imageRepository.getUrisForPage("p1") }.first()
+        assertArrayEquals(pictureBytes, File(uri!!).readBytes())
+    }
+
+    /**
+     * An image this device already holds under its own name keeps that name: renaming it to the
+     * hash would orphan the copy the WebDAV backend syncs by filename.
+     */
+    @Test
+    fun bytesAlreadyHeldKeepTheNameTheyArrivedUnder() {
+        val file = File(images, "holiday.png").apply { writeBytes(pictureBytes) }
+        val pageId = CouchDocId.page("p1")
+        store.apply(pageId, CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)))
+        runBlocking {
+            repository.imageRepository.create(
+                Image(id = "i1", x = 1, y = 2, width = 3, height = 4,
+                    uri = file.absolutePath, pageId = "p1")
+            )
+        }
+
+        val loaded = (store.load(pageId) as CouchDocBody.Page).page
+        store.apply(pageId, CouchDocBody.Page(loaded))
+
+        val uri = runBlocking { repository.imageRepository.getUrisForPage("p1") }.first()
+        assertEquals(file.absolutePath, uri)
+        assertTrue(store.missingAssetIds().isEmpty())
+    }
 
     // endregion
 

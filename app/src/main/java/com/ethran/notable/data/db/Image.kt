@@ -69,6 +69,10 @@ interface ImageDao {
      *  the page's strokes (see NotebookSyncService.garbageCollectRemote). */
     @Query("SELECT uri FROM Image WHERE pageId = :pageId")
     suspend fun getUrisForPage(pageId: String): List<String?>
+
+    /** Every distinct image referenced anywhere — what CouchDB sync checks for missing blobs. */
+    @Query("SELECT DISTINCT uri FROM Image WHERE uri IS NOT NULL")
+    suspend fun getAllUris(): List<String>
 }
 
 // Repository for image operations
@@ -122,6 +126,10 @@ class ImageRepository @Inject constructor(
 
     suspend fun getUrisForPage(pageId: String): List<String?> {
         return db.getUrisForPage(pageId)
+    }
+
+    suspend fun getAllUris(): List<String> {
+        return db.getAllUris()
     }
 
     suspend fun getImageWithPointsById(imageId: String): Image {

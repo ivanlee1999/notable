@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -444,4 +445,103 @@ class CouchSyncEngineTest {
         assertEquals(CouchError.Unauthorized.detail, report.failures[pageId])
         assertEquals(1, ipad.pendingCount)
     }
+
+    // region Images
+
+    private val picture = "the bytes of a picture".toByteArray()
+    private val pictureId get() = CouchAssetId.forBytes(picture)
+
+    private fun pageWithPicture(updatedAt: Int, by: String) = page(updatedAt = updatedAt, by = by)
+        .copy(
+            images = listOf(
+                CouchImage(
+                    id = "i1", assetId = pictureId, x = 0, y = 0, width = 4, height = 4,
+                    createdAt = stamp(1), updatedAt = stamp(1),
+                )
+            )
+        )
+
+    private fun FakeLocalStore.placePicture(by: String) {
+        set(pageId, CouchDocBody.Page(pageWithPicture(updatedAt = 5, by = by)))
+        set(pictureId, CouchDocBody.Asset(CouchAsset.of(picture, at = stamp(1), updatedBy = by)))
+    }
+
+    /**
+     * Nobody queues an asset — the app only ever edits a page. The bytes are derived from the page
+     * being sent, and they go first, so the peer never reads a reference to nothing.
+     */
+    @Test
+    fun `an image's bytes are sent before the page that places them`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        ipad.markDirty(listOf(pageId))
+
+        val flush = ipad.flush()
+        assertEquals(listOf(pictureId, pageId), flush.pushed)
+
+        val puts = putPaths()
+        assertTrue(
+            "the bytes must land before the page",
+            puts.indexOfFirst { it.contains("asset:") } < puts.indexOfFirst { it.contains("page:") },
+        )
+    }
+
+    /**
+     * Content-addressed means an id can only ever hold one thing. A second device offering the
+     * same picture is told 409, and that is the upload succeeding.
+     */
+    @Test
+    fun `the same picture from two devices is not a conflict`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        booxStore.placePicture(by = "boox")
+        ipad.markDirty(listOf(pageId))
+        boox.markDirty(listOf(pageId))
+
+        ipad.flush()
+        val second = boox.flush()
+        assertTrue("a duplicate upload is not a failure: ${second.failures}", second.failures.isEmpty())
+        assertTrue(second.pushed.contains(pictureId))
+
+        // And a third attempt does not even reach the wire: the revision says it is already there.
+        server.forgetRequests()
+        boox.markDirty(listOf(pageId))
+        boox.flush()
+        assertFalse(server.requestLog.any { it.second.contains("asset:") })
+    }
+
+    /** The other half: a page arrives naming a picture, and the bytes have to follow. */
+    @Test
+    fun `pull fetches the bytes of a picture the page names`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        val pulled = boox.pull()
+        assertEquals(listOf(pictureId), pulled.fetchedAssets)
+        val held = (booxStore.body(pictureId) as? CouchDocBody.Asset)?.asset
+        assertArrayEquals(picture, held?.bytes)
+        assertEquals("application/octet-stream", held?.contentType)
+
+        // Nothing left owed, so the next pull does not go asking again.
+        server.forgetRequests()
+        boox.pull()
+        assertFalse(server.requestLog.any { it.second.endsWith("/blob") })
+    }
+
+    /** A download that fails is retried, not forgotten: the reference stays owed. */
+    @Test
+    fun `a picture that could not be fetched is tried again on the next pull`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        server.failingDocumentIds["$pictureId/${CouchAssetId.BLOB_NAME}"] = 503
+        assertEquals(emptyList<String>(), boox.pull().fetchedAssets)
+        assertNull(booxStore.body(pictureId))
+        assertEquals(listOf(pictureId), booxStore.missingAssetIds())
+
+        server.failingDocumentIds.clear()
+        assertEquals(listOf(pictureId), boox.pull().fetchedAssets)
+    }
+
+    // endregion
 }

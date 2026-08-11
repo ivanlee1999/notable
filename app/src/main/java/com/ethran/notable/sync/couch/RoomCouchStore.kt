@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.data.db.DeletedStroke
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Image
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.JsonObject
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.io.File
 import java.util.Base64
 import java.util.Date
 import java.util.UUID
@@ -50,6 +52,12 @@ class RoomCouchStore(
     private val deviceId: String,
     /** Called after any change the engine applied, so the UI can reload. Never called for reads. */
     private val onApplied: (() -> Unit)? = null,
+    /**
+     * Where placed images live. A function rather than a `File` because resolving it touches
+     * external storage, which a plain JVM test has none of — and this class is otherwise free of
+     * `android.*`.
+     */
+    private val imagesFolder: () -> File = ::ensureImagesFolder,
 ) : CouchLocalStore {
 
     private val log = ShipBook.getLogger("RoomCouchStore")
@@ -71,6 +79,7 @@ class RoomCouchStore(
             CouchDocType.NOTEBOOK -> loadNotebook(id)?.let { CouchDocBody.Notebook(it) }
             CouchDocType.PAGE -> loadPage(id)?.let { CouchDocBody.Page(it) }
             CouchDocType.FOLDER -> loadFolder(id)?.let { CouchDocBody.Folder(it) }
+            CouchDocType.ASSET -> loadAsset(documentId)?.let { CouchDocBody.Asset(it) }
             else -> null
         }
     }
@@ -88,6 +97,10 @@ class RoomCouchStore(
             }
 
             is CouchDocBody.Page -> applyPage(id, body.page)
+
+            // Where the bytes go was decided when the page that places them was applied: under
+            // the hash that names them, which is the path that page's rows already point at.
+            is CouchDocBody.Asset -> applyAsset(documentId, body.asset)
 
             is CouchDocBody.Folder -> {
                 applyFolder(id, body.folder)
@@ -146,6 +159,27 @@ class RoomCouchStore(
             )
         )
         onApplied?.invoke()
+    }
+
+    /**
+     * Protocol §3.4. An image is placed by the page document and carried by a separate `asset:`
+     * document, so between a page arriving and its blob being downloaded the reference is real and
+     * the picture is not there yet. This is what is still owed.
+     *
+     * Read from the image rows rather than from a side table: a row whose file is missing and
+     * whose name is a hash *is* the record of an outstanding download, and it survives a restart
+     * for free — that window can span one, since the page can arrive in one session and the bytes
+     * only be fetchable in the next.
+     */
+    override fun missingAssetIds(): List<String> = runBlocking {
+        val folder = runCatching { imagesFolder() }.getOrNull() ?: return@runBlocking emptyList()
+        appRepository.imageRepository.getAllUris()
+            .mapNotNull { uri -> CouchImageFiles.fileFor(uri) }
+            .filter { !it.exists() && CouchAssetId.isSha256Hex(it.name) }
+            .map { CouchDocId.asset(it.name) }
+            .distinct()
+            .sorted()
+            .also { if (it.isNotEmpty()) log.i("${it.size} image(s) still to download into $folder") }
     }
 
     // endregion
@@ -224,6 +258,30 @@ class RoomCouchStore(
         )
     }
 
+    /**
+     * The bytes behind an asset this device holds.
+     *
+     * A blob this device downloaded is named for its own hash, which is the whole lookup. The scan
+     * behind it is for an image that arrived by another route — the picker, or the WebDAV backend —
+     * and kept whatever name it came with; it is only reached when a page places such an image and
+     * its asset has never been pushed.
+     */
+    private fun loadAsset(documentId: String): CouchAsset? {
+        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return null
+        val folder = runCatching { imagesFolder() }.getOrNull() ?: return null
+        val byHash = File(folder, sha)
+        val file = if (byHash.exists()) {
+            byHash
+        } else {
+            folder.listFiles()?.firstOrNull { CouchAssetId.sha256Hex(it) == sha } ?: return null
+        }
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        // An asset carries no history of its own — it is bytes under the name of their hash. The
+        // timestamps describe this device's copy and never decide anything: nothing merges an
+        // asset, and nothing overwrites one.
+        return CouchAsset.of(bytes, at = iso(Date(file.lastModified())), updatedBy = deviceId)
+    }
+
     private suspend fun loadFolder(id: String): CouchFolder? {
         val folder = appRepository.folderRepository.get(id) ?: return null
         return CouchFolder(
@@ -263,7 +321,9 @@ class RoomCouchStore(
 
     private fun couchImage(image: Image): CouchImage = CouchImage(
         id = image.id,
-        assetId = image.uri,
+        // The wire names bytes, not a path: where this device keeps the file is its own business,
+        // and the peer's copy lives somewhere else entirely.
+        assetId = CouchImageFiles.assetIdFor(image.uri),
         x = image.x,
         y = image.y,
         width = image.width,
@@ -354,7 +414,14 @@ class RoomCouchStore(
             }
         )
 
-        val incomingImages = page.images.map { imageRow(it, id) }
+        // What this page already draws, indexed by content. An image arriving from the peer names
+        // bytes, not a filename, so if those bytes are already here — under whatever name they
+        // were imported with — the row points at the file that has them rather than at one nothing
+        // will ever write.
+        val held = existing?.images.orEmpty()
+            .mapNotNull { image -> CouchImageFiles.assetIdFor(image.uri)?.let { it to image.uri } }
+            .toMap()
+        val incomingImages = page.images.map { imageRow(it, id, held[it.assetId]) }
         val incomingImageIds = incomingImages.map { it.id }.toSet()
         val existingImageIds = existing?.images?.map { it.id }.orEmpty().toSet()
         appRepository.imageRepository.deleteAll((existingImageIds - incomingImageIds).toList())
@@ -411,17 +478,51 @@ class RoomCouchStore(
         null
     }
 
-    private fun imageRow(image: CouchImage, pageId: String): Image = Image(
+    /**
+     * The local file an incoming image should be drawn from. [heldAt] is where this device already
+     * keeps those exact bytes, if it does.
+     *
+     * A file already here keeps its name — that is the image the user picked, or one the WebDAV
+     * backend downloaded, and renaming it to its hash would orphan it for that backend. Anything
+     * else is filed under the hash, which is where the downloader will put the bytes.
+     */
+    private fun imageRow(image: CouchImage, pageId: String, heldAt: String?): Image = Image(
         id = image.id,
         x = image.x,
         y = image.y,
         width = image.width,
         height = image.height,
-        uri = image.assetId,
+        uri = localImageUri(image.assetId, heldAt),
         pageId = pageId,
         createdAt = date(image.createdAt),
         updatedAt = date(image.updatedAt),
     )
+
+    private fun localImageUri(assetId: String?, heldAt: String?): String? {
+        if (assetId == null || CouchAssetId.sha256HexOfAssetId(assetId) == null) {
+            // The peer named no asset — it has not hashed its copy, or the document predates
+            // assets travelling at all. That says nothing about the file this device holds, so
+            // whatever is here keeps its place rather than being forgotten.
+            return heldAt ?: assetId
+        }
+        if (heldAt != null) return heldAt
+        val folder = runCatching { imagesFolder() }.getOrNull()
+            // Storage is unreachable — but the hash alone still names the bytes, and a bare hash
+            // is a uri [CouchImageFiles.assetIdFor] can read back. Writing null instead would make
+            // the next push describe this image as having no content, which erases the peer's
+            // reference to a picture that is merely undownloaded here.
+            ?: return CouchAssetId.sha256HexOfAssetId(assetId)
+        return CouchImageFiles.localUriFor(assetId, folder)
+    }
+
+    /** Files the bytes of an asset a page referenced, under the name that page points at. */
+    private fun applyAsset(documentId: String, asset: CouchAsset) {
+        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return
+        val bytes = asset.bytes ?: return
+        val folder = runCatching { imagesFolder() }.getOrNull() ?: return
+        runCatching { File(folder, sha).writeBytes(bytes) }
+            .onFailure { log.e("Could not store image $sha: ${it.message}") }
+    }
 
     // endregion
 

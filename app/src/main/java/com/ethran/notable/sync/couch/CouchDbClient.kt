@@ -287,29 +287,30 @@ class CouchDbClient(
 
     // region Attachments
 
-    suspend fun putAttachment(
-        documentId: String,
-        name: String = "blob",
-        rev: String?,
-        contentType: String,
-        data: ByteArray,
-    ): String {
-        val response = send(
-            CouchRequest(
-                method = "PUT",
-                path = path("$documentId/$name"),
-                query = rev?.let { listOf(CouchQueryItem("rev", it)) } ?: emptyList(),
-                headers = mapOf("Content-Type" to contentType),
-                body = data,
-            )
-        )
-        return revFromWriteResponse(response, documentId, "attachment PUT $documentId")
-    }
+    /** An attachment's bytes plus the type the server served them with. */
+    class Attachment(val bytes: ByteArray, val contentType: String)
 
-    suspend fun getAttachment(documentId: String, name: String = "blob"): ByteArray? {
+    /**
+     * Assets are *written* by [put], which carries the blob inline in the document — see
+     * [CouchAsset]. Only the read needs its own request: the change feed reports an asset document
+     * as a stub, so the bytes are fetched when a page turns out to need them.
+     *
+     * Null when either the document or the attachment is absent — for a content-addressed asset
+     * that is a peer which has not uploaded the bytes yet, not an error.
+     */
+    suspend fun getAttachment(
+        documentId: String,
+        name: String = CouchAssetId.BLOB_NAME,
+    ): Attachment? {
         val response = send(CouchRequest(method = "GET", path = path("$documentId/$name")))
         return when (response.status) {
-            HTTP_OK -> response.body
+            HTTP_OK -> Attachment(
+                bytes = response.body,
+                contentType = response.headers.entries
+                    .firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }
+                    ?.value ?: CouchAssetId.contentTypeOf(response.body),
+            )
+
             HTTP_NOT_FOUND -> null
             else -> throw errorFor(response, path("$documentId/$name"))
         }
