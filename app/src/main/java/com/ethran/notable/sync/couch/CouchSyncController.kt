@@ -38,8 +38,17 @@ interface CouchSyncBackend {
     /** Queues a page document and the notebook that owns it. */
     suspend fun markPageDirty(pageId: String)
 
+    /** Queues one document by id — a notebook or folder changed without any page being drawn in. */
+    suspend fun markDocumentDirty(documentId: String)
+
     /** Queues every document this device holds — the first push against a fresh server. */
     suspend fun markEverythingDirty()
+
+    /**
+     * Queues everything this device holds that the server has never seen, and says how many that
+     * was. The catch-up for documents no edit ever queued — see [CouchSyncEngine.neverSent].
+     */
+    suspend fun markUnsentDirty(): Int
 
     /** Records a locally-initiated deletion so a tombstone is pushed, including offline. */
     suspend fun recordDeletion(documentId: String)
@@ -278,6 +287,7 @@ class CouchSyncController @Inject constructor(
             _state.update { it.copy(status = Status.Failed(describe(e))) }
             return@withLock
         }
+        logFlush(report)
         _state.update { current ->
             val pending = report.stillDirty.size
             when {
@@ -303,6 +313,33 @@ class CouchSyncController @Inject constructor(
         }
     }
 
+    /**
+     * What the push actually did. Only the first failure reaches the status caption, so the rest
+     * are written down here — otherwise a run where one document of forty failed is indistinguishable
+     * from one where thirty-nine did.
+     */
+    private fun logFlush(report: CouchSyncEngine.FlushReport) {
+        if (report.blockedByDeletionGuard) {
+            SyncLogger.w(
+                TAG,
+                "Push refused by the mass-deletion guard: ${report.stillDirty.size} deletions at once"
+            )
+            return
+        }
+        val summary = listOfNotNull(
+            report.pushed.size.takeIf { it > 0 }?.let { "$it sent" },
+            report.merged.size.takeIf { it > 0 }?.let { "$it merged with the server's copy" },
+            report.stillDirty.size.takeIf { it > 0 }?.let { "$it still waiting" },
+            report.failures.size.takeIf { it > 0 }?.let { "$it failed" },
+        )
+        SyncLogger.i(TAG, "Push: " + if (summary.isEmpty()) "nothing to send" else summary.joinToString(", "))
+        report.failures.forEach { (id, message) -> SyncLogger.w(TAG, "✗ $id: $message") }
+        if (report.pushed.isNotEmpty()) SyncLogger.d(TAG, "Sent: ${report.pushed.joinToString(", ")}")
+        if (report.stillDirty.isNotEmpty()) {
+            SyncLogger.d(TAG, "Still waiting: ${report.stillDirty.joinToString(", ")}")
+        }
+    }
+
     // endregion
 
     // region What the app calls
@@ -319,6 +356,28 @@ class CouchSyncController @Inject constructor(
             detached("notePageEdited") {
                 if (!backend.isEnabled()) return@detached
                 backend.markPageDirty(pageId)
+                noteEdited()
+            }
+        }
+    }
+
+    /**
+     * A notebook or folder document changed here — created, renamed, moved. Queues it and starts
+     * the debounce, the metadata twin of [notePageEdited].
+     *
+     * This exists because the outbox was fed by ink alone: [notePageEdited] queued the page and,
+     * as a side effect, its notebook. Anything that changed a notebook or folder *without* drawing
+     * in it — creating one, renaming one — enqueued nothing and was never sent. The scan in
+     * [markUnsentDirty] catches a document that has never been sent at all; this is what makes a
+     * change to one already on the server travel.
+     *
+     * Fire-and-forget, like its twin: no caller of a rename can wait on the network.
+     */
+    fun noteDocumentChanged(documentId: String) {
+        scope.launch {
+            detached("noteDocumentChanged") {
+                if (!backend.isEnabled()) return@detached
+                backend.markDocumentDirty(documentId)
                 noteEdited()
             }
         }
@@ -343,13 +402,29 @@ class CouchSyncController @Inject constructor(
      * long poll, so it returns rather than waiting for someone else to write something.
      */
     suspend fun syncNow() {
-        if (!backend.isEnabled()) return
+        SyncLogger.beginRun("CouchDB sync")
+        if (!backend.isEnabled()) {
+            // The button that gets here stays enabled on a misconfigured or unparseable URL, so
+            // this used to be a tap that produced nothing at all: no state change, no message, no
+            // log line. The host has already said which setting is at fault.
+            SyncLogger.w(TAG, "Nothing to sync: CouchDB is not usable with the current settings")
+            _state.update { it.copy(status = Status.Failed("Check your CouchDB settings")) }
+            return
+        }
         _state.update { it.copy(status = Status.Syncing) }
+        // Before pulling: queue anything created here that no edit ever queued. Without this a
+        // notebook made and left alone is never sent, however many times sync runs.
+        runCatching { backend.markUnsentDirty() }
+            .onFailure { SyncLogger.w(TAG, "Could not scan for unsent documents: ${it.message}") }
         try {
+            SyncLogger.i(TAG, "Pulling changes from the server…")
             apply(backend.pull(false))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // A read failure also skips the push below, so say so — otherwise the outbox appears
+            // to be stuck for a reason the log never mentions.
+            SyncLogger.e(TAG, "Pull failed, so nothing was sent either: ${describe(e)}")
             _state.update { it.copy(status = Status.Failed(describe(e))) }
             return
         }
@@ -361,7 +436,14 @@ class CouchSyncController @Inject constructor(
      * server, when nothing is dirty yet but nothing has been sent either.
      */
     suspend fun pushEverything() {
-        if (!backend.isEnabled()) return
+        SyncLogger.beginRun("CouchDB upload everything")
+        if (!backend.isEnabled()) {
+            // The caller shows "Queueing everything on this device…" before calling, so returning
+            // quietly here left a message that was simply untrue.
+            SyncLogger.w(TAG, "Nothing queued: CouchDB is not usable with the current settings")
+            _state.update { it.copy(status = Status.Failed("Check your CouchDB settings")) }
+            return
+        }
         backend.markEverythingDirty()
         pushNow()
     }
@@ -371,6 +453,7 @@ class CouchSyncController @Inject constructor(
     // region Plumbing
 
     private fun apply(report: CouchSyncEngine.PullReport) {
+        logPull(report)
         _state.update { current ->
             current.copy(
                 // A pull that returned at all clears any previous failure: the server is
@@ -382,6 +465,29 @@ class CouchSyncController @Inject constructor(
                     if (report.conflictCopies.isEmpty()) current.conflictCopies
                     else current.conflictCopies + report.conflictCopies,
             )
+        }
+    }
+
+    /**
+     * What the pull brought down. A conflict copy is called out at warning level because it is the
+     * one outcome that needs the user to do something — the caption only ever counts them.
+     */
+    private fun logPull(report: CouchSyncEngine.PullReport) {
+        val summary = listOfNotNull(
+            report.applied.size.takeIf { it > 0 }?.let { "$it received" },
+            report.fetchedAssets.size.takeIf { it > 0 }?.let { "$it image(s) downloaded" },
+            report.pushBack.size.takeIf { it > 0 }?.let { "$it queued to send back" },
+            report.skippedEchoes.size.takeIf { it > 0 }?.let { "$it of our own changes ignored" },
+        )
+        SyncLogger.i(
+            TAG,
+            "Pull: " + if (summary.isEmpty()) "nothing new" else summary.joinToString(", ")
+        )
+        report.conflictCopies.forEach {
+            SyncLogger.w(TAG, "⚠ Kept a conflict copy of $it; both versions are on the device")
+        }
+        if (report.applied.isNotEmpty()) {
+            SyncLogger.d(TAG, "Received: ${report.applied.joinToString(", ")}")
         }
     }
 
@@ -411,4 +517,8 @@ class CouchSyncController @Inject constructor(
     }
 
     // endregion
+
+    private companion object {
+        const val TAG = "CouchSync"
+    }
 }

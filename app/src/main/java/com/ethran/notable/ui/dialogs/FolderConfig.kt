@@ -73,7 +73,12 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                 if (current != null && current.title != name) {
                     folderTitle = name
                     folder = current.copy(title = name)
-                    scope.launch { folderRepository.update(current.copy(title = name)) }
+                    scope.launch {
+                        folderRepository.update(current.copy(title = name))
+                        // CouchDB learns about a change only when it is queued, and nothing else
+                        // here queues a rename — so without this the new name stayed on this device.
+                        couchSync.noteDocumentChanged(CouchDocId.folder(folderId))
+                    }
                 }
             },
             onDismiss = { isRenaming = false }

@@ -7,6 +7,8 @@ import com.ethran.notable.di.ApplicationScope
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.sync.COUCH_SYNC_STATE_KEY
 import com.ethran.notable.sync.DEFAULT_DEVICE_ID
+import com.ethran.notable.sync.SyncBackend
+import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
@@ -100,9 +102,33 @@ class CouchSyncHost @Inject constructor(
         engine.markDirty(ids)
     }
 
+    override suspend fun markDocumentDirty(documentId: String) {
+        val engine = stack()?.engine ?: return
+        SyncLogger.d(TAG, "Queued $documentId")
+        engine.markDirty(listOf(documentId))
+    }
+
     override suspend fun markEverythingDirty() {
         val current = stack() ?: return
-        current.engine.markDirty(current.store.allDocumentIds())
+        val ids = current.store.allDocumentIds()
+        SyncLogger.i(TAG, "Queueing all ${ids.size} document(s) on this device")
+        current.engine.markDirty(ids)
+    }
+
+    override suspend fun markUnsentDirty(): Int {
+        val current = stack() ?: return 0
+        val unsent = current.engine.neverSent(current.store.allDocumentIds())
+        if (unsent.isNotEmpty()) {
+            // Worth an INFO rather than a debug line: reaching here at all means something was
+            // created locally that no edit ever queued, which until now was simply lost.
+            SyncLogger.i(
+                TAG,
+                "Found ${unsent.size} document(s) the server has never seen; queueing them"
+            )
+            SyncLogger.d(TAG, "Never sent: ${unsent.joinToString(", ")}")
+            current.engine.markDirty(unsent)
+        }
+        return unsent.size
     }
 
     override suspend fun recordDeletion(documentId: String) {
@@ -122,6 +148,11 @@ class CouchSyncHost @Inject constructor(
     private suspend fun stack(): Stack? = mutex.withLock {
         val settings = kvProxy.getSyncSettings()
         if (!settings.couchActive) {
+            // The single most consequential gate in the engine, and it used to be completely
+            // silent: with no stack every edit, deletion and sync request below is a no-op, so a
+            // misconfigured CouchDB looks exactly like one that is working and has nothing to do.
+            if (stack != null) SyncLogger.i(TAG, "CouchDB no longer active; sync stack released")
+            else SyncLogger.d(TAG, couchInactiveReason(settings))
             stack = null
             return@withLock null
         }
@@ -138,7 +169,13 @@ class CouchSyncHost @Inject constructor(
                 client = http,
             )
         }.getOrElse {
-            // An unparseable URL is a typo in settings, not a reason to take the app down.
+            // An unparseable URL is a typo in settings, not a reason to take the app down. It goes
+            // to the in-app log as well as ShipBook: the Sync now button stays enabled on a bad
+            // URL, so without this the user taps it and absolutely nothing happens or is said.
+            SyncLogger.w(
+                TAG,
+                "CouchDB URL '${settings.couchUrl}' is not usable (${it.message}); nothing can sync"
+            )
             log.w("CouchDB URL '${settings.couchUrl}' is not usable: ${it.message}")
             stack = null
             return@withLock null
@@ -165,6 +202,11 @@ class CouchSyncHost @Inject constructor(
      * Everything the engine captures at construction. A change to any of it has to produce a new
      * engine, so it is spelled out here rather than inferred.
      */
+    /** Which half of `couchActive` is false, so the log names the switch rather than the symptom. */
+    private fun couchInactiveReason(settings: SyncSettings): String =
+        if (settings.backend != SyncBackend.COUCHDB) "CouchDB is not the selected backend; ignoring"
+        else "CouchDB is selected but needs a URL and database name; ignoring"
+
     private fun settingsKey(settings: SyncSettings): String = listOf(
         settings.couchUrl,
         settings.couchDatabase,
@@ -181,7 +223,16 @@ class CouchSyncHost @Inject constructor(
      */
     private suspend fun loadState(): CouchSyncState =
         runCatching { kvProxy.get(COUCH_SYNC_STATE_KEY, CouchSyncState.serializer()) }
-            .getOrNull() ?: CouchSyncState()
+            .getOrNull()
+            ?: CouchSyncState().also {
+                // Correct but expensive, and it looks identical to a hung sync from outside: every
+                // document re-pushes and the feed replays from the start.
+                SyncLogger.w(TAG, "No readable sync checkpoint; replaying the whole feed")
+            }
 
     // endregion
+
+    private companion object {
+        const val TAG = "CouchSync"
+    }
 }
