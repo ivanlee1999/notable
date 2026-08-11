@@ -46,6 +46,15 @@ class FakeCouchTransport : CouchTransport {
     /** Forces a status for documents whose id is listed, for failure injection. */
     val failingDocumentIds = mutableMapOf<String, Int>()
 
+    private val changeBatchSizes = mutableListOf<Int>()
+
+    /**
+     * The most rows any single `_changes` response carried. Request *count* cannot tell paging from
+     * its absence — an unpaged read is one big response followed by an empty one, which is two
+     * requests either way — but the size of the largest response can.
+     */
+    val largestChangeBatch: Int get() = synchronized(lock) { changeBatchSizes.maxOrNull() ?: 0 }
+
     private val log = mutableListOf<Pair<String, String>>()
     val requestLog: List<Pair<String, String>> get() = synchronized(lock) { log.toList() }
 
@@ -216,10 +225,17 @@ class FakeCouchTransport : CouchTransport {
 
     private fun changes(request: CouchRequest): CouchResponse {
         val since = request.query.firstOrNull { it.name == "since" }?.value?.toIntOrNull() ?: 0
+        val limit = request.query.firstOrNull { it.name == "limit" }?.value?.toIntOrNull()
+        val selected = docs.entries
+            .filter { it.value.seq > since }
+            .sortedBy { it.value.seq }
+            // `limit` is honoured, and `last_seq` is then the sequence of the last row actually
+            // returned — not the server's newest. A mock that ignored the limit and reported the
+            // end of the feed would let a client "page" by asking once and being handed
+            // everything, which is exactly what paging exists to avoid.
+            .let { if (limit != null) it.take(limit) else it }
         val rows: JsonArray = buildJsonArray {
-            docs.entries
-                .filter { it.value.seq > since }
-                .sortedBy { it.value.seq }
+            selected
                 .forEach { (id, doc) ->
                     add(
                         buildJsonObject {
@@ -237,10 +253,12 @@ class FakeCouchTransport : CouchTransport {
                     )
                 }
         }
+        val lastSeq = selected.lastOrNull()?.value?.seq ?: seqCounter
+        changeBatchSizes += rows.size
         val result = buildJsonObject {
             put("results", rows)
             // CouchDB 3 reports an opaque *string* here, not a number.
-            put("last_seq", JsonPrimitive(seqCounter.toString()))
+            put("last_seq", JsonPrimitive(lastSeq.toString()))
         }
         return CouchResponse(status = 200, body = encode(result))
     }
