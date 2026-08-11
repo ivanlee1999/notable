@@ -106,9 +106,55 @@ class CouchDbClient(
                 )
             }
 
-            HTTP_NOT_FOUND -> null
+            // A plain GET of a deleted document is a 404 (`{"error":"not_found","reason":"deleted"}`),
+            // not a 200 carrying `_deleted`. Telling "tombstoned" apart from "never existed" needs a
+            // second request — and it matters: a caller that reads a tombstone as absent re-creates
+            // the document, which silently undoes the peer's deletion.
+            HTTP_NOT_FOUND -> getDeleted(documentId)
             else -> throw errorFor(response, path(documentId))
         }
+    }
+
+    /**
+     * The winning leaf via `?open_revs=all`, which — unlike a plain GET — returns deleted
+     * revisions, body and all. A 404 here means the document genuinely never existed.
+     */
+    private suspend fun getDeleted(documentId: String): Stored? {
+        val response = send(
+            CouchRequest(
+                method = "GET",
+                path = path(documentId),
+                query = listOf(CouchQueryItem("open_revs", "all")),
+                // Without this CouchDB answers multipart/mixed, which nothing here can parse.
+                headers = mapOf("Accept" to "application/json"),
+            )
+        )
+        if (response.status == HTTP_NOT_FOUND) return null
+        if (response.status != HTTP_OK) throw errorFor(response, path(documentId))
+
+        // `[{"ok": {…}}, {"missing": "…"}]` — only the readable leaves carry `ok`.
+        //
+        // Anything else from a 200 is reported, never read as "absent": absent is what sends the
+        // pusher back round as a create, and a create over a tombstone is exactly the resurrection
+        // this method exists to prevent. A document the server would not describe has to stay dirty
+        // and be retried, not be overwritten on a guess.
+        val leaves = runCatching {
+            couchJson.parseToJsonElement(String(response.body, Charsets.UTF_8)).jsonArray
+        }.getOrNull() ?: throw CouchError.MalformedResponse(
+            "GET $documentId?open_revs=all did not return a list of revisions"
+        )
+        val document = leaves.firstNotNullOfOrNull { it.jsonObject["ok"]?.jsonObject }
+            ?: throw CouchError.MalformedResponse(
+                "GET $documentId?open_revs=all returned no readable revision"
+            )
+        val rev = document["_rev"]?.jsonPrimitive?.contentOrNullSafe
+            ?: throw CouchError.MalformedResponse("GET $documentId carried no _rev")
+        return Stored(
+            id = documentId,
+            rev = rev,
+            deleted = document["_deleted"]?.jsonPrimitive?.booleanOrNull ?: false,
+            json = document,
+        )
     }
 
     /** Typed fetch. Returns null for an absent document, exactly as [getRaw] does. */

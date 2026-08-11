@@ -139,18 +139,31 @@ tasks.withType(Test).configureEach {
             '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED',
     ]
 
-    // The CouchDB integration/interop suites skip themselves (org.junit.Assume) unless these are
-    // set. A forked test JVM does not reliably inherit Gradle's own environment, so forward them
-    // explicitly — spelling them out here keeps "which variables reach the tests" answerable from
-    // the build file rather than from whatever the shell happened to export.
+    // The CouchDB integration/interop/scenario suites skip themselves (org.junit.Assume) unless
+    // these are set. A forked test JVM does not reliably inherit Gradle's own environment, so
+    // forward them explicitly — spelling them out here keeps "which variables reach the tests"
+    // answerable from the build file rather than from whatever the shell happened to export.
+    //
+    // A project property (`-PNAME=value`) wins over the environment, and the scenario driver uses
+    // one for every step: `System.getenv` here reads the *daemon's* environment, which belongs to
+    // whichever build started it. A driver that changes a value per invocation and reaches a warm
+    // daemon otherwise gets the previous build's value — or none — and the tests quietly skip,
+    // which reads as a pass. Project properties are per-build and cannot go stale that way.
+    //
+    // Gradle does not treat a test JVM's environment as a task input, so a changed value does not
+    // make the task out of date on its own — the driver passes --rerun for that.
     ['NOTABLE_COUCH_URL',
      'NOTABLE_COUCH_USER',
      'NOTABLE_COUCH_PASSWORD',
      'NOTABLE_COUCH_DATABASE',
-     'COUCH_INTEROP_ID'].each { name ->
-        def value = System.getenv(name)
+     'COUCH_INTEROP_ID',
+     'COUCH_SCENARIO_FILE',
+     'COUCH_SCENARIO_STEP',
+     'COUCH_SCENARIO_STATE_DIR',
+     'COUCH_SCENARIO_RUN'].each { name ->
+        def value = project.findProperty(name) ?: System.getenv(name)
         if (value != null) {
-            environment name, value
+            environment name, value as String
         }
     }
 }

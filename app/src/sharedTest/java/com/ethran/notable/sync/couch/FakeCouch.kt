@@ -54,7 +54,9 @@ class FakeCouchTransport : CouchTransport {
         failingDocumentIds[tail]?.let { return CouchResponse(status = it) }
 
         return when (request.method) {
-            "GET" -> get(tail)
+            "GET" ->
+                if (request.query.any { it.name == "open_revs" }) openRevsAll(tail) else get(tail)
+
             "PUT" -> put(tail, request)
             else -> CouchResponse(status = 405)
         }
@@ -62,9 +64,36 @@ class FakeCouchTransport : CouchTransport {
 
     // region Verbs
 
+    /**
+     * A plain GET, which for a *deleted* document is a 404 — CouchDB does not hand back a
+     * tombstone's body here. Modelling that rather than smoothing it over is what catches a client
+     * that reads "deleted" as "never existed" and re-creates the document.
+     */
     private fun get(documentId: String): CouchResponse {
         val doc = docs[documentId] ?: return CouchResponse(status = 404)
+        if (doc.deleted) {
+            return CouchResponse(
+                status = 404,
+                body = """{"error":"not_found","reason":"deleted"}""".toByteArray(Charsets.UTF_8),
+            )
+        }
         return CouchResponse(status = 200, body = encode(materialize(documentId, doc)))
+    }
+
+    /**
+     * `?open_revs=all` with `Accept: application/json`: the leaf revisions, including deleted ones,
+     * wrapped one per element. This is the only way to read a tombstone's body back.
+     */
+    private fun openRevsAll(documentId: String): CouchResponse {
+        val doc = docs[documentId] ?: return CouchResponse(status = 404)
+        val leaves = buildJsonArray {
+            add(buildJsonObject { put("ok", materialize(documentId, doc)) })
+        }
+        return CouchResponse(
+            status = 200,
+            body = couchJson.encodeToString(JsonArray.serializer(), leaves)
+                .toByteArray(Charsets.UTF_8),
+        )
     }
 
     private fun put(documentId: String, request: CouchRequest): CouchResponse {
@@ -78,6 +107,10 @@ class FakeCouchTransport : CouchTransport {
 
         val existing = docs[documentId]
         if (existing != null) {
+            // Deleting what is already deleted is a 409 even when the revision is current — a
+            // client that answers a peer's tombstone by writing the same tombstone back therefore
+            // never converges, it just burns its retries.
+            if (existing.deleted && deleted) return conflict()
             // A stale revision is the whole point of the conflict path; a tombstone may be
             // overwritten without one, which is how a deleted document gets resurrected.
             if (!existing.deleted || providedRev != null) {
