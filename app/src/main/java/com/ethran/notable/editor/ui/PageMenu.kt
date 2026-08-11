@@ -28,6 +28,7 @@ import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.deletePage
 import com.ethran.notable.ui.dialogs.NamePromptDialog
 import com.ethran.notable.ui.noRippleClickable
+import com.ethran.notable.ui.rememberCouchSyncController
 import kotlinx.coroutines.launch
 
 
@@ -42,6 +43,7 @@ fun PageMenu(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val couchSync = rememberCouchSyncController()
 
     // The existing name is fetched before the prompt opens, not alongside it: the dialog captures
     // its initial value on first composition, so a title arriving a frame later would be missed.
@@ -64,6 +66,7 @@ fun PageMenu(
         )
         return
     }
+
 
     Popup(
         alignment = Alignment.TopStart,
@@ -147,7 +150,7 @@ fun PageMenu(
                         .padding(10.dp)
                         .noRippleClickable {
                             scope.launch {
-                                deletePage(appRepository, pageId, context.filesDir)
+                                deletePage(appRepository, pageId, context.filesDir, couchSync)
                             }
                         }) {
                     Text("Delete")

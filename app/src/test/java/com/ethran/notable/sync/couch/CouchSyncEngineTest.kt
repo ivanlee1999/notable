@@ -196,6 +196,42 @@ class CouchSyncEngineTest {
         assertEquals(listOf("s1"), booxStore.page(pageId)?.strokes?.map { it.id })
     }
 
+    /**
+     * The notebook-level twin of [erasure_on_one_device_sticks_on_the_other]. `mergeNotebook` is an
+     * add-wins union, so a manifest that merely stopped naming a page has the peer's copy appended
+     * straight back onto it — deleting a page on the BOOX was guaranteed to come back from the iPad
+     * until the removal was recorded as a tombstone (protocol §6.6).
+     */
+    @Test
+    fun page_deleted_on_one_device_stays_deleted_on_the_other() = runBlocking {
+        ipadStore.set(
+            notebookId,
+            CouchDocBody.Notebook(notebook("notes", listOf("p1", "p2"), 3, "ipad"))
+        )
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        boox.pull()
+        assertEquals(listOf("p1", "p2"), booxStore.notebook(notebookId)?.pageIds)
+
+        booxStore.deletePage(notebookId, "p2", deletedAt = stamp(20))
+        boox.markDirty(listOf(notebookId))
+        boox.flush()
+
+        ipad.pull()
+        assertEquals(listOf("p1"), ipadStore.notebook(notebookId)?.pageIds)
+        assertEquals(
+            "the deletion has to be remembered, not only applied",
+            listOf("p2"),
+            ipadStore.deletedPages(notebookId).map { it.id },
+        )
+
+        // The iPad listed p2 a moment ago; re-pushing must not put it back.
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        boox.pull()
+        assertEquals(listOf("p1"), booxStore.notebook(notebookId)?.pageIds)
+    }
+
     @Test
     fun deletion_propagates_but_an_edit_after_it_resurrects() = runBlocking {
         ipadStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "ipad")))

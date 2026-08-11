@@ -1081,6 +1081,10 @@ class PageDataManager @Inject constructor(
     }
 
     /**
+     * Erases images, leaving a tombstone behind for each one — the same bargain [removeStrokesFromDb]
+     * makes, for the same reason: a page's images merge as a union keyed by id, so an image that is
+     * merely absent here reads as one the peer has yet to send, and it comes back.
+     *
      * [pageId] is passed rather than read from [pageFromDb], for the same reason as
      * [removeStrokesFromDb]: the field names whatever page is currently open, while these ids
      * belong to the page the edit was made on.
@@ -1088,6 +1092,7 @@ class PageDataManager @Inject constructor(
     fun removeImagesFromDb(images: List<String>, pageId: String) {
         launchDbWrite("removeImages(${images.size})", listOf(pageId)) {
             appRepository.imageRepository.deleteAll(images)
+            appRepository.deletedImageRepository.record(pageId, images)
             bumpEditTimestamps(pageId)
         }
     }

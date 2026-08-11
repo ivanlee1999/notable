@@ -11,6 +11,8 @@ import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CryptoHelper
+import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Image
@@ -102,6 +104,8 @@ class RoomCouchStoreTest {
         notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao()),
         pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao()),
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
+        deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
+        deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
@@ -504,12 +508,130 @@ class RoomCouchStoreTest {
         runBlocking { pageDataManager.awaitPendingDbWrites() }
     }
 
+    /** The picture's version of the same bargain, and the same consequence for getting it wrong. */
+    @Test
+    fun anErasedImageLeavesATombstoneThePageCarries() {
+        val pageDataManager = PageDataManager(
+            appRepository = repository,
+            appEventBus = DefaultAppEventBus(),
+            backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
+            viewport = PageViewportState(),
+            couchSync = inertCouchSync(),
+        )
+
+        runBlocking {
+            repository.bookRepository.createEmpty(Notebook(id = "nb1", pageIds = listOf("p1")))
+            repository.pageRepository.create(Page(id = "p1", notebookId = "nb1"))
+            repository.imageRepository.create(listOf(imageRow("i1", "p1"), imageRow("i2", "p1")))
+        }
+
+        pageDataManager.removeImagesFromDb(listOf("i2"), "p1")
+
+        val tombstones = await { repository.deletedImageRepository.getByPage("p1") }
+        assertEquals(listOf("i2"), tombstones.map { it.imageId })
+
+        val loaded = store.load(CouchDocId.page("p1")) as? CouchDocBody.Page
+        assertNotNull(loaded)
+        assertEquals(listOf("i1"), loaded!!.page.images.map { it.id })
+        assertEquals(listOf("i2"), loaded.page.deletedImages.map { it.id })
+
+        runBlocking { pageDataManager.awaitPendingDbWrites() }
+    }
+
+    /**
+     * The notebook's version. `mergeNotebook` is an add-wins union over `pageIds`, so a manifest
+     * that merely stopped naming the page has the peer's copy appended straight back onto it.
+     */
+    @Test
+    fun aDeletedPageLeavesATombstoneTheNotebookCarries() {
+        runBlocking {
+            repository.bookRepository.createEmpty(
+                Notebook(id = "nb1", pageIds = listOf("p1", "p2"))
+            )
+            repository.pageRepository.create(Page(id = "p1", notebookId = "nb1"))
+            repository.pageRepository.create(Page(id = "p2", notebookId = "nb1"))
+            repository.bookRepository.removePage("nb1", "p2")
+            repository.deletedPageRepository.record("nb1", listOf("p2"), Date(1_770_000_007_000L))
+            repository.pageRepository.delete("p2")
+        }
+
+        val loaded = store.load(CouchDocId.notebook("nb1")) as? CouchDocBody.Notebook
+        assertNotNull(loaded)
+        assertEquals(listOf("p1"), loaded!!.notebook.pageIds)
+        assertEquals(listOf("p2"), loaded.notebook.deletedPageIds.map { it.id })
+        assertEquals(stamp(7), loaded.notebook.deletedPageIds.single().deletedAt)
+    }
+
+    /**
+     * Protocol §6.6. Re-stamping a tombstone on every save would let an arbitrarily later
+     * timestamp win a delete-vs-edit comparison the deletion should lose.
+     */
+    @Test
+    fun aTombstonedPageKeepsTheInstantItWasFirstRecordedAt() {
+        runBlocking {
+            repository.deletedPageRepository.record("nb1", listOf("p2"), Date(1_770_000_007_000L))
+            repository.deletedPageRepository.record("nb1", listOf("p2"), Date(1_770_000_099_000L))
+            assertEquals(
+                Date(1_770_000_007_000L),
+                repository.deletedPageRepository.getByNotebook("nb1").single().deletedAt,
+            )
+        }
+    }
+
+    /**
+     * A tombstone that arrived from a merge has to be stored, or the next load forgets the removal
+     * and offers the peer its own copy of the page back.
+     */
+    @Test
+    fun aMergedInPageTombstoneIsRememberedAndTakesTheRowWithIt() {
+        val id = CouchDocId.notebook("nb1")
+        runBlocking {
+            repository.bookRepository.createEmpty(
+                Notebook(id = "nb1", pageIds = listOf("p1", "p2"))
+            )
+            repository.pageRepository.create(Page(id = "p1", notebookId = "nb1"))
+            repository.pageRepository.create(Page(id = "p2", notebookId = "nb1"))
+        }
+
+        store.apply(
+            id,
+            CouchDocBody.Notebook(
+                CouchNotebook(
+                    title = "notes", pageIds = listOf("p1"),
+                    deletedPageIds = listOf(CouchTombstone(id = "p2", deletedAt = stamp(7))),
+                    createdAt = stamp(0), updatedAt = stamp(7), updatedBy = "ipad",
+                )
+            )
+        )
+
+        assertNull("the deleted page's row survived", runBlocking {
+            repository.pageRepository.getById("p2")
+        })
+        val loaded = store.load(id) as? CouchDocBody.Notebook
+        assertNotNull(loaded)
+        assertEquals(listOf("p2"), loaded!!.notebook.deletedPageIds.map { it.id })
+    }
+
     private fun strokeRow(id: String, pageId: String) = Stroke(
         id = id, size = 3f, pen = Pen.BALLPEN, maxPressure = 1,
         top = 0f, bottom = 1f, left = 0f, right = 1f,
         points = points(), pageId = pageId,
         createdAt = Date(1_770_000_000_000L), updatedAt = Date(1_770_000_000_000L),
     )
+
+    private fun imageRow(id: String, pageId: String) = Image(
+        id = id, x = 0, y = 0, width = 10, height = 10, uri = null, pageId = pageId,
+        createdAt = Date(1_770_000_000_000L), updatedAt = Date(1_770_000_000_000L),
+    )
+
+    private fun <T> await(read: suspend () -> List<T>): List<T> = generateSequence(0) { it + 1 }
+        .take(100)
+        .map {
+            Thread.sleep(50)
+            runBlocking { read() }
+        }
+        .firstOrNull { it.isNotEmpty() }
+        .orEmpty()
 
     private fun awaitTombstones(pageId: String) = generateSequence(0) { it + 1 }
         .take(100)
@@ -633,6 +755,69 @@ class RoomCouchStoreTest {
             val rows = runBlocking { ipadRepository.pageRepository.getWithDataById("p1") }
             assertEquals(listOf("s1"), rows!!.strokes.map { it.id })
             assertFalse(rows.strokes.any { it.id == "s2" })
+        } finally {
+            otherDb.close()
+        }
+    }
+
+    /**
+     * The whole point of the page tombstone, end to end: deleting a page on the BOOX has to stay
+     * deleted on the iPad, including after the iPad — which still listed it a moment ago — pushes
+     * its own copy of the notebook back.
+     */
+    @Test
+    fun aPageDeletionTravelsThroughTheEngineAndStaysDeletedOnThePeer() {
+        val server = FakeCouchTransport()
+        val client = CouchDbClient(server, database = "notes")
+
+        val otherDb = TestDatabaseFactory.createInMemory(context)
+        try {
+            val ipadRepository = repositoryFor(otherDb)
+            val ipadStore = RoomCouchStore(ipadRepository, otherDb.kvDao(), "ipad")
+            val boox = CouchSyncEngine(client, store, deviceId = "boox")
+            val ipad = CouchSyncEngine(client, ipadStore, deviceId = "ipad")
+
+            val notebookId = CouchDocId.notebook("nb1")
+            runBlocking {
+                repository.bookRepository.createEmpty(
+                    Notebook(id = "nb1", title = "notes", pageIds = listOf("p1", "p2"))
+                )
+                repository.pageRepository.create(Page(id = "p1", notebookId = "nb1"))
+                repository.pageRepository.create(Page(id = "p2", notebookId = "nb1"))
+                boox.markDirty(listOf(notebookId))
+                boox.flush()
+                ipad.pull()
+            }
+            assertEquals(
+                listOf("p1", "p2"),
+                (ipadStore.load(notebookId) as CouchDocBody.Notebook).notebook.pageIds,
+            )
+
+            // The BOOX deletes p2 and pushes the manifest the removal left behind.
+            runBlocking {
+                repository.bookRepository.removePage("nb1", "p2")
+                repository.deletedPageRepository.record("nb1", listOf("p2"))
+                repository.pageRepository.delete("p2")
+                boox.markDirty(listOf(notebookId))
+                boox.flush()
+                ipad.pull()
+            }
+
+            val afterDeletion = ipadStore.load(notebookId) as CouchDocBody.Notebook
+            assertEquals(listOf("p1"), afterDeletion.notebook.pageIds)
+            assertEquals(listOf("p2"), afterDeletion.notebook.deletedPageIds.map { it.id })
+            assertNull(runBlocking { ipadRepository.pageRepository.getById("p2") })
+
+            // And the iPad re-pushing what it holds must not put the page back.
+            runBlocking {
+                ipad.markDirty(listOf(notebookId))
+                ipad.flush()
+                boox.pull()
+            }
+            assertEquals(
+                listOf("p1"),
+                (store.load(notebookId) as CouchDocBody.Notebook).notebook.pageIds,
+            )
         } finally {
             otherDb.close()
         }

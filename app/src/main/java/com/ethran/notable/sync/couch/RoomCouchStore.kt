@@ -2,6 +2,8 @@ package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.ensureImagesFolder
+import com.ethran.notable.data.db.DeletedImage
+import com.ethran.notable.data.db.DeletedPage
 import com.ethran.notable.data.db.DeletedStroke
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Image
@@ -232,9 +234,8 @@ class RoomCouchStore(
         return CouchNotebook(
             title = notebook.title,
             pageIds = notebook.pageIds,
-            // Nothing records notebook-level page removals yet, so this device never asserts one.
-            // Union-merge means an empty list is inert: a peer's tombstones are kept as they are.
-            deletedPageIds = emptyList(),
+            deletedPageIds = appRepository.deletedPageRepository.getByNotebook(id)
+                .map { CouchTombstone(id = it.pageId, deletedAt = iso(it.deletedAt)) },
             parentFolderId = notebook.parentFolderId,
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
@@ -255,8 +256,8 @@ class RoomCouchStore(
             deletedStrokes = appRepository.deletedStrokeRepository.getByPage(id)
                 .map { CouchTombstone(id = it.strokeId, deletedAt = iso(it.deletedAt)) },
             images = data.images.map(::couchImage),
-            // No local record of erased images yet; see `deletedPageIds` above.
-            deletedImages = emptyList(),
+            deletedImages = appRepository.deletedImageRepository.getByPage(id)
+                .map { CouchTombstone(id = it.imageId, deletedAt = iso(it.deletedAt)) },
             createdAt = iso(data.page.createdAt),
             updatedAt = iso(data.page.updatedAt),
             updatedBy = deviceId,
@@ -362,6 +363,17 @@ class RoomCouchStore(
         // it receives.
         if (existing == null) appRepository.bookRepository.createEmpty(row)
         else appRepository.bookRepository.updateVerbatim(row)
+
+        // The tombstones themselves have to be stored, or the next `load` would forget the removal
+        // and the peer's copy of the manifest would append the page back on the following merge.
+        appRepository.deletedPageRepository.upsertAll(
+            notebook.deletedPageIds.map {
+                DeletedPage(pageId = it.id, notebookId = id, deletedAt = date(it.deletedAt))
+            }
+        )
+        // The merge already dropped these from `pageIds`; the rows themselves have to go too, or a
+        // page nothing points at keeps its strokes — and its previews — on disk forever.
+        notebook.deletedPageIds.forEach { appRepository.pageRepository.delete(it.id) }
     }
 
     private suspend fun applyPage(id: String, page: CouchPage, basedOn: CouchPage?) {
@@ -423,6 +435,7 @@ class RoomCouchStore(
             }
         )
 
+        val tombstonedImages = page.deletedImages.map { it.id }.toSet()
         // What this page already draws, indexed by content. An image arriving from the peer names
         // bytes, not a filename, so if those bytes are already here — under whatever name they
         // were imported with — the row points at the file that has them rather than at one nothing
@@ -437,10 +450,17 @@ class RoomCouchStore(
         // something the merge decided against.
         val mergedImages = basedOn?.images?.map { it.id }?.toSet() ?: existingImageIds
         appRepository.imageRepository.deleteAll(
-            ((mergedImages - incomingImageIds) intersect existingImageIds).toList()
+            (((mergedImages - incomingImageIds) + tombstonedImages) intersect existingImageIds)
+                .toList()
         )
         appRepository.imageRepository.create(incomingImages.filter { it.id !in existingImageIds })
         appRepository.imageRepository.update(incomingImages.filter { it.id in existingImageIds })
+
+        appRepository.deletedImageRepository.upsertAll(
+            page.deletedImages.map {
+                DeletedImage(imageId = it.id, pageId = id, deletedAt = date(it.deletedAt))
+            }
+        )
     }
 
     private suspend fun applyFolder(id: String, folder: CouchFolder) {
