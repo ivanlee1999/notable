@@ -207,6 +207,26 @@ class GestureClassifierTest {
         assertTrue(classify(flags = flags).isEmpty())
     }
 
+    @Test
+    fun `paged scroll reinstates the discrete event despite smooth scroll`() {
+        tracker.down(1, 100f, 100f, T0)
+        tracker.moveTo(1, 105f, 350f, T0 + 150)
+        tracker.up(1, 105f, 350f, T0 + 180)
+        val flags = GestureFlags(smoothScroll = true, continuousZoom = false, pagedScroll = true)
+        // The travel still rides along; the receiver reads only its sign to pick a
+        // direction, since a paged turn is one screen however far the finger went.
+        assertEquals(listOf(GestureEvent.VerticalScroll(250f)), classify(flags = flags))
+    }
+
+    @Test
+    fun `paged scroll still requires passing the swipe threshold`() {
+        tracker.down(1, 100f, 100f, T0)
+        tracker.moveTo(1, 100f, 140f, T0 + 150)
+        tracker.up(1, 100f, 140f, T0 + 180)
+        val flags = GestureFlags(smoothScroll = true, continuousZoom = false, pagedScroll = true)
+        assertTrue(classify(flags = flags).isEmpty())
+    }
+
     // --- Discrete zoom ------------------------------------------------------------
 
     @Test

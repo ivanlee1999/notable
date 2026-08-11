@@ -20,6 +20,12 @@ enum class GestureMode {
 data class GestureFlags(
     val smoothScroll: Boolean,
     val continuousZoom: Boolean,
+    /**
+     * Paged vertical navigation. Like `!smoothScroll` it resolves at the end of the
+     * gesture rather than streaming, since a turn is one discrete event however far the
+     * finger went — so it reaches the same classification branch.
+     */
+    val pagedScroll: Boolean = false,
 )
 
 /**
@@ -69,7 +75,7 @@ fun classifyGesture(
         }
     }
 
-    if (!flags.smoothScroll && fingers == 1) {
+    if ((!flags.smoothScroll || flags.pagedScroll) && fingers == 1) {
         val verticalDrag = tracker.verticalDrag(thresholds.swipeNoiseFloorPx)
         if (abs(verticalDrag) > thresholds.swipePx) {
             events += GestureEvent.VerticalScroll(verticalDrag)

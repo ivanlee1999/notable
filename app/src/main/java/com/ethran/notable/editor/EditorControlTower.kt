@@ -13,6 +13,7 @@ import com.ethran.notable.editor.state.Operation
 import com.ethran.notable.editor.state.PlacementMode
 import com.ethran.notable.editor.state.SelectionState
 import com.ethran.notable.editor.utils.offsetStroke
+import com.ethran.notable.editor.utils.pagedScrollDelta
 import com.ethran.notable.editor.utils.refreshScreen
 import com.ethran.notable.editor.utils.selectImagesAndStrokes
 import com.ethran.notable.gestures.GestureActions
@@ -85,6 +86,19 @@ class EditorControlTower(
         if (delta == Offset.Zero) return
         if (!page.isTransformationAllowed) return
         pendingScroll.update { it + delta }
+    }
+
+    /**
+     * One screen of travel, routed through the same accumulator as a drag so the bitmap
+     * shift and refresh behave identically — only the distance is decided here rather than
+     * by the finger.
+     */
+    override fun requestPageStep(direction: Int) {
+        if (!page.isTransformationAllowed) return
+        val delta = pagedScrollDelta(page.viewHeight, direction)
+        if (delta == 0f) return
+        logEditorControlTower.i("Paged step, direction: $direction")
+        pendingScroll.update { it + Offset(0f, delta) }
     }
 
     /**

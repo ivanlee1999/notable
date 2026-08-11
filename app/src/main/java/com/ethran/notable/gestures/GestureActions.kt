@@ -11,6 +11,14 @@ import androidx.compose.ui.geometry.Offset
  */
 interface GestureActions {
     fun requestScroll(delta: Offset)
+
+    /**
+     * Move the canvas by exactly one screen: [direction] +1 for the next screen, -1 for the
+     * previous one. Distinct from [requestScroll] because the step is a property of the
+     * viewport, which the gesture layer does not know, and because how far the finger
+     * travelled is deliberately not part of the answer.
+     */
+    fun requestPageStep(direction: Int)
     fun onPinchToZoom(delta: Float, center: Offset?)
     fun goToNextPage()
     fun goToPreviousPage()
