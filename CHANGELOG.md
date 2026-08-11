@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.7.0
+
+### Sync says what it is doing
+
+- **The activity log survives closing the app.** Scheduled syncs run in the background, often
+  while notable is closed, so by the time you opened Settings to ask why nothing had happened the
+  record was already gone. The log is now kept on disk and is there when you come back to it.
+  Lines from before the last launch are shown dimmed, so it is clear which run you are reading.
+- **A sync that does nothing now says why.** Turned off, waiting for WiFi, missing a password,
+  no network, or already running — every one of these used to be a silent no-op. Each names the
+  setting to change, and each run is separated in the log with the time it started.
+- **Every run ends with what it did** — how many notebooks were uploaded, downloaded, merged,
+  left unchanged, or held back by upload-only or download-only mode.
+- **Warnings and errors stand out** rather than reading as ordinary lines, and Copy Log now hands
+  over the whole kept history, including runs from before the last launch.
+
+### Syncing one notebook
+
+- **Long-press a notebook and choose Sync now.** Until now the only ways to get a notebook to the
+  server were the scheduled run, the whole-library sync buried in settings, or closing the note
+  with sync-on-close turned on — none of them reachable from the notebook you were looking at and
+  wondering about.
+- **A sync you asked for is no longer dropped** when another one happens to be running. It waits
+  its turn instead of quietly doing nothing while reporting success.
+
+### Also
+
+- **Progress shows the page it is on.** A notebook with hundreds of pages used to hold a single
+  line steady for minutes, which was hard to tell apart from a freeze.
+- **Detailed logging**, off by default, under Settings → Sync → Activity Log. It records the
+  decision made for each notebook and each page transferred. Worth turning on while you are
+  chasing a specific problem, and worth turning off afterwards — it fills the log quickly.
+
+### Upgrading
+
+No database change: the schema stays at 39. Nothing about how your notes sync has changed, only
+how much of it is written down and where you can ask for it.
+
+One thing this release makes easier to notice rather than fixes: **quick pages are not synced**,
+and never have been on either backend. They live outside any notebook, and sync works in units of
+notebooks. If a page you expected on your other device is one of the loose pages on the home
+screen, that is why — and there is no way to move it into a notebook today either. Keep anything
+you want on both devices in a notebook. Closing this gap is the next thing to look at.
+
 ## 0.6.0
 
 ### Pictures sync
