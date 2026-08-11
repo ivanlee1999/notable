@@ -216,11 +216,19 @@ object CouchMerge {
         b.updatedAt, b.updatedBy, pageScalarKey(b),
     )
 
+    /**
+     * Every scalar the merge *picks* has to appear here, or the tiebreak stops distinguishing two
+     * documents that genuinely differ: `wins` ends in `aScalarKey >= bScalarKey`, so an equal key
+     * makes both argument orders return true and `merge(a, b)` and `merge(b, a)` disagree on the
+     * uncovered field. `title` is picked from the winner, so it is keyed — same as the notebook and
+     * folder keys, which have always included theirs.
+     */
     private fun pageScalarKey(page: CouchPage): String = scalarKey(
         listOf(
             "type" to page.type, "schema" to page.schema.toString(),
             "createdAt" to page.createdAt, "updatedAt" to page.updatedAt,
             "updatedBy" to page.updatedBy, "notebookId" to page.notebookId,
+            "title" to page.title,
             "background" to page.background, "backgroundType" to page.backgroundType,
         )
     )

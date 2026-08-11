@@ -202,6 +202,24 @@ class MergeTest {
         assertNull(CouchMerge.mergePage(cleared, renamed).title)
     }
 
+    /**
+     * The tiebreak ends in `aScalarKey >= bScalarKey`, so any scalar the merge picks but the key
+     * omits makes both argument orders "win" and the result depend on which document was passed
+     * first. Two pages identical except for their name, written in the same millisecond by the same
+     * device, are the case that catches it.
+     */
+    @Test
+    fun pages_differing_only_by_title_still_merge_commutatively() {
+        val one = CouchPage(
+            notebookId = "nb", title = "Groceries",
+            createdAt = "2026-08-10T06:00:00Z", updatedAt = "2026-08-10T06:00:00Z",
+            updatedBy = "boox",
+        )
+        val other = one.copy(title = "Shopping list")
+
+        assertEquals(CouchMerge.mergePage(one, other), CouchMerge.mergePage(other, one))
+    }
+
     @Test
     fun timestamps_are_compared_chronologically_not_lexicographically() {
         // "…33.871Z" sorts before "…33Z" as a string while being later in time.
