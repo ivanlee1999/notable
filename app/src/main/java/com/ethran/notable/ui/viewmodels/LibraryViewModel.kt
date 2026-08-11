@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -46,7 +47,9 @@ data class LibraryUiState(
     val folders: List<Folder> = emptyList(),
     val books: List<Notebook> = emptyList(),
     val singlePages: List<Page> = emptyList(),
-    val syncBadges: Map<String, SyncBadge> = emptyMap()
+    val syncBadges: Map<String, SyncBadge> = emptyMap(),
+    /** Notebooks directly inside each folder, keyed by folder id — the count on its row. */
+    val folderBookCounts: Map<String, Int> = emptyMap()
 )
 
 // Private data class for clean Flow combining
@@ -54,7 +57,8 @@ private data class LibraryDatabaseState(
     val folders: List<Folder> = emptyList(),
     val books: List<Notebook> = emptyList(),
     val singlePages: List<Page> = emptyList(),
-    val syncBadges: Map<String, SyncBadge> = emptyMap()
+    val syncBadges: Map<String, SyncBadge> = emptyMap(),
+    val folderBookCounts: Map<String, Int> = emptyMap()
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -91,11 +95,17 @@ class LibraryViewModel @Inject constructor(
     private val _singlePagesFlow =
         _folderId.flatMapLatest { id -> pageRepository.getSinglePagesInFolder(id).asFlow() }
 
+    // Counted across the whole table rather than per visible folder: one flow covers every
+    // folder row on screen, instead of one query each.
+    private val _folderBookCountsFlow = bookRepository.getAllFlow().map { books ->
+        books.mapNotNull { it.parentFolderId }.groupingBy { it }.eachCount()
+    }
+
     // 2. Group the database flows (plus per-notebook sync badges) semantically
     private val _dbDataFlow = combine(
-        _foldersFlow, _booksFlow, _singlePagesFlow, syncStatusStore.badges
-    ) { folders, books, pages, badges ->
-        LibraryDatabaseState(folders, books, pages, badges)
+        _foldersFlow, _booksFlow, _singlePagesFlow, syncStatusStore.badges, _folderBookCountsFlow
+    ) { folders, books, pages, badges, folderCounts ->
+        LibraryDatabaseState(folders, books, pages, badges, folderCounts)
     }
 
     // 3. Expose the final UI State
@@ -110,7 +120,8 @@ class LibraryViewModel @Inject constructor(
             folders = dbData.folders,
             books = dbData.books,
             singlePages = dbData.singlePages,
-            syncBadges = dbData.syncBadges
+            syncBadges = dbData.syncBadges,
+            folderBookCounts = dbData.folderBookCounts
         )
     }.stateIn(
         scope = viewModelScope,

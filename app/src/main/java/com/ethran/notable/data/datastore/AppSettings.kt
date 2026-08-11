@@ -12,6 +12,12 @@ const val A4_WIDTH = 595
 const val A4_HEIGHT = 842
 const val BUTTON_SIZE = 37
 
+/**
+ * The docked rail measured across its short edge — one button plus the rule that closes it.
+ * Height when the rail is horizontal, width when it is vertical.
+ */
+const val TOOLBAR_THICKNESS = BUTTON_SIZE + 3
+
 
 object GlobalAppSettings {
     private val _current = mutableStateOf(AppSettings(version = 1))
@@ -85,7 +91,17 @@ data class AppSettings(
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
     }
 
+    /**
+     * Which edge the tool rail is docked to. Left/Right turn it into a vertical rail —
+     * the tablet arrangement, where the rail sits within thumb reach of the bezel and the
+     * writing area keeps its full height.
+     *
+     * The rail is always docked. It never floats and never moves under a drag: a moving
+     * overlay costs a full-screen e-ink refresh.
+     */
     enum class Position {
-        Top, Bottom, // Left,Right,
+        Top, Bottom, Left, Right;
+
+        val isVertical: Boolean get() = this == Left || this == Right
     }
 }

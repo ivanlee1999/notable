@@ -22,12 +22,14 @@ fun GeneralSettings(
             ), value = settings.defaultNativeTemplate, onValueChange = {
                 onSettingsChange(settings.copy(defaultNativeTemplate = it))
             })
+        // Left/Right dock the rail vertically — the tablet arrangement, where it stays within
+        // thumb reach of the bezel and the page keeps its full height.
         SelectorRow(
             label = stringResource(R.string.toolbar_position), options = listOf(
                 AppSettings.Position.Top to stringResource(R.string.toolbar_position_top),
-                AppSettings.Position.Bottom to stringResource(
-                    R.string.toolbar_position_bottom
-                )
+                AppSettings.Position.Bottom to stringResource(R.string.toolbar_position_bottom),
+                AppSettings.Position.Left to stringResource(R.string.toolbar_position_left),
+                AppSettings.Position.Right to stringResource(R.string.toolbar_position_right),
             ), value = settings.toolbarPosition, onValueChange = { newPosition ->
                 onSettingsChange(settings.copy(toolbarPosition = newPosition))
             })

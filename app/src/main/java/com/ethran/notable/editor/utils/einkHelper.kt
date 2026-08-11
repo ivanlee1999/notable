@@ -136,7 +136,13 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
 }
 
 
-fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarHeight: Int) {
+/**
+ * Arms raw drawing over everything but the docked tool rail.
+ *
+ * [toolbarThickness] is the rail's height when it is docked top/bottom and its width when
+ * docked left/right; pass 0 while the rail is collapsed.
+ */
+fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarThickness: Int) {
     if (touchHelper == null) return
     // Takes at least 50ms on Note 4c,
     // and I don't think that we need it immediately
@@ -149,19 +155,20 @@ fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarHeight: Int) {
     val viewWidth = view.width
     val viewHeight = view.height
 
-    // Determine the exclusion area based on toolbar position
-    val excludeRect: Rect =
-        if (GlobalAppSettings.current.toolbarPosition == AppSettings.Position.Top) {
-            Rect(0, 0, viewWidth, toolbarHeight)
-        } else {
-            Rect(0, viewHeight - toolbarHeight, viewWidth, viewHeight)
-        }
+    // The band the rail occupies, and everything else — the pen may draw on the latter only.
+    val (excludeRect, limitRect) = when (GlobalAppSettings.current.toolbarPosition) {
+        AppSettings.Position.Top -> Rect(0, 0, viewWidth, toolbarThickness) to
+                Rect(0, toolbarThickness, viewWidth, viewHeight)
 
-    val limitRect =
-        if (GlobalAppSettings.current.toolbarPosition == AppSettings.Position.Top)
-            Rect(0, toolbarHeight, viewWidth, viewHeight)
-        else
-            Rect(0, 0, viewWidth, viewHeight - toolbarHeight)
+        AppSettings.Position.Bottom -> Rect(0, viewHeight - toolbarThickness, viewWidth, viewHeight) to
+                Rect(0, 0, viewWidth, viewHeight - toolbarThickness)
+
+        AppSettings.Position.Left -> Rect(0, 0, toolbarThickness, viewHeight) to
+                Rect(toolbarThickness, 0, viewWidth, viewHeight)
+
+        AppSettings.Position.Right -> Rect(viewWidth - toolbarThickness, 0, viewWidth, viewHeight) to
+                Rect(0, 0, viewWidth - toolbarThickness, viewHeight)
+    }
 
     touchHelper.setLimitRect(mutableListOf(limitRect)).setExcludeRect(listOf(excludeRect))
         .openRawDrawing()
