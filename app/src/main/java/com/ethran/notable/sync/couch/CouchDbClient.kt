@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.net.UnknownServiceException
 
 /**
  * Typed failures from the CouchDB API. The distinctions matter: a 409 is the input to the merge
@@ -35,6 +36,14 @@ sealed class CouchError(val detail: String) : Exception(detail) {
 
     /** Offline, DNS failure, timeout: keep the work queued and back off. */
     class Transport(val reason: String) : CouchError("transport($reason)")
+
+    /**
+     * The platform refused to make the call at all — a cleartext URL under a policy that forbids
+     * one, most often. Distinct from [Transport] because no packet was ever sent: the connection is
+     * not down, the address is unusable, and retrying it every few minutes forever only buries the
+     * one message that would tell the user to change the URL.
+     */
+    class Blocked(val reason: String) : CouchError("blocked($reason)")
 
     class MalformedResponse(val reason: String) : CouchError("malformedResponse($reason)")
 
@@ -353,6 +362,11 @@ class CouchDbClient(
             transport.send(request)
         } catch (e: CouchError) {
             throw e
+        } catch (e: UnknownServiceException) {
+            // Android's network security policy rejects a forbidden URL here, before the socket is
+            // opened, and it throws an IOException like any other failure — so without this branch
+            // a permanently unusable address is reported as a passing outage.
+            throw CouchError.Blocked(e.message ?: e.toString())
         } catch (e: Exception) {
             // OkHttp surfaces "offline", DNS failures and timeouts as thrown IOExceptions rather
             // than statuses. They are all "try again later", never "the document is gone".

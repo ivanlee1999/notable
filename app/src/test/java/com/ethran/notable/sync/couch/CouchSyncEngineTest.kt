@@ -14,6 +14,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.UnknownServiceException
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -897,4 +898,35 @@ class CouchSyncEngineTest {
             assertEquals("the outbox must drain", 0, boox.pendingCount)
             assertTrue(server.isDeleted(notebookId))
         }
+
+    /**
+     * A cleartext URL under Android's network security policy fails here — thrown by the platform
+     * before a socket is opened, as an IOException like any other. Reported as [CouchError.Transport]
+     * it becomes "you are offline", which is both wrong and unactionable: the retry loop then hides
+     * the misconfiguration behind a message promising it will heal itself.
+     */
+    @Test
+    fun a_policy_rejection_is_blocked_rather_than_offline() = runBlocking {
+        val refused = object : CouchTransport {
+            override fun send(request: CouchRequest): CouchResponse =
+                throw UnknownServiceException(
+                    "CLEARTEXT communication to 192.168.0.100 not permitted by network security policy"
+                )
+        }
+        val engine = CouchSyncEngine(
+            CouchDbClient(refused, database = "notes"), ipadStore, deviceId = "ipad",
+        )
+        ipadStore.set(pageId, CouchDocBody.Page(page(updatedAt = 5, by = "ipad")))
+        engine.markDirty(listOf(pageId))
+
+        val failure = engine.flush().failures[pageId]
+        assertTrue("expected a blocked() failure, got $failure", failure!!.startsWith("blocked("))
+        assertTrue("the reason should name the policy", failure.contains("CLEARTEXT"))
+        assertFalse(
+            "retrying cannot lift a policy rejection",
+            CouchError.Blocked("cleartext").isRetriable,
+        )
+        // The work must survive: the user fixes the URL and the page still pushes.
+        assertEquals(1, engine.pendingCount)
+    }
 }
