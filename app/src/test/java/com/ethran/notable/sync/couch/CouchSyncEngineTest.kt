@@ -240,6 +240,54 @@ class CouchSyncEngineTest {
         assertFalse("the newer edit should have resurrected it", server.isDeleted(otherId))
     }
 
+    /**
+     * The other half of delete-vs-edit, and the one that used to lose the deletion.
+     *
+     * A plain `GET` of a deleted document is a 404 — CouchDB does not hand the tombstone back there
+     * — so a pusher that read 404 as "never existed" retried as a create, and a PUT with no revision
+     * over a tombstone *succeeds*: the peer's deletion silently came back as a live notebook. Then,
+     * once the tombstone is read correctly, the merge resolves to it, and writing that tombstone
+     * back is itself a 409 — so the id has to leave the outbox without a write.
+     */
+    @Test
+    fun peers_deletion_survives_an_older_local_edit_waiting_to_be_pushed() = runBlocking {
+        ipadStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", emptyList(), 1, "ipad")))
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        boox.pull()
+
+        // The iPad renames it offline...
+        val renamed = ipadStore.notebook(notebookId)!!
+        ipadStore.set(
+            notebookId,
+            CouchDocBody.Notebook(renamed.copy(title = "renamed on the iPad", updatedAt = stamp(10))),
+        )
+        ipad.markDirty(listOf(notebookId))
+
+        // ...while the BOOX deletes it, later, and gets there first.
+        booxStore.set(
+            notebookId,
+            CouchDocBody.Deleted(
+                CouchDeletedDoc(
+                    type = CouchDocType.NOTEBOOK, deletedAt = stamp(20), updatedBy = "boox",
+                )
+            ),
+        )
+        boox.markDirty(listOf(notebookId))
+        boox.flush()
+
+        val flush = ipad.flush()
+
+        assertTrue("the push should settle, not exhaust its retries", flush.failures.isEmpty())
+        assertTrue("the document must leave the outbox", flush.stillDirty.isEmpty())
+        assertEquals(0, ipad.pendingCount)
+        assertTrue(
+            "the iPad should have accepted the deletion rather than re-created the notebook",
+            ipadStore.body(notebookId)?.isDeleted ?: false,
+        )
+        assertTrue("the deletion must still stand on the server", server.isDeleted(notebookId))
+    }
+
     @Test
     fun offline_edits_queue_and_drain_on_reconnect() = runBlocking {
         server.isOffline = true
