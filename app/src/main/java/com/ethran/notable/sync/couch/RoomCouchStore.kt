@@ -84,7 +84,11 @@ class RoomCouchStore(
         }
     }
 
-    override fun apply(documentId: String, body: CouchDocBody) = runBlocking<Unit> {
+    override fun apply(
+        documentId: String,
+        body: CouchDocBody,
+        basedOn: CouchDocBody?,
+    ) = runBlocking<Unit> {
         val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking
 
         when (body) {
@@ -96,7 +100,8 @@ class RoomCouchStore(
                 appRepository.couchDeletionRepository.clear(documentId)
             }
 
-            is CouchDocBody.Page -> applyPage(id, body.page)
+            is CouchDocBody.Page ->
+                applyPage(id, body.page, basedOn = (basedOn as? CouchDocBody.Page)?.page)
 
             // Where the bytes go was decided when the page that places them was applied: under
             // the hash that names them, which is the path that page's rows already point at.
@@ -359,7 +364,7 @@ class RoomCouchStore(
         else appRepository.bookRepository.updateVerbatim(row)
     }
 
-    private suspend fun applyPage(id: String, page: CouchPage) {
+    private suspend fun applyPage(id: String, page: CouchPage, basedOn: CouchPage?) {
         val existing = appRepository.pageRepository.getWithDataById(id)
         val notebookId = page.notebookId ?: existing?.page?.notebookId
         // Room enforces the page -> notebook foreign key, so a page that arrives before its
@@ -398,10 +403,14 @@ class RoomCouchStore(
         val incomingIds = incoming.map { it.id }.toSet()
         val existingIds = existing?.strokes?.map { it.id }.orEmpty().toSet()
 
-        // Anything the merged document no longer carries is gone here too — including the strokes
-        // it explicitly tombstoned, which is the erasure actually taking effect on this device.
+        // What the merge was actually looking at. Computing it took a network round trip, and the
+        // editor kept drawing throughout — so a stroke can be on disk now that the merge never saw.
+        // Deleting on "present locally but absent from the result" would take those with it, with
+        // no tombstone recorded and nothing left to push: ink drawn during a sync would simply
+        // disappear. Only ids the merge saw and dropped are eligible.
+        val merged = basedOn?.strokes?.map { it.id }?.toSet() ?: existingIds
         appRepository.strokeRepository.deleteAll(
-            ((existingIds - incomingIds) + (existingIds intersect tombstoned)).toList()
+            (((merged - incomingIds) + tombstoned) intersect existingIds).toList()
         )
         appRepository.strokeRepository.create(incoming.filter { it.id !in existingIds })
         appRepository.strokeRepository.update(incoming.filter { it.id in existingIds })
@@ -424,7 +433,12 @@ class RoomCouchStore(
         val incomingImages = page.images.map { imageRow(it, id, held[it.assetId]) }
         val incomingImageIds = incomingImages.map { it.id }.toSet()
         val existingImageIds = existing?.images?.map { it.id }.orEmpty().toSet()
-        appRepository.imageRepository.deleteAll((existingImageIds - incomingImageIds).toList())
+        // Same rule as the strokes above: an image placed while the merge was in flight is not
+        // something the merge decided against.
+        val mergedImages = basedOn?.images?.map { it.id }?.toSet() ?: existingImageIds
+        appRepository.imageRepository.deleteAll(
+            ((mergedImages - incomingImageIds) intersect existingImageIds).toList()
+        )
         appRepository.imageRepository.create(incomingImages.filter { it.id !in existingImageIds })
         appRepository.imageRepository.update(incomingImages.filter { it.id in existingImageIds })
     }

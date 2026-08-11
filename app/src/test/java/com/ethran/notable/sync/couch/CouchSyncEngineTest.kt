@@ -544,4 +544,74 @@ class CouchSyncEngineTest {
     }
 
     // endregion
+    /**
+     * Computing a merge takes a network round trip, and the pen does not stop for it. A stroke
+     * committed while a push was in flight used to be read as "present locally but absent from the
+     * merge result" and hard-deleted — no tombstone written, nothing left dirty, so the ink was
+     * gone from the device *and* never pushed. The merge may only drop what the merge itself saw.
+     */
+    @Test
+    fun ink_drawn_while_a_push_is_in_flight_survives_the_merge() = runBlocking {
+        ipadStore.set(pageId, CouchDocBody.Page(page(listOf(stroke("s0", 0, "ipad")), updatedAt = 1, by = "ipad")))
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+        boox.pull()
+
+        // The BOOX writes first, so the iPad's next push takes a 409 and has to merge.
+        val booxPage = booxStore.page(pageId)!!
+        booxStore.set(
+            pageId,
+            CouchDocBody.Page(
+                booxPage.copy(
+                    strokes = booxPage.strokes + stroke("s-boox", 11, "boox"),
+                    updatedAt = stamp(11), updatedBy = "boox",
+                )
+            )
+        )
+        boox.markDirty(listOf(pageId))
+        boox.flush()
+
+        // The user draws on the iPad, and goes on drawing *during* the merge round trip: the store
+        // hands the engine its snapshot, then a further stroke lands before `apply` is called.
+        val drawing = ipadStore.page(pageId)!!
+        ipadStore.set(
+            pageId,
+            CouchDocBody.Page(
+                drawing.copy(
+                    strokes = drawing.strokes + stroke("s-ipad", 10, "ipad"),
+                    updatedAt = stamp(10), updatedBy = "ipad",
+                )
+            )
+        )
+        ipad.markDirty(listOf(pageId))
+        // A flush reads the page more than once — once to scan it for assets while ordering the
+        // queue, then again in `push` itself. It is that second read the merge is built from, so
+        // that is the one the stroke has to land just after; interrupting the first would simply
+        // put it in the snapshot and prove nothing.
+        var loads = 0
+        ipadStore.onLoad = {
+            loads += 1
+            if (loads == 2) {
+                val mid = ipadStore.page(pageId)!!
+                ipadStore.set(
+                    pageId,
+                    CouchDocBody.Page(
+                        mid.copy(
+                            strokes = mid.strokes + stroke("s-midflight", 12, "ipad"),
+                            updatedAt = stamp(12), updatedBy = "ipad",
+                        )
+                    )
+                )
+                ipadStore.onLoad = null
+            }
+        }
+
+        ipad.flush()
+
+        assertTrue(
+            "the stroke drawn during the merge must not be deleted",
+            ipadStore.page(pageId)!!.strokes.map { it.id }.contains("s-midflight"),
+        )
+    }
+
 }
