@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.io.ThumbnailBackfillQueue
+import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.ui.components.getFolderList
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -35,6 +36,7 @@ data class PagesUiState(
 class PagesViewModel @Inject constructor(
     private val appRepository: AppRepository,
     private val thumbnailBackfillQueue: ThumbnailBackfillQueue,
+    private val couchSync: CouchSyncController,
     @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -76,7 +78,7 @@ class PagesViewModel @Inject constructor(
 
     fun deletePage(pageId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            com.ethran.notable.data.deletePage(appRepository, pageId, context.filesDir)
+            com.ethran.notable.data.deletePage(appRepository, pageId, context.filesDir, couchSync)
         }
     }
 

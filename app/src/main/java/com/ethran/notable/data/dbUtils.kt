@@ -8,6 +8,7 @@ import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.io.createFileFromContentUri
 import com.ethran.notable.io.isImageUri
 import com.ethran.notable.io.saveImageFromContentUri
+import com.ethran.notable.sync.couch.CouchSyncController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -95,7 +96,12 @@ fun copyImageToDatabase(context: Context, fileUri: Uri, subfolder: String? = nul
 
 
 // TODO move this to repository
-suspend fun deletePage(appRepository: AppRepository, pageId: String, filesDir: File) = withContext(Dispatchers.IO) {
+suspend fun deletePage(
+    appRepository: AppRepository,
+    pageId: String,
+    filesDir: File,
+    couchSync: CouchSyncController,
+) = withContext(Dispatchers.IO) {
     val page = appRepository.pageRepository.getById(pageId) ?: return@withContext
     val proxy = appRepository.kvProxy
     val settings = proxy.get(APP_SETTINGS_KEY, AppSettings.serializer())
@@ -103,6 +109,12 @@ suspend fun deletePage(appRepository: AppRepository, pageId: String, filesDir: F
     // remove from book
     if (page.notebookId != null) {
         appRepository.bookRepository.removePage(page.notebookId, pageId)
+        // A manifest that merely stopped naming the page is not a deletion anyone else can read:
+        // `mergeNotebook` is an add-wins union, so the peer's copy appends it straight back. The
+        // tombstone is the fact that travels (protocol §6.6), and queueing the notebook is what
+        // sends it — nothing else here is going to mark this notebook dirty.
+        appRepository.deletedPageRepository.record(page.notebookId, listOf(pageId))
+        couchSync.notePageDeleted(page.notebookId)
     }
 
     // remove from quick nav

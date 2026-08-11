@@ -54,8 +54,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, CouchDeletion::class],
-    version = 39,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class],
+    version = 40,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -78,7 +78,9 @@ class Converters {
         AutoMigration(36, 37),
         // 37 -> 38 is hand-written: see MIGRATION_37_38 in Migrations.kt.
         // Adds the nullable `title` column to `page` — quick pages the user can name.
-        AutoMigration(38, 39)
+        AutoMigration(38, 39),
+        // Adds the `DeletedPage` / `DeletedImage` tombstone tables.
+        AutoMigration(39, 40)
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -93,6 +95,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun notebookSyncStateDao(): NotebookSyncStateDao
     abstract fun pageSyncStateDao(): PageSyncStateDao
     abstract fun deletedStrokeDao(): DeletedStrokeDao
+    abstract fun deletedPageDao(): DeletedPageDao
+    abstract fun deletedImageDao(): DeletedImageDao
     abstract fun couchDeletionDao(): CouchDeletionDao
 
 //    companion object {
@@ -192,6 +196,14 @@ object DatabaseModule {
     @Provides
     fun provideDeletedStrokeDao(db: AppDatabase): DeletedStrokeDao =
         db.deletedStrokeDao()
+
+    @Provides
+    fun provideDeletedPageDao(db: AppDatabase): DeletedPageDao =
+        db.deletedPageDao()
+
+    @Provides
+    fun provideDeletedImageDao(db: AppDatabase): DeletedImageDao =
+        db.deletedImageDao()
 
     @Provides
     fun provideCouchDeletionDao(db: AppDatabase): CouchDeletionDao =

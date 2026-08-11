@@ -5,6 +5,8 @@ import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Image
@@ -39,6 +41,8 @@ class AppRepository @Inject constructor(
     val notebookSyncStateRepository: NotebookSyncStateRepository,
     val pageSyncStateRepository: PageSyncStateRepository,
     val deletedStrokeRepository: DeletedStrokeRepository,
+    val deletedPageRepository: DeletedPageRepository,
+    val deletedImageRepository: DeletedImageRepository,
     val couchDeletionRepository: CouchDeletionRepository,
     val kvProxy: KvProxy,
     private val db: AppDatabase

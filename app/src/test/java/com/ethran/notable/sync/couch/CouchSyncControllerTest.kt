@@ -82,6 +82,8 @@ class CouchSyncControllerTest {
             synchronized(lock) { markedPages += pageId }
         }
 
+
+
         override suspend fun markEverythingDirty() {
             everythingMarked.incrementAndGet()
         }
@@ -464,6 +466,23 @@ class CouchSyncControllerTest {
 
         assertEquals(listOf("p1"), backend.markedPages)
         assertEquals("the edit should have been pushed once the timer elapsed", 1, backend.flushCount)
+    }
+
+    /**
+     * A page deletion moves no page document — the page dies with its notebook's manifest — so
+     * nothing else on this path will ever queue the notebook. Without this the tombstone waits for
+     * some unrelated edit, which on a device the user has finished with never comes.
+     */
+    @Test
+    fun `deleting a page queues the notebook it left`() {
+        val backend = BackendSpy()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        controller.notePageDeleted("nb1")
+        settle(200)
+
+        assertEquals(listOf(CouchDocId.notebook("nb1")), backend.markedDocuments)
+        assertEquals("the removal should have been pushed once the timer elapsed", 1, backend.flushCount)
     }
 
     /** WebDAV is still the default: with CouchDB unselected nothing here may touch the network. */

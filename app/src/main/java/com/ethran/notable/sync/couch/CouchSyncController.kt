@@ -404,6 +404,14 @@ class CouchSyncController @Inject constructor(
     }
 
     /**
+     * A page was deleted from [notebookId]. Only the notebook travels: a page has no lifecycle of
+     * its own, it lives and dies with its notebook's `pageIds` / `deletedPageIds` (protocol §6.4).
+     * Without this the removal waits for some unrelated edit to queue the notebook — which on a
+     * device where nothing else is touched is never.
+     */
+    fun notePageDeleted(notebookId: String) = noteDocumentChanged(CouchDocId.notebook(notebookId))
+
+    /**
      * A notebook or folder was deleted here. Recorded rather than pushed straight away, so the
      * intent survives being offline and a restart.
      */

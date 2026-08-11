@@ -312,6 +312,16 @@ class FakeLocalStore : CouchLocalStore {
 
     val conflictCopies: List<String> get() = copies.toList()
 
+    /**
+     * Page tombstones, per notebook document id, kept *outside* the notebook body.
+     *
+     * A real store has no choice about this — `RoomCouchStore` reads them out of their own table on
+     * every load, because the notebook row has nowhere to put them. Modelling them as part of the
+     * body instead would make this fake immune to the defect these tests exist to catch: a store
+     * that removes a page but never says so, leaving the peer's add-wins union to put it back.
+     */
+    private val pageTombstones = LinkedHashMap<String, LinkedHashMap<String, String>>()
+
     /** Runs on the next [load], to model the editor writing while a merge is in flight. */
     var onLoad: (() -> Unit)? = null
 
@@ -320,6 +330,11 @@ class FakeLocalStore : CouchLocalStore {
         // the document and gone off to the network, with the editor writing while it is away.
         val snapshot = documents[documentId]
         onLoad?.invoke()
+        if (snapshot is CouchDocBody.Notebook) {
+            return CouchDocBody.Notebook(
+                snapshot.notebook.copy(deletedPageIds = deletedPages(documentId))
+            )
+        }
         return snapshot
     }
 
@@ -331,6 +346,11 @@ class FakeLocalStore : CouchLocalStore {
      */
     override fun apply(documentId: String, body: CouchDocBody, basedOn: CouchDocBody?) {
         val current = documents[documentId]
+        if (body is CouchDocBody.Notebook) {
+            // Merged-in tombstones are recorded, not just applied: a store that dropped them would
+            // forget the removal on the next load and offer the peer its own copy of the page back.
+            body.notebook.deletedPageIds.forEach { tombstones(documentId)[it.id] = it.deletedAt }
+        }
         documents[documentId] =
             if (body is CouchDocBody.Page && current is CouchDocBody.Page) {
                 CouchDocBody.Page(
@@ -379,6 +399,26 @@ class FakeLocalStore : CouchLocalStore {
         (documents[documentId] as? CouchDocBody.Notebook)?.notebook
 
     fun body(documentId: String): CouchDocBody? = documents[documentId]
+
+    /**
+     * Deletes a page here, the way the app does: it leaves the notebook's manifest *and* leaves a
+     * tombstone behind. An id already tombstoned keeps its original `deletedAt` (protocol §6.6).
+     */
+    fun deletePage(documentId: String, pageId: String, deletedAt: String) {
+        val notebook = notebook(documentId) ?: return
+        tombstones(documentId).putIfAbsent(pageId, deletedAt)
+        documents[documentId] = CouchDocBody.Notebook(
+            notebook.copy(pageIds = notebook.pageIds - pageId, updatedAt = deletedAt)
+        )
+    }
+
+    /** What this device would tell a peer about pages it removed, sorted by id as the wire is. */
+    fun deletedPages(documentId: String): List<CouchTombstone> =
+        tombstones(documentId).map { CouchTombstone(id = it.key, deletedAt = it.value) }
+            .sortedBy { it.id }
+
+    private fun tombstones(documentId: String): LinkedHashMap<String, String> =
+        pageTombstones.getOrPut(documentId) { LinkedHashMap() }
 
     // endregion
 }
