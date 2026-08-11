@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.5.0
+
+### Naming things
+
+- **A new folder or notebook asks what to call it.** They used to be created as "New Folder"
+  and "New notebook", and renaming one meant knowing that a long press opens its settings. The
+  suggested name arrives filled in and selected, so accepting it and typing over it are each a
+  single tap. If you would rather name things later, turn the prompt off in Settings → General.
+- **Rename from the long-press menu**, for folders, notebooks and now pages.
+- **Quick pages can be named.** They were told apart only by their thumbnails. Each now carries
+  a label underneath: its name, or the date it was created if you have not given it one.
+
+### Fixes
+
+- **A renamed folder could quietly change back.** The rename was saved without updating the
+  folder's change time, so the next sync judged the other device's copy to be the newer one and
+  restored the old name.
+- **A name could be lost on the way out of the dialog.** Titles were saved when the text field
+  lost focus, which is not something a closing dialog guarantees. A name is now saved when you
+  confirm it.
+- **The notebook settings dialog showed the text `${bookTitle}`** where the notebook's name
+  belonged, for any linked file path longer than 32 characters — in practice, all of them.
+- **A deleted notebook could be brought back by your other device.** A deleted document reads as
+  a 404, the same answer an unknown notebook gets, and it was taken to mean "never existed" — so
+  the next push recreated it.
+- **WebDAV kept syncing while CouchDB was selected.** Closing a note ran a WebDAV sync even with
+  the Couch backend active, leaving two engines writing the same notebooks over different
+  transports. Every path now follows the backend switch.
+
+### Upgrading
+
+The database schema moves from 38 to 39 to store page names. The migration is additive and runs
+automatically, but **it is one-way** — installing an older build over this one will fail to open
+the database.
+
+If you sync with bopa on an iPad, update it as well. Builds of it from before this release do
+not know about page names, and drop them when they sync.
+
+## 0.4.0
+
+- **Vertical navigation can turn pages instead of scrolling.** Continuous scrolling follows your
+  finger, which on e-ink means a run of partial refreshes and a visible smear. The new Paged mode
+  advances exactly one screen per swipe, so a turn is a single full refresh and a line always
+  lands in the same place; a small overlap keeps the last line of the outgoing screen in view.
+  Choose it under Vertical Navigation. Continuous remains the default.
+- Polish translations for the Library and rail strings added in 0.3.0.
+
 ## 0.3.0
 
 ### CouchDB sync
