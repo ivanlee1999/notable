@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.3
+
+CouchDB only. If you sync over WebDAV, nothing here changes for you.
+
+### Sync now works while the app is open
+
+- **Tapping Sync now did nothing until you restarted the app.** 0.7.2 stopped notable's request for
+  server changes hanging forever, but it still waited on that request — up to a minute of a request
+  whose whole job is to sit there until something happens — before it would do anything else. A
+  manual sync asked its first question straight into that wait, which is why the log stopped at the
+  heading and never went further. Waiting for the server no longer holds everything else up, so a
+  sync you ask for starts when you ask for it.
+- **The same wait no longer delays sending your edits.** Anything you drew or changed while that
+  request was open had to queue behind it too.
+
+### Notebooks no longer claim to be "local only" when they are not
+
+- **A notebook already on your other device still showed the local-only badge.** The badge was read
+  from a record only the WebDAV engine keeps, so with CouchDB selected it had nothing to go on and
+  said "not synced" about everything. It now reads CouchDB's own record: synced once the server has
+  accepted it, and not synced while there are changes still to send.
+
+### Upgrading
+
+No database change: the schema stays at 39.
+
+Badges correct themselves as soon as the library loads — there is nothing to do by hand, and no
+re-sync is needed.
+
 ## 0.7.2
 
 CouchDB only. If you sync over WebDAV, nothing here changes for you.
