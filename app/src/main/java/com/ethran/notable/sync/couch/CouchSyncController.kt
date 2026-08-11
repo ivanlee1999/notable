@@ -540,6 +540,9 @@ class CouchSyncController @Inject constructor(
     private fun describe(error: Throwable): String = when (error) {
         is CouchError.Unauthorized -> "Sync rejected the username or password."
         is CouchError.Transport -> "Offline — changes are saved and will sync when you reconnect."
+        is CouchError.Blocked ->
+            "Android blocked this connection. A plain http:// address is only allowed for servers " +
+                "listed in the app's network security config — use https://, or add the server there."
         is CouchError.Server -> "The sync server returned an error (${error.status})."
         else -> error.toString()
     }

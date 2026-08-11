@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is blocked by default from API 28 on, which is right for anything reaching the
+  public internet: sync sends its password as HTTP Basic auth, so plaintext to a host we cannot
+  vouch for hands over the credentials.
+
+  A self-hosted CouchDB on the LAN is the case the default gets wrong. There is no way to say
+  "private address ranges" here — `domain` matches a hostname or an IP literal exactly, and there
+  is no CIDR syntax — so each self-hosted server has to be named. Adding one is the price of
+  keeping the default deny for every other host; the alternative, a blanket
+  `cleartextTrafficPermitted="true"` on base-config, would also permit plaintext to any server on
+  the internet.
+
+  Pointing sync at a LAN server not listed below fails with UnknownServiceException, which the
+  client reports as CouchError.Blocked ("Android blocked…"), not as being offline.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Loopback, and the host machine as seen from the emulator. -->
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+
+        <!-- Self-hosted CouchDB. Add your server's address here. -->
+        <domain includeSubdomains="true">192.168.0.100</domain>
+    </domain-config>
+</network-security-config>

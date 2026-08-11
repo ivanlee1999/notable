@@ -376,6 +376,29 @@ class CouchSyncControllerTest {
     }
 
     @Test
+    fun `a blocked url is reported as configuration rather than as being offline`() {
+        val backend = BackendSpy()
+        backend.pullError = CouchError.Blocked("CLEARTEXT communication to 192.168.0.100 …")
+        val controller = controller(backend, FakeSleeper(allowedTicks = 3))
+
+        controller.start()
+        settle(200)
+        controller.stop()
+
+        val status = controller.status
+        assertTrue("expected a failure, got $status", status is CouchSyncController.Status.Failed)
+        val message = (status as CouchSyncController.Status.Failed).message.lowercase()
+        assertFalse(
+            "the server is reachable; calling this offline sends the user to their router: $message",
+            message.contains("offline"),
+        )
+        assertTrue(
+            "say what to change: $message",
+            message.contains("http") || message.contains("blocked"),
+        )
+    }
+
+    @Test
     fun `unauthorized is reported as credentials rather than as being offline`() {
         val backend = BackendSpy()
         backend.pullError = CouchError.Unauthorized
