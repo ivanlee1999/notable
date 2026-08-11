@@ -86,6 +86,10 @@ class CouchSyncControllerTest {
             everythingMarked.incrementAndGet()
         }
 
+        /** Nothing here reads the badge; the flow just has to exist and stay quiet. */
+        override val documentState =
+            kotlinx.coroutines.flow.MutableStateFlow<CouchDocumentState?>(null)
+
         override suspend fun markDocumentDirty(documentId: String) {
             synchronized(lock) { markedDocuments += documentId }
         }
