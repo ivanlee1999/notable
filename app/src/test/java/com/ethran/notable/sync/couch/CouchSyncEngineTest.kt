@@ -441,6 +441,43 @@ class CouchSyncEngineTest {
     }
 
     /**
+     * The guard asks whether these deletions are most of the library. It used to ask that of
+     * `revs`, which is never pruned — so a device that had seen a hundred notebooks come and go
+     * counted all hundred, and deleting the ten it actually had left no longer looked like most of
+     * anything. A guard that grows unable to trip is worse than none, since it still reads as one.
+     */
+    @Test
+    fun the_deletion_guard_measures_against_what_the_device_holds() = runBlocking {
+        // Two hundred notebooks this device pushed and has since stopped holding. They are gone
+        // from the library but still named in `revs`, which nothing prunes.
+        val old = (0 until 200).map { index ->
+            val id = CouchDocId.notebook("old$index")
+            ipadStore.set(id, CouchDocBody.Notebook(notebook("old", emptyList(), 1, "ipad")))
+            id
+        }
+        ipad.markDirty(old)
+        ipad.flush()
+        old.forEach { ipadStore.remove(it) }
+
+        val ids = (0 until 12).map { index ->
+            val id = CouchDocId.notebook("nb$index")
+            ipadStore.set(
+                id,
+                CouchDocBody.Deleted(
+                    CouchDeletedDoc(
+                        type = CouchDocType.NOTEBOOK, deletedAt = stamp(10), updatedBy = "ipad"
+                    )
+                )
+            )
+            id
+        }
+        ipad.markDirty(ids)
+
+        val report = ipad.flush()
+        assertTrue("wiping the whole library should still ask", report.blockedByDeletionGuard)
+    }
+
+    /**
      * The guard exists to question a suspicious *deletion*. Stopping the rest of the queue with it
      * meant a drawing could not sync either — and since the confirmation the warning asks for does
      * not exist yet, that was a permanent stall rather than a prompt.
