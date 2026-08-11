@@ -553,10 +553,26 @@ class NotebookSyncService @Inject constructor(
                 page.id in locallyDirtyIds || page.id in knownAbsentPageIds
             }
             log.i(TAG, "${dirtyPages.size}/${pages.size} page(s) dirty, uploading")
+            // Why each page is going up. Only the dirty ones are named, and only in verbose mode:
+            // "it uploaded a page I didn't touch" is a real complaint, and the answer is usually
+            // that the page was missing on the server rather than edited here.
+            if (SyncLogger.verbose) {
+                dirtyPages.forEach { page ->
+                    val why = when {
+                        page.id in knownAbsentPageIds -> "missing on server"
+                        rowsByPageId[page.id] == null -> "never uploaded"
+                        else -> "edited locally"
+                    }
+                    log.d(TAG, "↑ ${notebook.title}: page ${page.id} ($why)")
+                }
+            }
 
             val errors = ErrorAccumulator()
             val committedPageRows = mutableListOf<PageSyncState>()
+            var sent = 0
             for (page in dirtyPages) {
+                sent++
+                reporter.itemDetail("page $sent of ${dirtyPages.size}")
                 // Guard the dirty-page PUT with the stored ETag. A concurrent remote
                 // change to this page 412s, aborting before manifest publish (nothing committed).
                 // A page proven absent is recreated with an `If-None-Match: *` create guard instead,
@@ -594,6 +610,7 @@ class NotebookSyncService @Inject constructor(
                     break
                 }
             }
+            reporter.itemDetail(null)
             // Rows for pages that left the notebook are dropped in the commit transaction.
             val departedPageIds = rowsByPageId.keys - notebook.pageIds.toSet()
 
@@ -1113,19 +1130,26 @@ class NotebookSyncService @Inject constructor(
         val committedPageRows = mutableListOf<PageSyncState>()
         // Backgrounds are often shared across pages (e.g. a PDF); fetch each distinct one once.
         val attemptedBackgrounds = mutableSetOf<String>()
-        var fetched = 0
-        for (pageId in notebook.pageIds) {
+        // Which pages need fetching is decided up front rather than inside the loop, so the count is
+        // known before the first request and the progress line can say "page 3 of 40" instead of
+        // counting up towards a total nobody knows yet.
+        val pagesToFetch = notebook.pageIds.filter { pageId ->
             val currentEtag = currentEtagByPageId[pageId]
             val storedEtag = ETag.parse(rowsByPageId[pageId]?.remoteEtag)
             // An unreadable remote ETag is spelled out rather than left to `matches` returning
             // false for a null, because "we could not tell" is a different reason to fetch than
             // "it differs" and should stay visible here.
-            val needsFetch = rowsByPageId[pageId] == null ||
+            rowsByPageId[pageId] == null ||
                 pageId !in localPageIds ||
                 currentEtag == null ||
                 !storedEtag.matches(currentEtag)
-            if (!needsFetch) continue
+        }
+        var fetched = 0
+        for (pageId in pagesToFetch) {
+            val currentEtag = currentEtagByPageId[pageId]
             fetched++
+            reporter.itemDetail("page $fetched of ${pagesToFetch.size}")
+            log.d(TAG, "↓ ${notebook.title}: page $pageId ($fetched/${pagesToFetch.size})")
             downloadPage(pageId, notebookId, client, attemptedBackgrounds).onSuccess { pageUpdatedAt ->
                 committedPageRows.add(
                     PageSyncState(
@@ -1138,6 +1162,7 @@ class NotebookSyncService @Inject constructor(
                 )
             }.onError { errors.add(it) }
         }
+        reporter.itemDetail(null)
         log.i(TAG, "Downloaded $fetched/${notebook.pageIds.size} changed page(s) for ${notebook.title}")
 
         // 6. Commit: only when every fetched page landed, write the notebook row with the real remote

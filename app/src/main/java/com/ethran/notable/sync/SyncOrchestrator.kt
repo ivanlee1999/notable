@@ -275,7 +275,13 @@ class SyncOrchestrator @Inject constructor(
             // Actually hold the mutex for the whole operation. A bare isLocked check is
             // check-then-act: it let a sync-on-close race a full/periodic sync. Skip-if-busy
             // is still the right behavior for a single-notebook sync, so a failed tryLock succeeds.
-            if (!syncMutex.tryLock()) return@withContext AppResult.Success(Unit)
+            if (!syncMutex.tryLock()) {
+                // Skip-if-busy is the right behavior, but a *silent* skip is how "I closed the note
+                // and it never synced" becomes unexplainable: the full sync that held the lock had
+                // already read this notebook, so the close-time edit waits for the next run.
+                log.i(TAG, "Notebook $notebookId not synced now: another sync holds the lock")
+                return@withContext AppResult.Success(Unit)
+            }
             try {
                 runSingleNotebookSync(notebookId)
             } finally {
@@ -292,9 +298,15 @@ class SyncOrchestrator @Inject constructor(
      */
     private suspend fun runSingleNotebookSync(notebookId: String): AppResult<Unit, DomainError> {
         val settings = kvProxy.getSyncSettings()
-        if (!settings.webdavActive) return AppResult.Success(Unit)
+        if (!settings.webdavActive) {
+            log.i(TAG, "Notebook $notebookId not synced: WebDAV sync is off")
+            return AppResult.Success(Unit)
+        }
         // Wifi constraint not satisfied -> planned no-op, the same policy as any other sync.
-        if (syncPreflightService.checkWifiConstraint() is AppResult.Error) return AppResult.Success(Unit)
+        if (syncPreflightService.checkWifiConstraint() is AppResult.Error) {
+            log.i(TAG, "Notebook $notebookId not synced: WiFi-only is on and this is not WiFi")
+            return AppResult.Success(Unit)
+        }
         if (settings.username.isBlank() || settings.password.isBlank()) {
             return AppResult.Error(DomainError.SyncAuthError)
         }
@@ -310,10 +322,26 @@ class SyncOrchestrator @Inject constructor(
 
     suspend fun syncFromPageId(pageId: String) {
         val settings = kvProxy.getSyncSettings()
-        if (!settings.webdavActive || !settings.syncOnNoteClose) return
+        if (!settings.webdavActive) return
+        if (!settings.syncOnNoteClose) {
+            // Not an error, but the setting people most often forget they turned off — and the
+            // symptom ("closing a note doesn't sync") looks identical to sync being broken.
+            log.d(TAG, "Note closed but sync-on-close is off; nothing scheduled")
+            return
+        }
         try {
-            val page = appRepository.pageRepository.getById(pageId) ?: return
-            page.notebookId?.let { syncNotebook(it) }
+            val page = appRepository.pageRepository.getById(pageId)
+            if (page == null) {
+                log.w(TAG, "Note closed but page $pageId is gone; nothing to sync")
+                return
+            }
+            val notebookId = page.notebookId
+            if (notebookId == null) {
+                log.d(TAG, "Note closed: page $pageId is a quick page, not in a notebook")
+                return
+            }
+            log.d(TAG, "Note closed; syncing its notebook $notebookId")
+            syncNotebook(notebookId)
         } catch (e: Exception) {
             log.e(TAG, "Auto-sync failed: ${e.message}")
         }
@@ -357,7 +385,10 @@ class SyncOrchestrator @Inject constructor(
     suspend fun uploadDeletion(notebookId: String): AppResult<Unit, DomainError> =
         withContext(ioDispatcher) {
             val settings = kvProxy.getSyncSettings()
-            if (!settings.webdavActive) return@withContext AppResult.Success(Unit)
+            if (!settings.webdavActive) {
+                log.i(TAG, "Deletion of $notebookId not pushed: WebDAV sync is off")
+                return@withContext AppResult.Success(Unit)
+            }
 
             return@withContext syncPreflightService.checkWifiConstraint().flatMap {
                 if (settings.username.isBlank() || settings.password.isBlank()) {

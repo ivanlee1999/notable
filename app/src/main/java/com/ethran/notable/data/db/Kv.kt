@@ -14,6 +14,7 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.sync.SYNC_SERVER_CAPABILITIES_KEY
 import com.ethran.notable.sync.SYNC_SETTINGS_KEY
 import com.ethran.notable.sync.ServerCapabilities
+import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.hasFilePermission
@@ -148,7 +149,15 @@ class KvProxy @Inject constructor(
     suspend fun getSyncSettings(): SyncSettings = withContext(Dispatchers.IO) {
         val settings = kvRepository.get(SYNC_SETTINGS_KEY)
             ?.let { json.decodeFromString(SyncSettings.serializer(), it.value) }
-            ?: return@withContext SyncSettings()
+            ?: run {
+                SyncLogger.verbose = false
+                return@withContext SyncSettings()
+            }
+
+        // Applied here rather than at the settings screen because this is the one read every sync
+        // entry point already makes — including the background worker, which can run in a process
+        // that never opened settings and would otherwise log at the default level.
+        SyncLogger.verbose = settings.verboseSyncLog
 
         // Both backends' passwords are stored encrypted; each is decrypted independently so a
         // corrupt WebDAV secret cannot take the CouchDB one down with it (or the reverse).

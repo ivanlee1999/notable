@@ -2,6 +2,7 @@ package com.ethran.notable
 
 import android.app.Application
 import android.util.Log
+import com.ethran.notable.sync.SyncLogger
 import com.onyx.android.sdk.rx.RxManager
 import dagger.hilt.android.HiltAndroidApp
 import io.shipbook.shipbooksdk.ShipBook
@@ -26,6 +27,9 @@ class NotableApp : Application() {
         logCrashLoopSignalOnStart()
         // Pure cleanup (dir listing/sort/delete) — off the main thread to keep cold start cheap.
         Thread { pruneCrashFiles() }.start()
+        // Before anything can sync: a background sync run started from a cold process must find the
+        // log file already wired up, or the very run the user is trying to diagnose goes unrecorded.
+        SyncLogger.install(this)
         RxManager.Builder.initAppContext(this)
         checkHiddenApiBypass()
         Log.i("NotableApp", "onCreate FINISH")

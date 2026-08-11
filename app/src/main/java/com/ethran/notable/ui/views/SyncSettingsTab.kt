@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -549,6 +550,21 @@ private fun SyncLogsSection(
         onHeaderClick = onToggleExpanded
     ) {
         SyncLogViewer(syncLogs = state.syncLogs, onClearLog = callbacks.onClearSyncLogs)
+        // The detail switch lives with the log it affects, not up in the sync options: it changes
+        // nothing about how syncing works, only how much of it is written down.
+        SettingToggleRow(
+            label = stringResource(R.string.sync_verbose_log_label),
+            value = state.syncSettings.verboseSyncLog,
+            onToggle = {
+                callbacks.onUpdateSyncSettings(state.syncSettings.copy(verboseSyncLog = it), true)
+            }
+        )
+        Text(
+            text = stringResource(R.string.sync_verbose_log_hint),
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.padding(top = 2.dp, bottom = 4.dp, start = 4.dp, end = 4.dp)
+        )
     }
 }
 
@@ -1192,6 +1208,15 @@ private fun SyncProgressPanel(syncing: SyncState.Syncing) {
                 style = MaterialTheme.typography.caption,
                 color = MaterialTheme.colors.onSurface
             )
+            // What is happening inside this notebook. Without it a big notebook holds the line above
+            // steady for minutes, which reads as a hang rather than as work in progress.
+            item.detail?.let { detail ->
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f)
+                )
+            }
         }
     }
 }
@@ -1254,7 +1279,9 @@ fun ForceOperationsSection(
 
 @Composable
 fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
-    val recentLogs = remember(syncLogs) { syncLogs.takeLast(30) }
+    // Enough to hold a whole run of a mid-sized library. The panel scrolls, and a truncated view is
+    // worse than a long one when the line you need is the one that scrolled away.
+    val recentLogs = remember(syncLogs) { syncLogs.takeLast(120) }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val copiedMessage = stringResource(R.string.sync_log_copied)
@@ -1263,9 +1290,16 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(240.dp)
         ) {
             val scrollState = rememberScrollState()
+            // Sync logs grow at the bottom, so land there: on an e-ink device the alternative is
+            // scrolling by hand past the whole history to reach what just happened. Keyed on
+            // maxValue as well as the count, because the new extent is only known after layout —
+            // keyed on the count alone this scrolls to the *previous* bottom and stops short.
+            LaunchedEffect(recentLogs.size, scrollState.maxValue) {
+                scrollState.scrollTo(scrollState.maxValue)
+            }
             Column(
                 modifier = Modifier
                     .verticalScroll(scrollState)
@@ -1279,15 +1313,7 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
                     )
                 } else {
                     recentLogs.forEach { log ->
-                        Text(
-                            text = "[${log.timestamp}] ${log.message}",
-                            style = TextStyle(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colors.onSurface
-                            ),
-                            modifier = Modifier.padding(vertical = 1.dp)
-                        )
+                        SyncLogLine(log)
                     }
                 }
             }
@@ -1297,12 +1323,12 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
             modifier = Modifier.align(Alignment.End),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Copy the FULL buffer (not just the visible 30) so users can paste it into a bug report.
+            // Copy everything retained on disk, not just what's on screen or even what this process
+            // holds — a bug report about background sync needs the runs from before the last launch.
             EInkActionButton(
                 text = stringResource(R.string.sync_copy_log),
                 onClick = {
-                    val text = syncLogs.joinToString("\n") { "[${it.timestamp}] ${it.message}" }
-                    clipboardManager.setText(AnnotatedString(text))
+                    clipboardManager.setText(AnnotatedString(SyncLogger.dump()))
                     Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
                 },
                 enabled = syncLogs.isNotEmpty(),
@@ -1317,6 +1343,35 @@ fun SyncLogViewer(syncLogs: List<SyncLogger.LogEntry>, onClearLog: () -> Unit) {
             )
         }
     }
+}
+
+/**
+ * One log line. Level is carried by a leading marker rather than colour — on a greyscale e-ink panel
+ * a colour-coded warning is indistinguishable from an ordinary line, and "was there an error?" is
+ * the first question anyone asks of this list. Lines restored from a previous session are dimmed so
+ * the boundary between history and this run's activity is visible at a glance.
+ */
+@Composable
+private fun SyncLogLine(log: SyncLogger.LogEntry) {
+    val marker = when (log.level) {
+        SyncLogger.LogLevel.ERROR -> "!! "
+        SyncLogger.LogLevel.WARNING -> " ! "
+        else -> "   "
+    }
+    val emphasis = when (log.level) {
+        SyncLogger.LogLevel.ERROR, SyncLogger.LogLevel.WARNING -> FontWeight.Bold
+        else -> FontWeight.Normal
+    }
+    Text(
+        text = "[${log.timestamp}]$marker${log.message}",
+        style = TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            fontWeight = emphasis,
+            color = MaterialTheme.colors.onSurface.copy(alpha = if (log.isRestored) 0.55f else 1f)
+        ),
+        modifier = Modifier.padding(vertical = 1.dp)
+    )
 }
 
 @Composable

@@ -20,6 +20,13 @@ interface SyncProgressReporter {
 
     fun beginStep(step: SyncStep, stepProgress: Float, details: String)
     fun beginItem(index: Int, total: Int, name: String, id: String? = null)
+
+    /**
+     * Update what is happening inside the current item (e.g. "page 40 of 812"), leaving the item
+     * itself in place. A no-op when no item is in flight, so a transfer driven outside a per-notebook
+     * loop (force upload, single-notebook sync) can call it unconditionally.
+     */
+    fun itemDetail(detail: String?)
     fun endItem()
     fun finishSuccess(summary: SyncSummary)
     fun finishError(error: DomainError, canRetry: Boolean)
@@ -48,6 +55,16 @@ class SyncProgressReporterImpl @Inject constructor(
             when (current) {
                 is SyncState.Syncing -> current.copy(item = ItemProgress(index, total, name, id))
                 else -> current
+            }
+        }
+    }
+
+    override fun itemDetail(detail: String?) {
+        _state.update { current ->
+            when {
+                current !is SyncState.Syncing -> current
+                current.item == null -> current
+                else -> current.copy(item = current.item.copy(detail = detail))
             }
         }
     }

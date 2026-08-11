@@ -275,6 +275,8 @@
     <!-- Sync Log -->
     <string name="sync_log_title">Activity Log</string>
     <string name="sync_log_empty">No recent activity.</string>
+    <string name="sync_verbose_log_label">Detailed logging</string>
+    <string name="sync_verbose_log_hint">Records every notebook decision and each page transferred. Turn on while investigating a sync problem, then off again — it fills the log quickly.</string>
 
     <!-- Experimental Sync warning -->
     <string name="sync_experimental_title">Experimental Feature</string>

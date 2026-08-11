@@ -36,6 +36,47 @@ sealed interface NotebookAction {
 }
 
 /**
+ * The decision in words, for the activity log. Says which side moved as well as what will happen,
+ * because "skipping" on its own is the line users read as a fault — the useful part is that neither
+ * side changed, and how that was established.
+ */
+internal fun NotebookAction.explain(remoteChanged: Boolean, viaFolderEtag: Boolean): String {
+    val remoteState = when {
+        viaFolderEtag -> "remote unchanged (folder ETag matched, no manifest fetched)"
+        remoteChanged -> "remote changed"
+        else -> "remote unchanged (304)"
+    }
+    val plan = when (this) {
+        is NotebookAction.Upload ->
+            "upload" + if (ifMatch == null) " (unguarded — no stored ETag)" else " (guarded)"
+
+        NotebookAction.Download -> "download"
+        NotebookAction.Skip -> "nothing to do"
+        NotebookAction.Reconcile -> "concurrent edits, reconcile per page"
+        NotebookAction.SkipUploadOnly -> "skip, upload-only mode"
+        NotebookAction.SkipDownloadOnly -> "skip, download-only mode"
+    }
+    return "$remoteState → $plan"
+}
+
+/**
+ * What a run actually did to one notebook. Distinct from [NotebookAction] — that is the plan, this
+ * is the result, and a plan can fail. [label] is the plural noun used in the run's summary line.
+ */
+enum class NotebookOutcome(val label: String) {
+    UPLOADED("uploaded"),
+    DOWNLOADED("downloaded"),
+    MERGED("merged"),
+    CONFLICTED("needing your decision"),
+
+    /** Both sides already agreed. The healthy majority of any steady-state run. */
+    UNCHANGED("unchanged"),
+
+    /** A transfer the current one-directional mode deliberately did not make. */
+    SKIPPED_DIRECTION("skipped by upload/download-only mode"),
+}
+
+/**
  * The pure reconciliation decision for one *remote-present* notebook. No I/O: given the local
  * timestamp, what we last committed for it, and the remote facts (already fetched by the executor,
  * conditionally via `If-None-Match`), decide upload / download / skip.
