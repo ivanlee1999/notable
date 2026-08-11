@@ -238,9 +238,14 @@ class CouchDbClient(
             CouchQueryItem("feed", if (longpoll) "longpoll" else "normal"),
         )
         if (longpoll) {
+            // No `heartbeat`, deliberately. CouchDB treats it as *overriding* `timeout`: given
+            // both, it holds the connection open until something actually changes, however long
+            // that takes. Its keep-alive bytes then reset the client's read timeout in turn, so the
+            // call never returned on its own — and since the engine holds its lock across the whole
+            // pull, one quiet server meant this device could never push again. It was added to stop
+            // an idle proxy dropping a long-held connection; losing that costs a retry, where
+            // keeping it cost sync entirely.
             query += CouchQueryItem("timeout", timeoutMs.toString())
-            // Without a heartbeat an idle proxy can silently drop a long-held connection.
-            query += CouchQueryItem("heartbeat", HEARTBEAT_MS.toString())
         }
         if (limit != null) query += CouchQueryItem("limit", limit.toString())
 
@@ -251,6 +256,8 @@ class CouchDbClient(
                 query = query,
                 // Outlast the window we just asked the server to hold the connection open for.
                 readTimeoutMs = if (longpoll) timeoutMs + LONGPOLL_READ_MARGIN_MS else null,
+                // The bound that actually holds, for the reason given above the heartbeat.
+                callTimeoutMs = if (longpoll) timeoutMs + LONGPOLL_READ_MARGIN_MS else null,
             )
         )
         if (response.status != HTTP_OK) throw errorFor(response, path("_changes"))
@@ -370,9 +377,12 @@ class CouchDbClient(
 
     companion object {
         const val DEFAULT_LONGPOLL_MS = 55_000L
-        private const val HEARTBEAT_MS = 15_000L
 
-        /** Slack over the requested longpoll window, so the client never aborts first. */
+        /**
+         * Slack over the requested longpoll window, so the client never aborts first. Applied as
+         * both a read timeout and a whole-call deadline: the call deadline is the one that holds if
+         * a server ever streams keep-alive bytes at us anyway.
+         */
         private const val LONGPOLL_READ_MARGIN_MS = 15_000L
 
         private const val HTTP_OK = 200
