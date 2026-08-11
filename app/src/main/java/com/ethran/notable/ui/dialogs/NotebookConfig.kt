@@ -316,7 +316,10 @@ fun NotebookConfigDialog(
                     NotebookLinkRow(
                         isLinkedInit = book!!.linkedExternalUri != null,
                         linkedUriInit = book!!.linkedExternalUri,
-                        bookTitle = bookTitle,
+                        // `book` is observed live, so the linked path follows a rename as soon as
+                        // it is committed — the same thing the dialog's old editable `bookTitle`
+                        // state gave this row before naming moved into its own prompt.
+                        bookTitle = book!!.title,
                         defaultPath = defaultPath,
                         onLinkChanged = { newUri ->
                             val updated = book!!.copy(linkedExternalUri = newUri)
