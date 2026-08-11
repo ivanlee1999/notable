@@ -212,6 +212,11 @@ class CouchSyncEngine(
         val failures: Map<String, String> = emptyMap(),
         /** Set when the mass-deletion guard refused the run (protocol §6.6). */
         val blockedByDeletionGuard: Boolean = false,
+        /**
+         * How many notebook tombstones the guard held back — not the size of the whole queue,
+         * which is what the warning used to report.
+         */
+        val deletionsHeldBack: Int = 0,
     )
 
     data class PullReport(
@@ -269,10 +274,18 @@ class CouchSyncEngine(
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
         val failures = LinkedHashMap<String, String>()
-        val queue = orderedDirty()
+        var queue = orderedDirty()
 
+        // Only the deletions are held back. Blocking the whole queue meant a guard meant to
+        // question a suspicious *deletion* also stopped ordinary edits syncing — and since the
+        // confirmation it asks for does not exist yet, that was a permanent stall rather than a
+        // prompt. Drawings keep flowing; the tombstones wait.
+        var deletionsHeldBack = 0
         if (exceedsDeletionGuard(queue)) {
-            return@withLock FlushReport(stillDirty = queue, blockedByDeletionGuard = true)
+            val held = queue.filter { isNotebookTombstone(it) }
+            deletionsHeldBack = held.size
+            stillDirty += held
+            queue = queue - held.toSet()
         }
 
         for (documentId in queue) {
@@ -287,7 +300,8 @@ class CouchSyncEngine(
                 stillDirty += documentId
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
-                if (error.isRetriable) break
+                // ...and so do rejected credentials, which no amount of retrying will fix.
+                if (error.isRetriable || error is CouchError.Unauthorized) break
             } catch (error: Exception) {
                 failures[documentId] = error.toString()
                 stillDirty += documentId
@@ -299,6 +313,8 @@ class CouchSyncEngine(
             merged = merged,
             stillDirty = stillDirty,
             failures = failures,
+            blockedByDeletionGuard = deletionsHeldBack > 0,
+            deletionsHeldBack = deletionsHeldBack,
         )
     }
 
@@ -423,12 +439,16 @@ class CouchSyncEngine(
      * everything. Ten-plus notebook tombstones that are also most of what this device knows is
      * treated as the former until a human says otherwise.
      */
+    private fun isNotebookTombstone(documentId: String): Boolean =
+        CouchDocId.split(documentId)?.first == CouchDocType.NOTEBOOK &&
+            (runCatching { store.load(documentId) }.getOrNull()?.isDeleted ?: false)
+
     private fun exceedsDeletionGuard(queue: List<String>): Boolean {
-        val tombstones = queue.filter {
-            CouchDocId.split(it)?.first == CouchDocType.NOTEBOOK &&
-                (runCatching { store.load(it) }.getOrNull()?.isDeleted ?: false)
-        }
+        val tombstones = queue.filter { isNotebookTombstone(it) }
         if (tombstones.size < MASS_DELETION_FLOOR) return false
+        // TODO(couch): measure against what the store actually holds, the way bopa now does.
+        // `revs` is never pruned, so this denominator grows with history and the guard slowly
+        // stops being able to trip. Needs `allDocumentIds` promoted onto CouchLocalStore.
         val knownNotebooks = revs.keys.filter {
             CouchDocId.split(it)?.first == CouchDocType.NOTEBOOK
         }
