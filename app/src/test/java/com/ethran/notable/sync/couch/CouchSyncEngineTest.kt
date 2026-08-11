@@ -1,6 +1,9 @@
 package com.ethran.notable.sync.couch
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -12,6 +15,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Two engines against one in-memory CouchDB — the iPad and the BOOX, as far as these tests are
@@ -612,6 +617,44 @@ class CouchSyncEngineTest {
             "the stroke drawn during the merge must not be deleted",
             ipadStore.page(pageId)!!.strokes.map { it.id }.contains("s-midflight"),
         )
+    }
+
+    /**
+     * A longpoll parks for the best part of a minute by design. While the engine held its lock
+     * across that wait, every local edit queued behind it: `markDirty` and the flush after it only
+     * ran once the peer happened to write something or the window expired, so sync-on-save was
+     * paced by the other device rather than by the user's pen.
+     */
+    @Test(timeout = 10_000)
+    fun a_local_edit_pushes_while_the_change_feed_is_parked() = runBlocking {
+        val parked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val gated = object : CouchTransport {
+            override fun send(request: CouchRequest): CouchResponse {
+                if (request.query.any { it.name == "feed" && it.value == "longpoll" }) {
+                    parked.countDown()
+                    release.await()
+                }
+                return server.send(request)
+            }
+        }
+        val engine = CouchSyncEngine(
+            CouchDbClient(gated, database = "notes"), ipadStore, deviceId = "ipad"
+        )
+
+        val feed = launch(Dispatchers.IO) { engine.pull(longpoll = true) }
+        assertTrue("the feed should have reached the server", parked.await(5, TimeUnit.SECONDS))
+
+        // The feed is now parked mid-request. A push must not have to wait for it.
+        ipadStore.set(pageId, CouchDocBody.Page(page(listOf(stroke("s1", 1, "ipad")), updatedAt = 5, by = "ipad")))
+        engine.markDirty(listOf(pageId))
+        val report = withTimeout(5_000) { engine.flush() }
+
+        assertEquals(listOf(pageId), report.pushed)
+        assertTrue(server.documentIds().contains(pageId))
+
+        release.countDown()
+        feed.join()
     }
 
 }
