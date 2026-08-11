@@ -327,6 +327,7 @@ class FakeLocalStore : CouchLocalStore {
 
     private val documents = LinkedHashMap<String, CouchDocBody>()
     private val copies = mutableListOf<String>()
+    private val copyBodies = mutableListOf<JsonObject>()
 
     val conflictCopies: List<String> get() = copies.toList()
 
@@ -392,10 +393,23 @@ class FakeLocalStore : CouchLocalStore {
         return merged.copy(strokes = merged.strokes + survivors)
     }
 
+    /**
+     * The identities a real store would have minted for its copies — the same derivation
+     * `RoomCouchStore` uses, so a test can tell "copied twice" from "copied into the same place".
+     */
+    val conflictCopyIdentities: Set<String>
+        get() = copies.indices.map { index ->
+            CouchAssetId.sha256Hex(
+                (copies[index] + couchJson.encodeToString(JsonObject.serializer(), copyBodies[index]))
+                    .toByteArray()
+            )
+        }.toSet()
+
     override fun applyConflictCopy(documentId: String, json: JsonObject) {
         // The real store materializes the remote document under a fresh identity; recording the
         // id is enough to assert that the local copy was left alone.
         copies += documentId
+        copyBodies += json
     }
 
     /**

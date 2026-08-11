@@ -806,6 +806,34 @@ class CouchSyncEngineTest {
     }
 
     /**
+     * Losing the checkpoint replays the whole feed, which this design calls safe — so the same
+     * unreadable document arrives again. Minting fresh ids each time turned every replay into
+     * another set of duplicate notebooks in the library.
+     */
+    @Test
+    fun the_same_unreadable_document_does_not_pile_up_copies() = runBlocking {
+        val id = CouchDocId.page("p-broken")
+        val body = buildJsonObject {
+            put("type", JsonPrimitive("page"))
+            put("schema", JsonPrimitive(99))
+        }
+        server.seedRaw(id, body)
+
+        ipad.pull()
+        // The checkpoint is lost — a reinstall, or a cleared state file. The design calls that safe
+        // and replays the feed from the start, so the same row arrives a second time.
+        val afterStateLoss =
+            CouchSyncEngine(CouchDbClient(server, database = "notes"), ipadStore, deviceId = "ipad")
+        afterStateLoss.pull()
+
+        assertEquals(listOf(id, id), ipadStore.conflictCopies)
+        assertEquals(
+            "the same unreadable document should not breed copies",
+            1,
+            ipadStore.conflictCopyIdentities.size,
+        )
+    }
+    /**
      * Protocol §7. A plain GET of a tombstone is a 404, indistinguishable from a document that
      * never existed — so a pusher that reads it as "absent" retries as a create, and a PUT with no
      * `_rev` over a tombstone succeeds. That silently undoes whatever the peer deleted.
