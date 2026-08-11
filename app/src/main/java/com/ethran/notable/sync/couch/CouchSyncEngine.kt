@@ -55,6 +55,7 @@ sealed class CouchDocBody {
     data class Page(val page: CouchPage) : CouchDocBody()
     data class Notebook(val notebook: CouchNotebook) : CouchDocBody()
     data class Folder(val folder: CouchFolder) : CouchDocBody()
+    data class Asset(val asset: CouchAsset) : CouchDocBody()
     data class Deleted(val tombstone: CouchDeletedDoc) : CouchDocBody()
 
     val isDeleted: Boolean get() = this is Deleted
@@ -65,7 +66,20 @@ sealed class CouchDocBody {
             is Page -> page.updatedAt
             is Notebook -> notebook.updatedAt
             is Folder -> folder.updatedAt
+            is Asset -> asset.updatedAt
             is Deleted -> tombstone.updatedAt
+        }
+
+    /**
+     * The `asset:` documents this body names. Only a page names any; the engine uses this to send
+     * an image's bytes before the page that places it, and to fetch them when one arrives.
+     */
+    val referencedAssetIds: List<String>
+        get() = if (this is Page) {
+            page.images.mapNotNull { it.assetId }
+                .filter { CouchAssetId.sha256HexOfAssetId(it) != null }
+        } else {
+            emptyList()
         }
 }
 
@@ -85,6 +99,10 @@ fun CouchMerge.mergeBodies(a: CouchDocBody, b: CouchDocBody): CouchDocBody? = wh
 
     a is CouchDocBody.Folder && b is CouchDocBody.Folder ->
         CouchDocBody.Folder(CouchMerge.mergeFolder(a.folder, b.folder))
+
+    // Protocol §5.4: an asset's id is the hash of its bytes, so two copies of one id are the same
+    // bytes. There is nothing to reconcile.
+    a is CouchDocBody.Asset && b is CouchDocBody.Asset -> a
 
     a is CouchDocBody.Deleted && b is CouchDocBody.Deleted ->
         CouchDocBody.Deleted(mergeTombstones(a.tombstone, b.tombstone))
@@ -145,6 +163,18 @@ interface CouchLocalStore {
      * under a new identity — protocol §6.5. Never overwrite on this path.
      */
     fun applyConflictCopy(documentId: String, json: JsonObject)
+
+    /**
+     * `asset:<sha256>` ids a local page places but whose bytes this device does not hold — an
+     * image the peer drew in, whose blob has still to be fetched.
+     *
+     * The store answers rather than the engine because only the store knows where the bytes will
+     * go, and the answer has to survive a restart: a page can arrive in one session and its image
+     * only be fetchable in the next.
+     *
+     * A store that holds no images has none to fetch, which is why this has a default.
+     */
+    fun missingAssetIds(): List<String> = emptyList()
 }
 
 // endregion
@@ -182,6 +212,8 @@ class CouchSyncEngine(
         val pushBack: List<String> = emptyList(),
         val skippedEchoes: List<String> = emptyList(),
         val conflictCopies: List<String> = emptyList(),
+        /** Image blobs downloaded for pages that reference them (protocol §3.4). */
+        val fetchedAssets: List<String> = emptyList(),
         val lastSeq: String = "0",
     )
 
@@ -263,6 +295,19 @@ class CouchSyncEngine(
                 dirty.remove(documentId)
                 return if (didMerge) PushOutcome.MERGED_THEN_PUSHED else PushOutcome.PUSHED
             } catch (_: CouchError.Conflict) {
+                if (CouchDocId.split(documentId)?.first == CouchDocType.ASSET) {
+                    // Protocol §3.4: an asset id is the hash of its bytes, so a document already
+                    // at that id *is* this upload. Merging or retrying would only re-send bytes
+                    // the server demonstrably has.
+                    //
+                    // Its revision is read anyway, because a known revision is how the next flush
+                    // tells "already uploaded" from "never sent" — without it every flush would
+                    // re-offer the whole image just to be told again that it is there.
+                    runCatching { client.getRaw(documentId)?.rev }.getOrNull()
+                        ?.let { revs[documentId] = it }
+                    dirty.remove(documentId)
+                    return PushOutcome.PUSHED
+                }
                 didMerge = true
                 val remote = fetchBody(documentId)
                 if (remote == null) {
@@ -305,6 +350,9 @@ class CouchSyncEngine(
             is CouchDocBody.Folder ->
                 client.put(documentId, rev, body.folder, CouchFolder.serializer())
 
+            is CouchDocBody.Asset ->
+                client.put(documentId, rev, body.asset, CouchAsset.serializer())
+
             is CouchDocBody.Deleted ->
                 client.put(
                     documentId, rev, body.tombstone, CouchDeletedDoc.serializer(), deleted = true
@@ -321,7 +369,12 @@ class CouchSyncEngine(
     /**
      * Push order: assets, then folders and pages, then notebooks. A notebook names its folder and
      * its pages, so sending it last means a reader never sees a manifest pointing at documents
-     * that have not landed yet.
+     * that have not landed yet — and an image's bytes go before the page that places it, so the
+     * peer never has a reference it cannot resolve.
+     *
+     * Assets are not queued by the app: nothing "edits" one, and an image placed twice is the same
+     * document. They are derived here from the pages being sent, and skipped once the server is
+     * known to hold them — immutability means a revision we have seen can never go stale.
      */
     private fun orderedDirty(): List<String> {
         fun rank(documentId: String): Int = when (CouchDocId.split(documentId)?.first) {
@@ -330,7 +383,13 @@ class CouchSyncEngine(
             CouchDocType.PAGE -> 2
             else -> 3
         }
-        return dirty.sortedWith(compareBy({ rank(it) }, { it }))
+        val queue = dirty.toMutableSet()
+        for (documentId in dirty) {
+            if (CouchDocId.split(documentId)?.first != CouchDocType.PAGE) continue
+            val body = runCatching { store.load(documentId) }.getOrNull() ?: continue
+            queue += body.referencedAssetIds.filter { it !in revs }
+        }
+        return queue.sortedWith(compareBy({ rank(it) }, { it }))
     }
 
     /**
@@ -378,6 +437,14 @@ class CouchSyncEngine(
                 skippedEchoes += row.id
                 continue
             }
+            // An asset announces itself here without its bytes — the feed carries the document,
+            // and CouchDB renders an attachment as a stub. Downloading every image the moment it
+            // appears would also mean downloading images for notebooks this device may never open,
+            // so the bytes are fetched below, for the pages that turn out to place them.
+            if (CouchDocId.split(row.id)?.first == CouchDocType.ASSET) {
+                revs[row.id] = row.rev
+                continue
+            }
 
             val json = row.json
             if (json == null) {
@@ -420,14 +487,46 @@ class CouchSyncEngine(
         }
 
         lastSeq = changes.lastSeq
+        val fetchedAssets = fetchMissingAssets()
         persist()
         PullReport(
             applied = applied,
             pushBack = pushBack,
             skippedEchoes = skippedEchoes,
             conflictCopies = conflictCopies,
+            fetchedAssets = fetchedAssets,
             lastSeq = changes.lastSeq,
         )
+    }
+
+    /**
+     * Downloads the blobs local pages reference and this device does not hold yet.
+     *
+     * Driven by the store's own list rather than by what this pull happened to apply, so a fetch
+     * that failed — offline halfway through, a peer that had not uploaded the bytes yet — is
+     * simply retried on the next pull instead of needing the page to change again.
+     *
+     * A failure here never fails the pull: the page and its ink are already applied, and an image
+     * that is still on its way is a picture that has not appeared yet, not lost work.
+     */
+    private suspend fun fetchMissingAssets(): List<String> {
+        val wanted = runCatching { store.missingAssetIds() }.getOrNull().orEmpty()
+        val fetched = mutableListOf<String>()
+        for (assetId in wanted) {
+            val sha = CouchAssetId.sha256HexOfAssetId(assetId) ?: continue
+            val blob = runCatching { client.getAttachment(assetId) }.getOrNull() ?: continue
+            // The id is a promise about the bytes. Checking it costs one hash and turns a
+            // truncated or mis-served download into a retry rather than into a corrupt image that
+            // would then be re-uploaded under a name that does not describe it.
+            if (CouchAssetId.sha256Hex(blob.bytes) != sha) continue
+            val now = Instant.now().toString()
+            val asset = CouchAsset.of(
+                blob.bytes, at = now, updatedBy = deviceId, contentType = blob.contentType
+            )
+            runCatching { store.apply(assetId, CouchDocBody.Asset(asset)) }
+                .onSuccess { fetched += assetId }
+        }
+        return fetched
     }
 
     // endregion

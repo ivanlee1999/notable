@@ -11,12 +11,15 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.time.Instant
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
@@ -225,6 +228,34 @@ private class ScenarioDevice(
                 markDirty(docId(op))
             }
 
+            "placeImage" -> {
+                val page = page(op)
+                val bytes = op.bytes("bytes")
+                val assetId = CouchAssetId.forBytes(bytes)
+                // The bytes land in this device's own store first, exactly as importing a picture
+                // does; sync's job is to notice the page now names an asset and carry it across.
+                store.set(
+                    assetId,
+                    CouchDocBody.Asset(CouchAsset.of(bytes, at = at, updatedBy = DEVICE_ID)),
+                )
+                store.set(
+                    docId(op),
+                    CouchDocBody.Page(
+                        page.copy(
+                            images = page.images + CouchImage(
+                                id = op.str("image").orEmpty(),
+                                assetId = assetId,
+                                x = op.intValue("x"), y = op.intValue("y"),
+                                width = op.intValue("width"), height = op.intValue("height"),
+                                createdAt = at, updatedAt = at,
+                            ),
+                            updatedAt = at, updatedBy = DEVICE_ID,
+                        )
+                    ),
+                )
+                markDirty(docId(op))
+            }
+
             "setBackground" -> {
                 val page = page(op)
                 store.set(
@@ -362,6 +393,26 @@ private class ScenarioDevice(
                 op.strings("ids").sorted(),
                 page(op).strokes.map { it.id }.sorted(),
             )
+
+            "expectImage" -> {
+                val bytes = op.bytes("bytes")
+                val assetId = CouchAssetId.forBytes(bytes)
+                val placed = page(op).images.firstOrNull { it.id == op.str("image") }
+                assertEquals(
+                    "[$scenario] ${describe(op)} should place $assetId",
+                    assetId,
+                    placed?.assetId,
+                )
+                // The reference is only half of it: without the bytes the peer cannot draw
+                // anything, which is the whole failure this scenario exists to catch.
+                val held = store.load(assetId) as? CouchDocBody.Asset
+                assertNotNull("[$scenario] ${describe(op)} holds no bytes for $assetId", held)
+                assertArrayEquals(
+                    "[$scenario] ${describe(op)} holds different bytes",
+                    bytes,
+                    held!!.asset.bytes,
+                )
+            }
 
             "expectPageIds" -> assertEquals(
                 "[$scenario] ${describe(op)} pageIds",
@@ -520,6 +571,9 @@ private fun decodeBody(json: String, deleted: Boolean): CouchDocBody? = runCatch
         CouchDocType.FOLDER ->
             CouchDocBody.Folder(couchJson.decodeFromString(CouchFolder.serializer(), json))
 
+        CouchDocType.ASSET ->
+            CouchDocBody.Asset(couchJson.decodeFromString(CouchAsset.serializer(), json))
+
         else -> null
     }
 }.getOrNull()
@@ -528,6 +582,9 @@ private fun encodeBody(body: CouchDocBody): String = when (body) {
     is CouchDocBody.Page -> couchJson.encodeToString(CouchPage.serializer(), body.page)
     is CouchDocBody.Notebook -> couchJson.encodeToString(CouchNotebook.serializer(), body.notebook)
     is CouchDocBody.Folder -> couchJson.encodeToString(CouchFolder.serializer(), body.folder)
+    // The blob rides along in `_attachments`, so a device that downloaded a picture in one step
+    // still has it in the next — which is what makes the assertion about bytes real.
+    is CouchDocBody.Asset -> couchJson.encodeToString(CouchAsset.serializer(), body.asset)
     is CouchDocBody.Deleted -> couchJson.encodeToString(CouchDeletedDoc.serializer(), body.tombstone)
 }
 
@@ -555,6 +612,16 @@ private class ScenarioStore(
         if (documentId !in copies) copies += documentId
     }
 
+    /**
+     * Every asset a held page places whose bytes are not here — the same question the real store
+     * answers from the image rows.
+     */
+    override fun missingAssetIds(): List<String> =
+        documents.values.flatMap { it.referencedAssetIds }
+            .filter { it !in documents }
+            .distinct()
+            .sorted()
+
     fun set(documentId: String, body: CouchDocBody) {
         documents[documentId] = body
     }
@@ -574,6 +641,15 @@ private fun JsonObject.str(key: String): String? = when (val value = this[key]) 
     is JsonPrimitive -> value.content
     else -> null
 }
+
+private fun JsonObject.intValue(key: String): Int = (this[key] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+
+/**
+ * The picture an image op works with, base64 in the script so both apps hash the same bytes and
+ * therefore agree on the asset id without ever comparing notes.
+ */
+private fun JsonObject.bytes(key: String): ByteArray =
+    str(key)?.let { Base64.getDecoder().decode(it) } ?: error("op needs `$key` as base64")
 
 private fun JsonObject.strings(key: String): List<String> =
     (this[key] as? JsonArray)?.map { it.jsonPrimitive.content } ?: emptyList()

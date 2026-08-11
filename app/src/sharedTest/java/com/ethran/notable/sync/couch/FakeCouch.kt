@@ -26,7 +26,14 @@ class FakeCouchTransport : CouchTransport {
         val deleted: Boolean,
         val json: JsonObject,
         val seq: Int,
+        /**
+         * Attachment bytes, held apart from the body exactly as CouchDB holds them: a document
+         * read never carries them, only a stub saying they exist.
+         */
+        val attachments: Map<String, Attachment> = emptyMap(),
     )
+
+    private class Attachment(val contentType: String, val bytes: ByteArray)
 
     private val lock = Any()
     private val docs = LinkedHashMap<String, Doc>()
@@ -53,11 +60,15 @@ class FakeCouchTransport : CouchTransport {
         if (tail == "_changes") return changes(request)
         failingDocumentIds[tail]?.let { return CouchResponse(status = it) }
 
-        return when (request.method) {
-            "GET" ->
+        return when {
+            request.method == "GET" && components.size > 2 &&
+                components.last() == CouchAssetId.BLOB_NAME ->
+                attachment(components.drop(1).dropLast(1).joinToString("/"))
+
+            request.method == "GET" ->
                 if (request.query.any { it.name == "open_revs" }) openRevsAll(tail) else get(tail)
 
-            "PUT" -> put(tail, request)
+            request.method == "PUT" -> put(tail, request)
             else -> CouchResponse(status = 405)
         }
     }
@@ -96,6 +107,20 @@ class FakeCouchTransport : CouchTransport {
         )
     }
 
+    /**
+     * `GET /{db}/{docid}/blob` — the only way to get an attachment's bytes back, since every
+     * document read renders them as a stub.
+     */
+    private fun attachment(documentId: String): CouchResponse {
+        val blob = docs[documentId]?.attachments?.get(CouchAssetId.BLOB_NAME)
+            ?: return CouchResponse(status = 404)
+        return CouchResponse(
+            status = 200,
+            headers = mapOf("Content-Type" to blob.contentType),
+            body = blob.bytes,
+        )
+    }
+
     private fun put(documentId: String, request: CouchRequest): CouchResponse {
         val body = request.body ?: return CouchResponse(status = 400)
         val json = runCatching {
@@ -125,7 +150,14 @@ class FakeCouchTransport : CouchTransport {
         val generation = existing?.rev?.substringBefore('-')?.toIntOrNull() ?: 0
         val newRev = "${generation + 1}-r$revCounter"
         val stripped = JsonObject(json.filterKeys { it !in RESERVED })
-        docs[documentId] = Doc(rev = newRev, deleted = deleted, json = stripped, seq = seqCounter)
+        val attachments = extractAttachments(stripped)
+        docs[documentId] = Doc(
+            rev = newRev,
+            deleted = deleted,
+            json = attachments.second,
+            seq = seqCounter,
+            attachments = attachments.first,
+        )
 
         val result = buildJsonObject {
             put("ok", JsonPrimitive(true))
@@ -136,6 +168,40 @@ class FakeCouchTransport : CouchTransport {
         // asymmetry rather than smoothing it over is what catches a client that accepts only 201
         // and therefore fails every deletion against a real server.
         return CouchResponse(status = if (deleted) 200 else 201, body = encode(result))
+    }
+
+    /**
+     * Takes inlined attachment bytes out of the body and leaves the stub CouchDB would leave.
+     * Modelled rather than smoothed over: a client that expected to read a blob straight out of
+     * the change feed would pass against a fake that kept the data and fail against a server.
+     */
+    private fun extractAttachments(
+        json: JsonObject,
+    ): Pair<Map<String, Attachment>, JsonObject> {
+        val inlined = json["_attachments"] as? JsonObject ?: return emptyMap<String, Attachment>() to json
+        val stored = mutableMapOf<String, Attachment>()
+        val stubs = buildJsonObject {
+            for ((name, element) in inlined) {
+                val blob = element as? JsonObject ?: continue
+                val contentType = blob["content_type"]?.jsonPrimitive?.content
+                    ?: "application/octet-stream"
+                val bytes = blob["data"]?.jsonPrimitive?.content?.fromAttachmentData() ?: ByteArray(0)
+                stored[name] = Attachment(contentType, bytes)
+                put(
+                    name,
+                    buildJsonObject {
+                        put("content_type", JsonPrimitive(contentType))
+                        put("stub", JsonPrimitive(true))
+                        put("length", JsonPrimitive(bytes.size))
+                    }
+                )
+            }
+        }
+        val body = buildJsonObject {
+            for ((key, value) in json) if (key != "_attachments") put(key, value)
+            put("_attachments", stubs)
+        }
+        return stored to body
     }
 
     private fun conflict(): CouchResponse = CouchResponse(
@@ -184,6 +250,12 @@ class FakeCouchTransport : CouchTransport {
     // region Test helpers
 
     fun revision(documentId: String): String? = synchronized(lock) { docs[documentId]?.rev }
+
+    /**
+     * Forgets what has been asked for so far, for tests that assert about the requests a *later*
+     * step makes.
+     */
+    fun forgetRequests() = synchronized(lock) { log.clear() }
 
     fun isDeleted(documentId: String): Boolean =
         synchronized(lock) { docs[documentId]?.deleted ?: false }
@@ -251,6 +323,16 @@ class FakeLocalStore : CouchLocalStore {
         // id is enough to assert that the local copy was left alone.
         copies += documentId
     }
+
+    /**
+     * Every asset a held page places whose bytes are not here — the same question the real store
+     * answers from the image rows.
+     */
+    override fun missingAssetIds(): List<String> =
+        documents.values.flatMap { it.referencedAssetIds }
+            .filter { it !in documents }
+            .distinct()
+            .sorted()
 
     // region Test helpers
 
