@@ -57,8 +57,12 @@ jobs:
         run: |
           export STORE_FILE="../${{ steps.decode_keystore.outputs.filePath }}"
           export STORE_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
-          export KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
-          export KEY_PASSWORD="${{ secrets.KEY_PASSWORD }}"
+          # RELEASE_-prefixed, matching release.yml and the secrets that actually exist. Reading
+          # the unprefixed names produced an empty alias and failed at packageDebug with
+          # "No key with alias '' found in keystore" -- a signing error that reads like a broken
+          # keystore rather than a typo in a secret name.
+          export KEY_ALIAS="${{ secrets.RELEASE_KEY_ALIAS }}"
+          export KEY_PASSWORD="${{ secrets.RELEASE_KEY_PASSWORD }}"
           export SHIPBOOK_APP_ID="${{ secrets.SHIPBOOK_APP_ID }}"
           export SHIPBOOK_APP_KEY="${{ secrets.SHIPBOOK_APP_KEY }}"
 
