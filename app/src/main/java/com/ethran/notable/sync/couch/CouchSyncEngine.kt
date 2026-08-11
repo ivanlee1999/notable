@@ -40,7 +40,14 @@ data class CouchSyncState(
 data class CouchDeletedDoc(
     val type: String,
     val schema: Int = COUCH_SCHEMA_VERSION,
-    val deletedAt: String,
+    /**
+     * When the deletion happened, or empty when this device cannot know — a tombstone written
+     * without a body (a plain HTTP `DELETE`, or a client that did not keep one) carries no
+     * instant. Empty means *unknown*, not "the epoch" and emphatically not "now": it loses every
+     * comparison in [CouchMerge.resolveDeletion], so an unknown deletion yields to a live document
+     * rather than destroying it (protocol §6.4).
+     */
+    val deletedAt: String = "",
     /** Empty only transiently: normalized to [deletedAt] below, matching Swift's initializer. */
     var updatedAt: String = "",
     val updatedBy: String = "",
@@ -128,7 +135,14 @@ private fun mergeTombstones(x: CouchDeletedDoc, y: CouchDeletedDoc): CouchDelete
         type = x.type,
         schema = maxOf(x.schema, y.schema),
         // A deletion cannot un-happen: the earliest observation of it is the true one.
-        deletedAt = CouchMerge.earlier(x.deletedAt, y.deletedAt),
+        // A deletion cannot un-happen: the earliest observation of it is the true one. An unknown
+        // instant is not an early one — taking it would erase a real timestamp the peer recorded,
+        // so a known value always survives beside an empty one.
+        deletedAt = when {
+            x.deletedAt.isEmpty() -> y.deletedAt
+            y.deletedAt.isEmpty() -> x.deletedAt
+            else -> CouchMerge.earlier(x.deletedAt, y.deletedAt)
+        },
         updatedAt = CouchMerge.later(x.updatedAt, y.updatedAt),
         updatedBy = if (xWins) x.updatedBy else y.updatedBy,
     )
@@ -137,7 +151,9 @@ private fun mergeTombstones(x: CouchDeletedDoc, y: CouchDeletedDoc): CouchDelete
 private fun resolveTombstoneAgainstLive(
     tombstone: CouchDeletedDoc,
     live: CouchDocBody,
-): CouchDocBody = when (CouchMerge.resolveDeletion(live.updatedAt, tombstone.deletedAt)) {
+): CouchDocBody = when (
+    CouchMerge.resolveDeletion(live.updatedAt, tombstone.deletedAt.ifEmpty { null })
+) {
     CouchMerge.DeletionOutcome.RESURRECT -> live
     CouchMerge.DeletionOutcome.APPLY_DELETION -> CouchDocBody.Deleted(tombstone)
 }
@@ -672,12 +688,12 @@ class CouchSyncEngine(
             val decoded = runCatching {
                 couchJson.decodeFromJsonElement(CouchDeletedDoc.serializer(), json)
             }.getOrNull()
+            // `deletedAt` is left *empty* rather than stamped with the current time. Stamping "now"
+            // reads as a deletion newer than any edit this device has ever made, so §6.4's
+            // resurrect branch became unreachable from here and a stripped tombstone destroyed
+            // work the user did after the deletion. Empty means unknown and loses the comparison.
             return CouchDocBody.Deleted(
-                decoded ?: CouchDeletedDoc(
-                    type = type,
-                    deletedAt = Instant.now().toString(),
-                    updatedBy = deviceId,
-                )
+                decoded ?: CouchDeletedDoc(type = type, updatedBy = deviceId)
             )
         }
 
