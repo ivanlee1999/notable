@@ -346,10 +346,16 @@ fun drawBg(
  * It used to mark "what will still be visible in portrait", because the page *was* the screen and
  * there was no page edge to draw. Now there is one, and it is the same edge on every device — which
  * is the point: ink to the right of this line is off-page for the iPad too, rather than lost.
+ *
+ * A page that declares a size is bounded to its sheet (see `PageView.maxHorizontalScroll`), so the
+ * edge sits *on* the right edge of the view and there is nothing beyond it to warn about — hence
+ * the `>=`, which drops the line rather than painting it down the screen's own border. It still
+ * draws where off-page space is genuinely visible: an undeclared page panned past the screen's
+ * width, and any render wider than the sheet.
  */
 fun drawMargin(canvas: Canvas, scroll: Offset, scale: Float, sheet: PageSize) {
     val margin = sheet.width - scroll.x
-    if (margin < 0 || margin > canvas.width / scale) return
+    if (margin < 0 || margin >= canvas.width / scale) return
     canvas.drawLine(
         margin, padding.toFloat(), margin, (canvas.height / scale - padding), marginPaint
     )
