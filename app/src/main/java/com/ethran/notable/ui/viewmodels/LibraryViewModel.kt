@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -111,11 +112,20 @@ class LibraryViewModel @Inject constructor(
 
     // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
     // through different channels, and the header's Sync now button is about the run as a whole.
+    //
+    // Flattened to the boolean the header actually reads before it joins the screen state. A run
+    // reports every page of every notebook through [SyncProgressReporter], and all of that says the
+    // same one thing up here; stopping it at this line keeps a long sync from rebuilding the whole
+    // library state a few hundred times to arrive at "still true".
+    private val _isSyncingFlow = combine(
+        syncProgressReporter.state, couchSync.state
+    ) { webdav, couch ->
+        webdav is SyncState.Syncing || couch.status is CouchSyncController.Status.Syncing
+    }.distinctUntilChanged()
+
     private val _syncStatusFlow = combine(
-        syncStatusStore.badges, syncProgressReporter.state, couchSync.state
-    ) { badges, webdav, couch ->
-        badges to (webdav is SyncState.Syncing || couch.status is CouchSyncController.Status.Syncing)
-    }
+        syncStatusStore.badges, _isSyncingFlow
+    ) { badges, syncing -> badges to syncing }
 
     // 2. Group the database flows (plus per-notebook sync badges) semantically
     private val _dbDataFlow = combine(
