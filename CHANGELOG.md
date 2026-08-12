@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.10.0
+
+A page pulled in from another device now shows up without leaving the editor. Paper has edges you
+can't pinch or pan past, and a new notebook asks what kind of paper it wants before it exists.
+
+### A page that changed elsewhere stayed stale until you left it
+
+- **Ink synced in from another device landed in the database but not on screen.** The Library
+  thumbnail picked it up right away, since it reads straight from Room; the editor did not, because
+  it caches a page's strokes once and never re-reads them. A pull that landed while you were sitting
+  in the Library, or the manual Refresh command, changed nothing you could actually see.
+- The cache now hears which pages a sync rewrote: the page you have open repaints in place, and a
+  page you're not drawing just reads fresh the next time you open it. Ink drawn while a pull is still
+  landing is kept rather than clobbered by it.
+- WebDAV downloads now report the pages they replace the same way CouchDB sync always did.
+
+### A self-hosted CouchDB server can be reached over plain HTTP again
+
+- **Syncing to a server on your own network could fail before a socket even opened**, and the app
+  reported it as "Offline — changes are saved and will sync when you reconnect" — wrong on every
+  count, since Android blocks cleartext HTTP by default and nothing was ever sent. Cleartext is now
+  permitted for a named self-hosted server, and a connection actually blocked by policy says so
+  instead of pretending to be an outage.
+- The one LAN address the app happened to allow before belonged to nobody's real server. A local
+  CouchDB now wants either an `https://` endpoint or its exact host added on purpose.
+
+### The edge of the paper is now an edge
+
+- **On a tablet wider than its pages, pinching out or panning right used to carry you past the
+  sheet** into blank space beside it — and the pen wrote there just as happily, onto ink no other
+  device could ever show. Zooming out now stops at the page's fit, and panning stops at the sheet's
+  right edge, so whatever the pen is over is always actually on the paper.
+- Opening a page, rotating the tablet, and "reset view" now all return to that fit rather than to
+  1:1, which was an arbitrary zoom on a sheet with a real size. The toolbar's reset button only shows
+  up once you've left the fit.
+- Pages without a declared size are unchanged — they still pan out to the edge of their ink rather
+  than to a bound.
+
+### Creating a notebook now asks what its paper should be
+
+- **A notebook's paper size is fixed the moment it exists, but choosing one meant leaving the create
+  dialog** for Settings, changing the default there, and coming back. The create prompt now asks for
+  page size and template up front, each starting on your usual default, so accepting the whole dialog
+  is still one tap.
+
+### Smaller things
+
+- "Sync now" lives in the Library header now, where you're actually looking when you wonder about
+  it, instead of buried in Settings or a single notebook's dialog.
+- A large sync no longer rebuilds the Library's whole state on every page it touches — only whether
+  something is syncing at all reaches the screen.
+- Letter and Legal now report one rounded millimetre size everywhere. The settings picker and the
+  new-notebook dialog used to truncate Letter to 215 mm while a label computed the same sheet a
+  different way and rounded it to 216.
+
+### Upgrading
+
+No database change — the schema stays where 0.9.0 left it.
+
 ## 0.9.0
 
 A page now has a size of its own. Until now it was as wide as the screen it was drawn on, which
