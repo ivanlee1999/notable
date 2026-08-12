@@ -378,7 +378,7 @@ class CouchSyncEngine(
             queue = queue - held.toSet()
         }
 
-        for (documentId in queue) {
+        for ((index, documentId) in queue.withIndex()) {
             try {
                 when (push(documentId)) {
                     PushOutcome.PUSHED -> pushed += documentId
@@ -391,7 +391,15 @@ class CouchSyncEngine(
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
                 // ...and so do rejected credentials, which no amount of retrying will fix.
-                if (error.isRetriable || error is CouchError.Unauthorized) break
+                if (error.isRetriable || error is CouchError.Unauthorized) {
+                    // Everything behind this one is still in the outbox and was never attempted.
+                    // Reporting only the document that happened to fail made `stillDirty` mean
+                    // "the last thing we tried" rather than "what is still waiting" — which
+                    // understates the badge, misleads the log, and would leave a reconnect
+                    // believing there was nothing to drain.
+                    stillDirty += queue.drop(index + 1)
+                    break
+                }
             } catch (error: Exception) {
                 failures[documentId] = error.toString()
                 stillDirty += documentId
