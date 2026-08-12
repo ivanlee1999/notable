@@ -366,10 +366,18 @@ fun NotebookConfigDialog(
                     showExportDialog = true
                 }
                 ActionButton(stringResource(R.string.details_notebook_buttons_copy)) {
+                    onClose()
                     scope.launch {
-                        snackManager.displaySnack(
-                            SnackConf(text = "Not implemented!", duration = 2000)
-                        )
+                        snackManager.runWithSnack("Copying notebook…", 3000) {
+                            val copyId = appRepository.duplicateNotebook(bookId)
+                            if (copyId == null) "Could not copy this notebook"
+                            else {
+                                // Queued explicitly: the outbox is fed by ink edits, and a copy
+                                // nobody has drawn in yet is not one of those.
+                                couchSync.noteDocumentChanged(CouchDocId.notebook(copyId))
+                                "Notebook copied"
+                            }
+                        }
                     }
                 }
                 // Sync this one notebook on demand. Until now the only ways to get a notebook to

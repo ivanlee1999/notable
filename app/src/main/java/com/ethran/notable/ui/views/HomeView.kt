@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -37,13 +39,17 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -81,6 +87,8 @@ import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.KaleidoMetrics
 import com.ethran.notable.ui.theme.kaleidoMetrics
+import com.ethran.notable.ui.viewmodels.LibrarySort
+import com.ethran.notable.ui.viewmodels.LibrarySortOrder
 import com.ethran.notable.ui.viewmodels.LibraryUiState
 import com.ethran.notable.ui.viewmodels.LibraryViewModel
 import com.ethran.notable.sync.SyncBadge
@@ -89,9 +97,11 @@ import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
+import compose.icons.feathericons.Search
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Upload
+import compose.icons.feathericons.X
 import compose.icons.feathericons.Zap
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.launch
@@ -175,6 +185,8 @@ fun Library(
         onNavigateToFolder = { id -> navController.navigate(LibraryDestination.createRoute(id)) },
         onNavigateToSettings = { navController.navigate("settings") },
         onNavigateToTrash = { navController.navigate(TrashDestination.route) },
+        onQueryChanged = viewModel::onQueryChanged,
+        onSortChanged = viewModel::onSortChanged,
         onSyncNow = {
             scope.launch {
                 val outcome = requestFullSync(kvProxy, viewModel.syncScheduler)
@@ -224,6 +236,8 @@ fun LibraryContent(
     onNavigateToFolder: (String?) -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToTrash: () -> Unit,
+    onQueryChanged: (String) -> Unit,
+    onSortChanged: (LibrarySortOrder, Boolean) -> Unit,
     onSyncNow: () -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     goToPage: (String) -> Unit,
@@ -243,6 +257,17 @@ fun LibraryContent(
         val metrics = kaleidoMetrics(maxWidth)
         val pickImportFile = rememberImportPicker(onImportPdf, onImportXopp)
 
+        // Sorted here rather than in the view model: the order is a snapshot-state setting, and
+        // reading it during composition is what makes a change to it redraw the shelf.
+        val settings = GlobalAppSettings.current
+        val sortOrder = LibrarySortOrder.fromKeyOrDefault(settings.librarySortOrder)
+        val sortedFolders = remember(uiState.folders, sortOrder, settings.librarySortDescending) {
+            LibrarySort.folders(uiState.folders, sortOrder, settings.librarySortDescending)
+        }
+        val sortedBooks = remember(uiState.books, sortOrder, settings.librarySortDescending) {
+            LibrarySort.notebooks(uiState.books, sortOrder, settings.librarySortDescending)
+        }
+
         Column(Modifier.fillMaxSize()) {
             LibraryHeader(
                 metrics = metrics,
@@ -251,6 +276,8 @@ fun LibraryContent(
                 onNavigateToSettings = onNavigateToSettings,
                 onSyncNow = onSyncNow,
                 onCreateNewNotebook = onCreateNewNotebook,
+                onQueryChanged = onQueryChanged,
+                onSortChanged = onSortChanged,
             )
 
             LazyColumn(
@@ -263,10 +290,15 @@ fun LibraryContent(
                 )
             ) {
                 item(key = "folders-header") {
-                    SectionHeader(stringResource(R.string.home_folders))
+                    SectionHeader(
+                        stringResource(
+                            if (uiState.isSearching) R.string.home_folders_found
+                            else R.string.home_folders
+                        )
+                    )
                     Spacer(Modifier.height(12.dp))
                 }
-                items(uiState.folders, key = { "folder-${it.id}" }) { folder ->
+                items(sortedFolders, key = { "folder-${it.id}" }) { folder ->
                     FolderRow(
                         appRepository = appRepository,
                         folder = folder,
@@ -275,7 +307,7 @@ fun LibraryContent(
                         onOpen = { onNavigateToFolder(folder.id) },
                     )
                 }
-                item(key = "folder-add") {
+                if (!uiState.isSearching) item(key = "folder-add") {
                     ListRow(
                         hit = metrics.hit,
                         label = stringResource(R.string.home_add_new_folder),
@@ -300,7 +332,7 @@ fun LibraryContent(
                 // Only once something is in it. A permanently visible Trash row is a permanent
                 // reminder of a screen almost nobody needs; a row that appears the moment
                 // something is deleted is how the user finds out deletion was recoverable at all.
-                if (uiState.trashedCount > 0) {
+                if (uiState.trashedCount > 0 && !uiState.isSearching) {
                     item(key = "trash-row") {
                         ListRow(
                             hit = metrics.hit,
@@ -324,12 +356,15 @@ fun LibraryContent(
                     }
                 }
 
-                item(key = "pages-header") {
+                // Quick pages drop out of a search: they are matched by nothing, having no title
+                // of their own, so leaving the row in would look like a result set that ignored
+                // the query.
+                if (!uiState.isSearching) item(key = "pages-header") {
                     Spacer(Modifier.height(22.dp))
                     SectionHeader(stringResource(R.string.home_quick_pages))
                     Spacer(Modifier.height(12.dp))
                 }
-                item(key = "pages-row") {
+                if (!uiState.isSearching) item(key = "pages-row") {
                     ShowPagesRow(
                         appRepository = appRepository,
                         pages = uiState.singlePages,
@@ -344,14 +379,18 @@ fun LibraryContent(
 
                 item(key = "books-header") {
                     Spacer(Modifier.height(22.dp))
-                    SectionHeader(stringResource(R.string.home_notebooks))
+                    SectionHeader(
+                        stringResource(
+                            if (uiState.isSearching) R.string.home_notebooks_found
+                            else R.string.home_notebooks
+                        )
+                    )
                     Spacer(Modifier.height(14.dp))
                 }
 
                 // An empty notebook is a leftover from a failed import; warn once rather than
                 // drawing a cover for a book with no page to preview.
-                val books = uiState.books.reversed()
-                val (drawable, empty) = books.partition { it.pageIds.isNotEmpty() }
+                val (drawable, empty) = sortedBooks.partition { it.pageIds.isNotEmpty() }
 
                 if (!uiState.isImporting) {
                     items(empty, key = { "empty-${it.id}" }) { book ->
@@ -442,6 +481,8 @@ private fun LibraryHeader(
     onNavigateToSettings: () -> Unit,
     onSyncNow: () -> Unit,
     onCreateNewNotebook: () -> Unit,
+    onQueryChanged: (String) -> Unit = {},
+    onSortChanged: (LibrarySortOrder, Boolean) -> Unit = { _, _ -> },
 ) {
     val root = stringResource(R.string.home_view_name)
     Column(
@@ -519,13 +560,152 @@ private fun LibraryHeader(
                 )
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
+        LibrarySearchRow(
+            metrics = metrics,
+            query = uiState.query,
+            onQueryChanged = onQueryChanged,
+            onSortChanged = onSortChanged,
+        )
+        Spacer(Modifier.height(10.dp))
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(Kaleido.SectionRule)
                 .background(Kaleido.Ink)
         )
+    }
+}
+
+/**
+ * Search and sort, on one line under the title.
+ *
+ * Both are about *finding* something, and neither is worth a screen of its own: the library used
+ * to offer no way to look for a notebook by name, and no order but the database's own reversed —
+ * which is neither "recent" nor "alphabetical" but an artefact.
+ */
+@Composable
+private fun LibrarySearchRow(
+    metrics: KaleidoMetrics,
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    onSortChanged: (LibrarySortOrder, Boolean) -> Unit,
+) {
+    val settings = GlobalAppSettings.current
+    val order = LibrarySortOrder.fromKeyOrDefault(settings.librarySortOrder)
+    var isSortMenuOpen by remember { mutableStateOf(false) }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .weight(1f)
+                .height(metrics.hit)
+                .border(1.dp, Kaleido.Edge)
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                FeatherIcons.Search, null,
+                tint = Kaleido.Muted, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChanged,
+                singleLine = true,
+                textStyle = TextStyle(fontSize = 14.sp, color = Kaleido.Ink),
+                cursorBrush = SolidColor(Kaleido.Ink),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    if (query.isEmpty()) {
+                        Text(
+                            stringResource(R.string.home_search_hint),
+                            fontSize = 14.sp, color = Kaleido.Muted, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    inner()
+                }
+            )
+            if (query.isNotEmpty()) {
+                Icon(
+                    FeatherIcons.X, stringResource(R.string.home_search_clear),
+                    tint = Kaleido.Ink,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .noRippleClickable { onQueryChanged("") }
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Box {
+            Row(
+                Modifier
+                    .height(metrics.hit)
+                    .border(1.dp, Kaleido.Ink)
+                    .padding(horizontal = 10.dp)
+                    .noRippleClickable { isSortMenuOpen = true },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(order.label, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = Kaleido.Ink, maxLines = 1)
+            }
+            if (isSortMenuOpen) {
+                LibrarySortMenu(
+                    order = order,
+                    descending = settings.librarySortDescending,
+                    onPick = { picked, descending ->
+                        isSortMenuOpen = false
+                        onSortChanged(picked, descending)
+                    },
+                    onDismiss = { isSortMenuOpen = false }
+                )
+            }
+        }
+    }
+}
+
+/** The sort choices, as a popup rather than a screen: it is one decision with six answers. */
+@Composable
+private fun LibrarySortMenu(
+    order: LibrarySortOrder,
+    descending: Boolean,
+    onPick: (LibrarySortOrder, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Popup(
+        alignment = Alignment.TopEnd,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Column(
+            Modifier
+                .border(1.dp, Kaleido.Ink)
+                .background(Kaleido.Paper)
+                .width(IntrinsicSize.Max)
+        ) {
+            LibrarySortOrder.entries.forEach { candidate ->
+                // Picking the order you are already on flips the direction, which is the one
+                // gesture every list in every app has agreed on.
+                val selected = candidate == order
+                Text(
+                    text = buildString {
+                        append(if (selected) "• " else "  ")
+                        append(candidate.label)
+                        if (selected) append(if (descending) "  ↓" else "  ↑")
+                    },
+                    fontSize = 14.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = Kaleido.Ink,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .noRippleClickable {
+                            onPick(candidate, if (selected) !descending else true)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
+        }
     }
 }
 
@@ -539,8 +719,7 @@ private fun FolderRow(
 ) {
     var isFolderSettingsOpen by remember { mutableStateOf(false) }
     if (isFolderSettingsOpen) FolderConfigDialog(
-        appRepository.folderRepository,
-        appRepository.trashRepository,
+        appRepository,
         folderId = folder.id,
         onClose = {
             log.i("Closing Directory Dialog")

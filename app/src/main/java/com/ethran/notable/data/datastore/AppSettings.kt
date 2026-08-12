@@ -67,6 +67,11 @@ data class AppSettings(
     val visualizePdfPagination: Boolean = true,
     // null → ToolbarLayout.DEFAULT. Sanitize with ToolbarLayout.validated() when reading:
     // persisted layouts may predate elements or omit the mandatory MENU entry.
+    // How the library is arranged. A preference about the library rather than about this visit to
+    // it: coming back to a differently-ordered shelf is its own small confusion. Stored as the
+    // enum's name so an unknown value from a newer build falls back rather than crashing.
+    val librarySortOrder: String = "UPDATED",
+    val librarySortDescending: Boolean = true,
     val toolbarLayout: ToolbarLayout? = null,
     // User-created pen instances; layouts reference them as "PEN:<id>". The preset is the
     // single source of truth for a pen's color/size — StrokeMenu edits write back here.

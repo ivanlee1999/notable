@@ -15,6 +15,7 @@ import androidx.room.Update
 import androidx.room.withTransaction
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.flow.Flow
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -71,6 +72,10 @@ interface FolderDao {
      */
     @Query("SELECT * FROM folder")
     fun getAll(): List<Folder>
+
+    /** Every folder the library shows, as a flow — what a search over the whole library reads. */
+    @Query("SELECT * FROM folder WHERE deletedAt IS NULL")
+    fun getAllVisibleFlow(): Flow<List<Folder>>
 
     /** Direct children of [folderId], trashed ones included — the subtree walk purge does. */
     @Query("SELECT * FROM folder WHERE parentFolderId IS :folderId")
@@ -145,6 +150,8 @@ class FolderRepository @Inject constructor(
     fun getAll(): List<Folder> {
         return db.getAll()
     }
+
+    fun getAllVisibleFlow(): Flow<List<Folder>> = db.getAllVisibleFlow()
 
     fun getAllInFolder(folderId: String? = null): LiveData<List<Folder>> {
         return db.getChildrenFolders(folderId)

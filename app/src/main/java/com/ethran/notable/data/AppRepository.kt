@@ -190,6 +190,88 @@ class AppRepository @Inject constructor(
         }
     }
 
+    /**
+     * Copies a notebook, pages and all.
+     *
+     * The button for this existed and said `Not implemented!`, which is a worse answer than no
+     * button. Everything gets a fresh id — the notebook, every page, every stroke and image on
+     * them — because the copy is a new document: reusing an id would have sync treat the copy and
+     * the original as the same thing and merge them back together on the other device.
+     *
+     * @return the new notebook's id, or null if the source is gone.
+     */
+    suspend fun duplicateNotebook(notebookId: String): String? {
+        val source = bookRepository.getById(notebookId) ?: return null
+
+        val copy = source.copy(
+            id = UUID.randomUUID().toString(),
+            title = "${source.title} copy",
+            pageIds = listOf(),
+            openPageId = null,
+            // Not linked: a linked notebook exports itself over a file on disk, and two notebooks
+            // pointed at the same file would overwrite each other.
+            linkedExternalUri = null,
+            createdAt = Date(),
+            updatedAt = Date(),
+        )
+        bookRepository.createEmpty(copy)
+
+        val newPageIds = mutableListOf<String>()
+        for (pageId in source.pageIds) {
+            val data = pageRepository.getWithDataById(pageId) ?: continue
+            val newPage = data.page.copy(
+                id = UUID.randomUUID().toString(),
+                notebookId = copy.id,
+                createdAt = Date(),
+                updatedAt = Date(),
+            )
+            pageRepository.create(newPage)
+            strokeRepository.create(data.strokes.map {
+                it.copy(
+                    id = UUID.randomUUID().toString(), pageId = newPage.id,
+                    createdAt = Date(), updatedAt = Date()
+                )
+            })
+            imageRepository.create(data.images.map {
+                it.copy(
+                    id = UUID.randomUUID().toString(), pageId = newPage.id,
+                    createdAt = Date(), updatedAt = Date()
+                )
+            })
+            newPageIds += newPage.id
+        }
+
+        bookRepository.update(copy.copy(pageIds = newPageIds, openPageId = newPageIds.firstOrNull()))
+        log.i("Duplicated notebook $notebookId as ${copy.id} with ${newPageIds.size} page(s)")
+        return copy.id
+    }
+
+    /**
+     * Moves a folder into another one, refusing a move that would make it its own ancestor.
+     *
+     * Folders could not be moved at all, so a tree built in the wrong shape had to be rebuilt by
+     * hand. The cycle check is not defensive programming: dropping a folder into its own subtree
+     * is an ordinary slip with a drag, and the result would be a subtree that reaches no root and
+     * disappears from the library entirely.
+     *
+     * @return false if the move would create a cycle, or the folder is gone.
+     */
+    suspend fun moveFolder(folderId: String, newParentId: String?): Boolean {
+        val folder = folderRepository.get(folderId) ?: return false
+        if (folder.parentFolderId == newParentId) return true
+
+        var cursor = newParentId
+        val seen = mutableSetOf<String>()
+        while (cursor != null) {
+            if (cursor == folderId) return false
+            if (!seen.add(cursor)) return false  // already a loop; do not add to it
+            cursor = folderRepository.get(cursor)?.parentFolderId
+        }
+
+        folderRepository.update(folder.copy(parentFolderId = newParentId))
+        return true
+    }
+
     suspend fun isObservable(notebookId: String?): Boolean {
         if (notebookId == null) return false
         val book = bookRepository.getById(notebookId = notebookId) ?: return false

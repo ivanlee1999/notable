@@ -34,6 +34,8 @@ import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.TrashRepository
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.sync.couch.CouchDocId
+import com.ethran.notable.ui.LocalSnackContext
+import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
 import io.shipbook.shipbooksdk.ShipBook
@@ -47,6 +49,7 @@ fun FolderConfigDialog(appRepository: AppRepository,
                        onClose: () -> Unit) {
     val folderRepository = appRepository.folderRepository
     val trashRepository = appRepository.trashRepository
+    val snackManager = LocalSnackContext.current
     val scope = rememberCoroutineScope()
     val couchSync = rememberCouchSyncController()
     var folder by remember { mutableStateOf<Folder?>(null) }
@@ -58,6 +61,7 @@ fun FolderConfigDialog(appRepository: AppRepository,
     // instead of appearing empty and then filling in.
     var deletionScope by remember { mutableStateOf<TrashRepository.DeletionScope?>(null) }
     var isConfirmingDelete by remember { mutableStateOf(false) }
+    var isMoving by remember { mutableStateOf(false) }
 
     LaunchedEffect(folderId) {
         val f = folderRepository.get(folderId)
@@ -89,6 +93,36 @@ fun FolderConfigDialog(appRepository: AppRepository,
             },
             onCancel = { isConfirmingDelete = false }
         )
+        return
+    }
+
+    // Folders could not be moved at all, so a tree built in the wrong shape had to be rebuilt by
+    // hand. The same picker a notebook's Move uses, so the two actions behave alike.
+    if (isMoving) {
+        ShowFolderSelectionDialog(
+            appRepository = appRepository,
+            notebookName = folderTitle,
+            initialFolderId = folder?.parentFolderId,
+            onCancel = { isMoving = false },
+            onConfirm = { destination ->
+                isMoving = false
+                scope.launch {
+                    val moved = appRepository.moveFolder(folderId, destination)
+                    if (moved) {
+                        couchSync.noteDocumentChanged(CouchDocId.folder(folderId))
+                        onClose()
+                    } else {
+                        // Dropping a folder into its own subtree is an ordinary slip with a drag,
+                        // and the result would be a subtree that reaches no root and vanishes.
+                        snackManager.displaySnack(
+                            SnackConf(
+                                text = "A folder cannot be moved inside itself",
+                                duration = 3000
+                            )
+                        )
+                    }
+                }
+            })
         return
     }
 
@@ -176,6 +210,11 @@ fun FolderConfigDialog(appRepository: AppRepository,
             Column(
                 Modifier.padding(20.dp, 10.dp)
             ) {
+                Text(
+                    text = "Move Folder…",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.noRippleClickable { isMoving = true })
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = "Move Folder to Trash",
                     textAlign = TextAlign.Center,
