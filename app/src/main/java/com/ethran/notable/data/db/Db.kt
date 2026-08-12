@@ -54,8 +54,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class],
-    version = 41,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
+    version = 42,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -84,6 +84,7 @@ class Converters {
         // Page.pageWidth/pageHeight and Notebook.defaultPageWidth/defaultPageHeight: nullable
         // columns, so Room adds them itself and every existing row reads as "declares no size".
         AutoMigration(40, 41)
+        // 41 -> 42 is hand-written: see MIGRATION_41_42 in Migrations.kt.
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -101,6 +102,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deletedPageDao(): DeletedPageDao
     abstract fun deletedImageDao(): DeletedImageDao
     abstract fun couchDeletionDao(): CouchDeletionDao
+    abstract fun couchOutboxDao(): CouchOutboxDao
 
 //    companion object {
 //        private var INSTANCE: AppDatabase? = null
@@ -159,7 +161,8 @@ object DatabaseModule {
                 MIGRATION_17_18,
                 MIGRATION_22_23,
                 MIGRATION_32_33,
-                MIGRATION_37_38
+                MIGRATION_37_38,
+                MIGRATION_41_42
             )
             .build()
     }
@@ -211,6 +214,10 @@ object DatabaseModule {
     @Provides
     fun provideCouchDeletionDao(db: AppDatabase): CouchDeletionDao =
         db.couchDeletionDao()
+
+    @Provides
+    fun provideCouchOutboxDao(db: AppDatabase): CouchOutboxDao =
+        db.couchOutboxDao()
 
 
 
