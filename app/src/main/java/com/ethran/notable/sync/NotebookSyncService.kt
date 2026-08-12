@@ -1268,15 +1268,21 @@ class NotebookSyncService @Inject constructor(
 
         // 5. Persist the page atomically: delete-old + update + insert-new run in one transaction,
         //    so a crash can't leave the page with old strokes gone and new ones not yet written.
+        var replaced = false
         try {
             appRepository.replaceDownloadedPage(page, strokes, updatedImages)
-            // The rows this page is drawn from have just been swapped out from under whoever is
-            // holding them in memory. Without this the page keeps its pre-download strokes for as
-            // long as it stays cached, and the download reads as a sync that did nothing.
-            CanvasEventBus.pagesChangedInDb.tryEmit(setOf(pageId))
+            replaced = true
         } catch (e: Exception) {
             errors.add(DomainError.DatabaseError("Failed to save page $pageId: ${e.message}"))
         }
+        // The rows this page is drawn from have just been swapped out from under whoever is holding
+        // them in memory. Without this the page keeps its pre-download strokes for as long as it
+        // stays cached, and the download reads as a sync that did nothing. Awaited, not offered: a
+        // download that skipped its notification would commit a page nothing goes back to read.
+        //
+        // Outside the catch above, which turns everything it sees into a database failure — this
+        // suspends waiting for a slot, and a cancellation there is not a page that failed to save.
+        if (replaced) CanvasEventBus.pagesChangedInDb.emit(setOf(pageId))
 
         // 6. Return aggregated result, carrying the page's updatedAt as its sync anchor.
         return errors.asResult(page.updatedAt)

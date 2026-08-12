@@ -643,7 +643,10 @@ class RoomCouchStoreTest {
 
     private fun reportingStore() = RoomCouchStore(
         repository, db.kvDao(), deviceId = "boox", imagesFolder = { images },
-        onPagesApplied = { CanvasEventBus.pagesChangedInDb.tryEmit(it) },
+        // The host launches this onto the application scope; here it is awaited instead, so the
+        // notification is demonstrably out before `apply` returns and the test is left waiting only
+        // on the cache, not on a race with its own producer.
+        onPagesApplied = { runBlocking { CanvasEventBus.pagesChangedInDb.emit(it) } },
     )
 
     /** Opens [pageId] in [cache] and waits for its strokes to be resident, as the editor does. */

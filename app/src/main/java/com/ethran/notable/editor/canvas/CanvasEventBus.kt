@@ -29,9 +29,14 @@ object CanvasEventBus {
      * this signal is *not* delivered when the user is somewhere else in the app. It drops the
      * cached copies and redraws through [forceUpdate] if one of them is the open page.
      *
-     * Buffered: every producer is a sync coroutine that must not block on a slow collector.
+     * Buffered deeply, and emitted into with `emit` rather than `tryEmit`: a dropped notification
+     * is precisely the bug this exists to fix, since the page it named is then the one nobody
+     * re-reads. A catch-up pull can apply hundreds of pages faster than the collector reads them,
+     * so producers have to be willing to wait for a slot rather than give theirs up. (With no
+     * collector at all — before the page cache is built — emission neither waits nor queues, which
+     * is right: nothing is holding a stale page yet.)
      */
-    val pagesChangedInDb = MutableSharedFlow<Set<String>>(extraBufferCapacity = 64)
+    val pagesChangedInDb = MutableSharedFlow<Set<String>>(extraBufferCapacity = 256)
 
 
     val isDrawing = MutableSharedFlow<Boolean>()

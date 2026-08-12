@@ -1357,8 +1357,9 @@ class PageDataManager @Inject constructor(
      * put every replaced stroke straight back on screen, where Room has no copy of it.
      */
     private suspend fun reloadCurrentPage(pageId: String) {
-        refreshPageFromDb(pageId)
-
+        // Taken before any read, so the window it defines is every read this function does. Taken
+        // after one, the ink drawn during that first read would already be here — counted as "was
+        // here before" and dropped, for want of a database write that had not landed yet.
         val (strokesBefore, imagesBefore) = synchronized(lock) {
             val entry = entries[pageId]
             // A page that has not finished loading needs no correction, and must not be given one:
@@ -1368,6 +1369,7 @@ class PageDataManager @Inject constructor(
                 entry.images.orEmpty().mapTo(HashSet()) { it.id }
         }
 
+        refreshPageFromDb(pageId)
         val fresh = appRepository.pageRepository.getWithDataById(pageId) ?: return
 
         synchronized(lock) {
