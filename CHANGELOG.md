@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.9.0
+
+A page now has a size of its own. Until now it was as wide as the screen it was drawn on, which
+meant a page was a different page on every device.
+
+### Writing near the right edge went missing on the iPad
+
+- **Ink written down the right-hand side of the tablet was not there on the iPad.** Not cut off —
+  unreachable: there was nothing to scroll to. A page was as wide as the screen that drew it, and
+  the iPad's page was narrower, so anything past its edge fell outside the page altogether. Both
+  apps now read the page's own width from the page, and each one scales its screen to fit.
+- **Pages you already have are left exactly as they are.** Their ink was drawn against the screen,
+  and giving them a paper size now would move every stroke relative to the paper. They keep the
+  geometry they were written with, and both apps still let you scroll to ink that sits outside the
+  page — which is what makes that right-hand-side writing visible again.
+
+### Choosing paper
+
+- **New notebooks and quick pages take a paper size**, set in Settings › Default Page Size: A4, A5,
+  A3, Letter or Legal. The size is fixed when the notebook is created, because ink is positioned
+  against the paper from the first stroke — changing it later would slide everything on every page.
+- Sizes are held in portrait. Turning the tablet changes how much of the page you can see, not how
+  big the page is.
+
+### The page behaves like a page
+
+- **A page opens with the whole width of the paper on screen.** Pinching snaps either to that fit or
+  to actual size, rather than to the shape of the screen; turning the tablet re-fits it.
+- **Panning stops at the edge of your work** instead of drifting on into blank space.
+- **The magenta line marks the real edge of the paper**, so it is plain when writing has left the
+  page. It used to mark where the screen's edge would fall if you turned the tablet upright.
+
+### Exports are the size they claim to be
+
+- **A PDF or Xournal++ export of an A4 page is A4.** The old export stretched the screen's width onto
+  A4 paper, which was only ever right on a tablet that happened to be A4-shaped.
+- **Importing a Xournal++ file keeps the paper size the file declares** rather than fitting it to
+  this tablet.
+
+### Upgrading
+
+The database moves from 40 to 41, to hold the paper size on notebooks and pages. That happens by
+itself when you open the app. Nothing is rewritten and nothing moves: every page already on the
+device is recorded as having no declared size, which is what keeps it looking the way it does.
+
 ## 0.8.1
 
 A point release about the pictures on notebook covers. Nothing to do with sync, and the schema
