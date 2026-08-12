@@ -374,7 +374,59 @@ class RoomCouchStoreTest {
         assertNull(runBlocking { repository.bookRepository.getById("nb1") })
         // The tombstone came from the server, so re-pushing it would be pointless traffic.
         assertTrue(store.pendingDeletionIds().isEmpty())
-        assertNull(store.load(id))
+        // It is still remembered, though — "deleted" is what this device holds, and answering
+        // "nothing" would let a peer's stale copy of the notebook land as a fresh one.
+        val remembered = store.load(id) as? CouchDocBody.Deleted
+        assertNotNull("the applied deletion was forgotten", remembered)
+        assertEquals(stamp(9), remembered!!.tombstone.deletedAt)
+    }
+
+    /**
+     * The orphan-page guard has to hold **whichever order** the feed reports the two documents in.
+     *
+     * Deleting a notebook leaves its `page:<id>` documents live on the server for good (protocol
+     * §6.4: pages keep no tombstone of their own), so every replay meets the notebook's tombstone
+     * and a leftover page that names it. A clustered CouchDB spreads the two across shards and
+     * merges the per-shard change streams as they arrive, so the tombstone is reported *before* the
+     * page often enough to matter — even though the page has the lower sequence and was written
+     * first. Neither order may resurrect the notebook.
+     *
+     * This is the tombstone-first order, which is the one that used to fail: applying the tombstone
+     * dropped the local deletion record, and the page that followed found nothing to consult and
+     * built a placeholder "New notebook" holding the deleted notebook's page.
+     */
+    @Test
+    fun anOrphanPageArrivingAfterTheTombstoneDoesNotResurrectTheNotebook() {
+        val id = CouchDocId.notebook("nb1")
+        store.recordDeletion(id, deletedAt = stamp(9))
+        store.apply(
+            id,
+            CouchDocBody.Deleted(
+                CouchDeletedDoc(
+                    type = CouchDocType.NOTEBOOK, deletedAt = stamp(9), updatedBy = "boox",
+                )
+            )
+        )
+
+        // The page the deletion left behind on the server, applied after its notebook's tombstone.
+        store.apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(
+                CouchPage(
+                    notebookId = "nb1", createdAt = stamp(0), updatedAt = stamp(1),
+                    updatedBy = "boox",
+                )
+            )
+        )
+
+        assertNull(
+            "the deleted notebook came back as a placeholder",
+            runBlocking { repository.bookRepository.getById("nb1") },
+        )
+        assertNull(
+            "the leftover page was applied even though its notebook is deleted",
+            runBlocking { repository.pageRepository.getById("p1") },
+        )
     }
 
     /**
