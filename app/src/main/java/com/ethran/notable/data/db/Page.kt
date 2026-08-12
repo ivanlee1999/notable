@@ -103,6 +103,20 @@ interface PageDao {
     @Query("SELECT id FROM page WHERE notebookId = :notebookId")
     suspend fun getPageIdsForNotebook(notebookId: String): List<String>
 
+    /**
+     * The owning notebook, and nothing else.
+     *
+     * Every ink save asks this question, through [PageRepository.touchUpdatedAt], purely to know
+     * which notebook document to queue alongside the page. Answering it with [getById] read the
+     * whole row — background, geometry, titles, timestamps — and threw all of it away. One column
+     * is what the caller wanted; on a BOOX the difference is per stroke, not per session.
+     *
+     * Null for a page that has no notebook (a quick page) *and* for a page that no longer exists.
+     * The caller treats both the same way: there is no notebook to queue.
+     */
+    @Query("SELECT notebookId FROM page WHERE id = :pageId")
+    suspend fun getNotebookId(pageId: String): String?
+
     @Insert
     suspend fun create(page: Page): Long
 
@@ -162,16 +176,23 @@ class PageRepository @Inject constructor(
             db.updateTitle(pageId, title, System.currentTimeMillis())
             // Read back rather than taken from the caller: the rename menu knows a page id and
             // nothing else, and the notebook has to travel with it.
-            queuePage(pageId, db.getById(pageId)?.notebookId)
+            queuePage(pageId, db.getNotebookId(pageId))
         }
     }
 
-    /** Advance a page's edit timestamp — the per-page dirty signal for incremental sync. */
+    /**
+     * Advance a page's edit timestamp — the per-page dirty signal for incremental sync.
+     *
+     * This is the hot path: `PageDataManager.bumpEditTimestamps` calls it on every ink save. The
+     * notebook id is read with [PageDao.getNotebookId] rather than [PageDao.getById] for exactly
+     * that reason — the whole row was being loaded, background and geometry included, so a single
+     * `String?` could be picked out of it and the rest discarded.
+     */
     suspend fun touchUpdatedAt(pageId: String, updatedAt: Long = System.currentTimeMillis()) {
         if (pageId.isEmpty()) return
         database.withTransaction {
             db.touchUpdatedAt(pageId, updatedAt)
-            queuePage(pageId, db.getById(pageId)?.notebookId)
+            queuePage(pageId, db.getNotebookId(pageId))
         }
     }
 
@@ -224,7 +245,7 @@ class PageRepository @Inject constructor(
         database.withTransaction {
             // Read before the delete: afterwards there is no row left to ask which notebook owned
             // it, and the notebook is the document that actually carries the removal.
-            val notebookId = db.getById(pageId)?.notebookId
+            val notebookId = db.getNotebookId(pageId)
             db.delete(pageId)
             if (notebookId != null) outbox.queue(CouchDocId.notebook(notebookId))
         }
