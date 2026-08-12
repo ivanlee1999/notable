@@ -202,7 +202,9 @@ class EditorControlTower(
     fun resetZoomAndScroll() {
         scope.launch {
             page.scroll = Offset(0f, page.scroll.y)
-            page.applyZoomAndRedraw(1f)
+            // Back to the page fitted across the view, not to 1:1 — the fit is the resting view of
+            // a page now, and on a declared sheet 1.0 is an arbitrary zoom like any other.
+            page.applyZoomAndRedraw(page.fitToWidthZoom)
             // Request UI update
             CanvasEventBus.refreshUiImmediately.emit(Unit)
         }

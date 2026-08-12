@@ -41,7 +41,6 @@ import com.ethran.notable.editor.utils.strokeBounds
 import com.ethran.notable.editor.utils.times
 import com.ethran.notable.editor.utils.toIntOffset
 import com.ethran.notable.gestures.MAX_ZOOM
-import com.ethran.notable.gestures.MIN_ZOOM
 import com.ethran.notable.gestures.ZOOM_SENSITIVITY
 import com.ethran.notable.gestures.ZOOM_SNAP_THRESHOLD
 import com.ethran.notable.ui.SnackConf
@@ -157,11 +156,29 @@ class PageView(
      * the two apps.
      */
     val fitToWidthZoom: Float
-        get() {
-            val sheetWidth = sheet.width
-            if (sheetWidth <= 0 || viewWidth <= 0) return 1f
-            return viewWidth.toFloat() / sheetWidth
-        }
+        get() = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
+
+    /**
+     * Whether the sheet is a hard edge — true for any page that declares its own size.
+     *
+     * A declared page *is* the paper: there is nothing to the right of it to look at or write on,
+     * so the view never goes there. A page that declares nothing has no edge to enforce (its
+     * "sheet" is only this device's screen), and bounding it would hide ink written past that
+     * screen on a wider device, so it keeps the old free-roaming behaviour.
+     */
+    private val hasHardBounds: Boolean
+        get() = pageDataManager.hasDeclaredSheet(currentPageId)
+
+    /**
+     * The lowest zoom this page may be viewed at: the fit on a bounded page, so blank non-page
+     * space beyond the sheet's right edge never comes on screen. See [PageViewportBounds].
+     */
+    val minZoom: Float
+        get() = PageViewportBounds.minZoom(fitToWidthZoom, hasHardBounds)
+
+    /** The zoom to open a page at (and to return to on "reset view"): fitted to the sheet. */
+    private fun initialZoom(): Float =
+        pageDataManager.getPageZoom(currentPageId, fitToWidthZoom).coerceAtLeast(minZoom)
 
 
 //    private var dbStrokes = appRepository.strokeRepository
@@ -206,7 +223,8 @@ class PageView(
 
             // The sheet is only known once the page row is loaded, so the fit is computed here
             // rather than at construction: a page that has not been zoomed yet opens fitted.
-            zoomLevel.value = pageDataManager.getPageZoom(currentPageId, fitToWidthZoom)
+            zoomLevel.value = initialZoom()
+            clampScrollToBounds()
             pageDataManager.getCachedBitmap(currentPageId)?.let { cached ->
                 log.i("PageView: using cached bitmap")
                 windowedBitmap = cached
@@ -252,7 +270,8 @@ class PageView(
         coroutineScope.launch(Dispatchers.IO) {
             pageDataManager.onExit(oldId, windowedBitmap)
             pageDataManager.setPage(newPageId)
-            zoomLevel.value = pageDataManager.getPageZoom(currentPageId, fitToWidthZoom)
+            zoomLevel.value = initialZoom()
+            clampScrollToBounds()
             pageDataManager.getCachedBitmap(newPageId)?.let { cached ->
                 log.i("PageView: using cached bitmap")
                 windowedBitmap = cached
@@ -565,8 +584,7 @@ class PageView(
 
         waitForDrawingWithSnack()
 
-        scroll =
-            Offset((scroll.x + delta.x).coerceAtLeast(0f), (scroll.y + delta.y).coerceAtLeast(0f))
+        scroll = boundScroll(scroll + delta)
 
         CanvasEventBus.forceUpdate.emit(null)
     }
@@ -590,23 +608,9 @@ class PageView(
 //        log.d("Update scroll, dragDelta: $dragDelta, scroll: $scroll, zoomLevel.value: $zoomLevel.value")
         // drag delta is in screen coordinates,
         // so we have to scale it back to page coordinates.
-        var deltaInPage = Offset(dragDelta.x / zoomLevel.value, dragDelta.y / zoomLevel.value)
-
-        // Cut, so we won't shift outside the screen.
-        if (scroll.x + deltaInPage.x < 0) {
-            deltaInPage = deltaInPage.copy(x = -scroll.x)
-        }
-        if (scroll.y + deltaInPage.y < 0) {
-            deltaInPage = deltaInPage.copy(y = -scroll.y)
-        }
-        // …and not past the far edge of the content either. The content is the sheet or the ink,
-        // whichever reaches further (PageDataManager.computeWidth), so panning right always reaches
-        // ink written off the page — and stops once there is nothing more to see, instead of
-        // wandering into unbounded blank space.
-        val maxScrollX = maxHorizontalScroll()
-        if (scroll.x + deltaInPage.x > maxScrollX) {
-            deltaInPage = deltaInPage.copy(x = maxScrollX - scroll.x)
-        }
+        val deltaInPage = boundScroll(
+            scroll + Offset(dragDelta.x / zoomLevel.value, dragDelta.y / zoomLevel.value)
+        ) - scroll
 
         // There is nothing to do, return.
         if (deltaInPage == Offset.Zero) return
@@ -648,13 +652,33 @@ class PageView(
 
 
     /**
-     * How far right the page can be panned: enough to bring the far edge of the content to the
-     * right edge of the view, and never negative (content narrower than the view does not pan).
+     * How far right the view may reach, in page units.
+     *
+     * On a page that declares a size this is the sheet's own width, full stop — there is no canvas
+     * beyond the paper to pan into, which is what makes the page edge an edge rather than a
+     * suggestion.
+     *
+     * An undeclared page has no such edge, so it keeps the old rule: the sheet or the ink,
+     * whichever reaches further, so ink written past this screen's width stays reachable.
      */
-    private fun maxHorizontalScroll(): Float {
-        val contentWidth = pageDataManager.computeWidth(currentPageId).toFloat()
-        val visibleWidth = viewWidth / zoomLevel.value.coerceAtLeast(0.01f)
-        return (contentWidth - visibleWidth).coerceAtLeast(0f)
+    private fun pannableWidth(): Float =
+        if (hasHardBounds) sheet.width.toFloat()
+        else pageDataManager.computeWidth(currentPageId).toFloat()
+
+    private fun maxHorizontalScroll(zoom: Float = zoomLevel.value): Float =
+        PageViewportBounds.maxHorizontalScroll(pannableWidth(), viewWidth, zoom)
+
+    /** [scroll] clamped into the page: never before its left edge, never past its right one. */
+    private fun boundScroll(scroll: Offset, zoom: Float = zoomLevel.value): Offset =
+        PageViewportBounds.boundScroll(scroll, pannableWidth(), viewWidth, zoom)
+
+    /**
+     * Pulls the current scroll back inside the page. Needed wherever the bounds move rather than
+     * the scroll — a page switch, a rotation, a zoom out.
+     */
+    private fun clampScrollToBounds() {
+        val bounded = boundScroll(scroll)
+        if (bounded != scroll) scroll = bounded
     }
 
     private fun calculateZoomLevel(
@@ -667,6 +691,9 @@ class PageView(
         // was derived from the screen; now the page decides, and the fit is what has to be easy to
         // land on, since it is the zoom at which the page looks like the page.
         val fitZoom = fitToWidthZoom
+        // Never below the fit on a bounded page: zooming out past it would put non-page space on
+        // screen, and the page edge is an edge.
+        val floor = minZoom
 
         return if (!GlobalAppSettings.current.continuousZoom) {
             // Discrete zoom mode - snap to either 1.0 or the fit.
@@ -674,7 +701,7 @@ class PageView(
             // so it is negative when pinching in (zoom out) and positive when
             // spreading (zoom in); split on 0, not 1.
             if (scaleDelta <= 0f) {
-                min(fitZoom, 1.0f)
+                max(min(fitZoom, 1.0f), floor)
             } else {
                 max(fitZoom, 1.0f)
             }
@@ -684,7 +711,7 @@ class PageView(
             // hard the pinch drives the zoom (< 1 zooms more gently than the
             // fingers spread).
             val newZoom =
-                (currentZoom * (1f + scaleDelta * ZOOM_SENSITIVITY)).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                (currentZoom * (1f + scaleDelta * ZOOM_SENSITIVITY)).coerceIn(floor, MAX_ZOOM)
 
             // Snap to either 1.0 or the fit, depending on which is closer
             val snapTarget = if (abs(newZoom - 1.0f) < abs(newZoom - fitZoom)) {
@@ -695,7 +722,7 @@ class PageView(
 
             if (abs(newZoom - snapTarget) < ZOOM_SNAP_THRESHOLD) {
                 log.d("Zoom snap to $snapTarget")
-                snapTarget
+                snapTarget.coerceAtLeast(floor)
             } else {
                 log.d("Left zoom as is. $newZoom")
                 newZoom
@@ -718,7 +745,10 @@ class PageView(
     }
 
     suspend fun applyZoomAndRedraw(newZoom: Float) {
-        zoomLevel.value = newZoom
+        zoomLevel.value = newZoom.coerceIn(minZoom, MAX_ZOOM)
+        // Zooming out shows more of the page at once, so the scroll that was at its right edge no
+        // longer is. Everything below redraws from scratch, so simply pulling it back is enough.
+        clampScrollToBounds()
         waitForDrawingWithSnack()
         // Create a scaled bitmap to represent zoomed view
         val scaledWidth = windowedCanvas.width
@@ -811,9 +841,11 @@ class PageView(
         val deltaScrollPage = Offset(-dstRect.left / newZoom, -dstRect.top / newZoom)
 
 
-        val newScrollX = (scroll.x + deltaScrollPage.x).coerceAtLeast(0f)
-        val newScrollY = (scroll.y + deltaScrollPage.y).coerceAtLeast(0f)
-        scroll = Offset(newScrollX, newScrollY)
+        val unbounded = scroll + deltaScrollPage
+        // The zoom moves the bounds as well as the view: zooming out at the page's right edge
+        // leaves the old scroll past the new maximum. Bound against the *new* zoom.
+        val bounded = boundScroll(unbounded, newZoom)
+        scroll = bounded
 
         // Swap in the new bitmap and update zoom on the windowed canvas
         windowedBitmap = scaledBitmap
@@ -822,7 +854,14 @@ class PageView(
         zoomLevel.value = newZoom
         windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
 
-        if (scaleFactor < 1f) redrawOutsideRect(dstRect.toRect(), screenW, screenH)
+        if (bounded != unbounded) {
+            // The snapshot was scaled about the pinch centre, so it sits where the *unbounded*
+            // scroll would have put it. Once the bound moves us elsewhere it no longer lines up
+            // with anything — redraw the screen rather than shifting a picture of the wrong place.
+            val fullScreen = Rect(0, 0, screenW, screenH)
+            drawBgToCanvas(fullScreen)
+            drawAreaScreenCoordinates(fullScreen)
+        } else if (scaleFactor < 1f) redrawOutsideRect(dstRect.toRect(), screenW, screenH)
 
 //        persistBitmapDebounced()
         saveToPersistLayer()
@@ -942,6 +981,8 @@ class PageView(
         // screen; on a declared sheet it would leave the page adrift after every rotation.
         zoomLevel.value = fitToWidthZoom
         pageDataManager.setPageZoom(currentPageId, zoomLevel.value)
+        // The new width moves the right-hand bound with it.
+        clampScrollToBounds()
         // TODO: it might be worth to do it
         //  by redrawing only part of the screen, like in scroll and zoom.
         coroutineScope.launch {

@@ -24,6 +24,7 @@ import com.ethran.notable.data.model.BackgroundType.AutoPdf.getPage
 import com.ethran.notable.data.model.BackgroundType.CoverImage
 import com.ethran.notable.data.model.BackgroundType.ImageRepeating
 import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.declaredPageSize
 import com.ethran.notable.data.model.legacyScreenSheet
 import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.canvas.CanvasEventBus
@@ -909,6 +910,18 @@ class PageDataManager @Inject constructor(
      */
     fun getSheet(pageId: String): PageSize =
         pageFromDb?.takeIf { it.id == pageId }?.sheet() ?: legacyScreenSheet()
+
+    /**
+     * Whether [pageId] declares its own sheet, i.e. whether it has a real edge.
+     *
+     * This is what tells a page with a paper size from one that merely falls back to this screen.
+     * A declared page ends where the paper ends — nothing outside it can be reached or written on.
+     * An undeclared page never had an edge to enforce: its ink was written against whatever screen
+     * it was written on, so bounding it to *this* screen's width would hide ink rather than keep
+     * it on the page.
+     */
+    fun hasDeclaredSheet(pageId: String): Boolean =
+        pageFromDb?.takeIf { it.id == pageId }?.declaredPageSize() != null
 
     /**
      * The scrollable height: the sheet, or further if ink runs past the bottom of it.

@@ -36,8 +36,12 @@ import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
+import kotlin.math.abs
 
 private val log = ShipBook.getLogger("EditorView")
+
+/** Zoom difference below which the view counts as "fitted" — a rounded float is still the fit. */
+private const val ZOOM_FIT_EPSILON = 0.001f
 
 object EditorDestination : NavigationDestination {
     override val route = "editor"
@@ -222,7 +226,10 @@ fun EditorView(
             zoomLevel, selectionActive
         ) {
             log.v("EditorView: zoomLevel=$zoomLevel, selectionActive=$selectionActive")
-            viewModel.setShowResetView(zoomLevel != 1.0f)
+            // "Reset view" offers a way back to the fitted page, so it appears when the view has
+            // left the fit — not when it has left 1:1, which is just some zoom among others once
+            // the page has a size of its own.
+            viewModel.setShowResetView(abs(zoomLevel - page.fitToWidthZoom) > ZOOM_FIT_EPSILON)
             viewModel.setSelectionActive(selectionActive)
         }
 
