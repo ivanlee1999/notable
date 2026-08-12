@@ -128,6 +128,8 @@ fun SettingsView(
                 onSave = viewModel::onSaveCouchSettings,
                 onSyncNow = viewModel::onCouchSyncNow,
                 onUploadEverything = viewModel::onCouchUploadEverything,
+                onConfirmHeldDeletions = viewModel::onCouchConfirmHeldDeletions,
+                onDiscardHeldDeletions = viewModel::onCouchDiscardHeldDeletions,
             ),
         )
     )

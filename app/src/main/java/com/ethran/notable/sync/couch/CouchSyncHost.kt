@@ -152,6 +152,30 @@ class CouchSyncHost @Inject constructor(
         current.engine.markDirty(listOf(documentId))
     }
 
+    override suspend fun approveHeldDeletions(ids: List<String>) {
+        val current = stack() ?: return
+        SyncLogger.i(TAG, "Confirmed ${ids.size} notebook deletion(s); they will be sent next flush")
+        SyncLogger.d(TAG, "Confirmed: ${ids.joinToString(", ")}")
+        current.engine.approveHeldDeletions(ids)
+    }
+
+    /**
+     * Goes through the engine rather than straight at the store, so the in-memory outbox and the
+     * two tables stop naming these documents together. Reaching around it would leave the engine
+     * offering ids whose tombstones no longer exist, which `push` then quietly drops — the same
+     * result by accident instead of on purpose.
+     */
+    override suspend fun discardHeldDeletions(ids: List<String>) {
+        val current = stack() ?: return
+        SyncLogger.i(
+            TAG,
+            "Discarded ${ids.size} notebook deletion(s); the server keeps them, so they will " +
+                "come back to this device on the next pull"
+        )
+        SyncLogger.d(TAG, "Discarded: ${ids.joinToString(", ")}")
+        current.engine.discardHeldDeletions(ids)
+    }
+
     /**
      * The durable table as well as the engine's own set. The repositories queue a document by
      * writing its outbox row inside the transaction that changed the data, without going through

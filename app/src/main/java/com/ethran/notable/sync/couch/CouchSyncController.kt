@@ -54,6 +54,19 @@ interface CouchSyncBackend {
     suspend fun recordDeletion(documentId: String)
 
     /**
+     * "Yes, delete them on the server too": lets exactly [ids] past the mass-deletion guard on the
+     * next flush. Scoped to those ids and spent once they are sent — never a standing exemption.
+     */
+    suspend fun approveHeldDeletions(ids: List<String>)
+
+    /**
+     * "No, keep them on the server": drops [ids]' tombstones, so nothing is published. The
+     * notebooks come back to this device on the next pull, which is the point — the caller must say
+     * so before offering the choice.
+     */
+    suspend fun discardHeldDeletions(ids: List<String>)
+
+    /**
      * How many documents are still waiting to be sent — the durable outbox, not the last flush's
      * report.
      *
@@ -143,6 +156,14 @@ class CouchSyncController @Inject constructor(
         val lastSyncedAt: Long? = null,
         /** Documents this build could not understand, materialized alongside the local copy. */
         val conflictCopies: List<String> = emptyList(),
+        /**
+         * The notebook tombstones the mass-deletion guard is holding, from the last flush.
+         *
+         * Carried as ids rather than as a count because the settings screen has to act on exactly
+         * this set: confirming or discarding "the deletions" means these ones, not whatever the
+         * outbox happens to hold by the time the user taps.
+         */
+        val heldDeletions: List<String> = emptyList(),
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
 
@@ -326,32 +347,76 @@ class CouchSyncController @Inject constructor(
         logFlush(report)
         _state.update { current ->
             val pending = report.stillDirty.size
+            val held = report.heldDeletions
             when {
-                // What the guard actually does, rather than pointing at a confirmation screen that
-                // does not exist: it holds the tombstones back and lets everything else through.
-                // The one way to make the deletions stick today is to make them on the other
-                // device as well — its tombstone arrives here, the notebook is already gone, and
-                // the held id drops out of the outbox with nothing left to send.
+                // What the guard actually does — it holds the tombstones back and lets everything
+                // else through — and, now that the two answers exist, where to give one. Naming the
+                // buttons rather than the screen alone matters: "confirm in settings" sends someone
+                // hunting, while the words on the buttons are the words they will read there.
                 report.blockedByDeletionGuard -> current.copy(
                     pendingCount = pending,
+                    heldDeletions = held,
                     status = Status.Failed(
                         "Holding back ${report.deletionsHeldBack} notebook deletions — that is " +
                             "most of this library, and a wiped device looks the same. Everything " +
-                            "else still syncs; delete them on your other device to confirm."
+                            "else still syncs. In Settings → Sync, choose “Delete them on the " +
+                            "server too” or “Keep them on the server”."
                     ),
                 )
 
                 report.failures.isNotEmpty() -> current.copy(
                     pendingCount = pending,
+                    heldDeletions = held,
                     status = Status.Failed(report.failures.values.sorted().first()),
                 )
 
                 else -> current.copy(
                     pendingCount = pending,
+                    heldDeletions = held,
                     status = Status.Idle,
                     lastSyncedAt = clock.nowMs(),
                 )
             }
+        }
+    }
+
+    /**
+     * "Delete them on the server too." Sends exactly the batch the guard is holding, then clears it
+     * from the UI state — a flush that fails puts it back, and one that succeeds must not leave a
+     * stale prompt on screen offering to confirm deletions that have already gone.
+     *
+     * The approval is scoped to these ids and spent when they are sent, so this is an answer to one
+     * question rather than a switch that turns the guard off.
+     */
+    suspend fun approveHeldDeletions() {
+        val held = _state.value.heldDeletions
+        if (held.isEmpty()) return
+        SyncLogger.beginRun("CouchDB confirm deletions")
+        _state.update { it.copy(heldDeletions = emptyList()) }
+        backend.approveHeldDeletions(held)
+        pushNow()
+    }
+
+    /**
+     * "Keep them on the server." Drops the tombstones, so nothing is published and the notebooks
+     * come back here on the next pull.
+     *
+     * Nothing is pushed, so there is nothing to report from a flush — the state is settled here
+     * instead, reading the pending count back from the outbox rather than guessing at it, since
+     * discarding removes rows the last flush report still counted.
+     */
+    suspend fun discardHeldDeletions() {
+        val held = _state.value.heldDeletions
+        if (held.isEmpty()) return
+        SyncLogger.beginRun("CouchDB discard deletions")
+        backend.discardHeldDeletions(held)
+        val pending = runCatching { backend.pendingCount() }.getOrNull()
+        _state.update {
+            it.copy(
+                heldDeletions = emptyList(),
+                pendingCount = pending ?: it.pendingCount,
+                status = Status.Idle,
+            )
         }
     }
 
@@ -367,8 +432,12 @@ class CouchSyncController @Inject constructor(
             SyncLogger.w(
                 TAG,
                 "Push held back by the mass-deletion guard: " +
-                    "${report.deletionsHeldBack} notebook deletions at once"
+                    "${report.deletionsHeldBack} notebook deletions at once. Confirm or discard " +
+                    "them in Settings → Sync."
             )
+            // Which ones, so a bug report can say what the guard was actually looking at rather
+            // than only how alarming it found it.
+            SyncLogger.d(TAG, "Held back: ${report.heldDeletions.joinToString(", ")}")
             return
         }
         val summary = listOfNotNull(

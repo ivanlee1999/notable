@@ -413,6 +413,16 @@ class FakeLocalStore : CouchLocalStore {
     }
 
     /**
+     * Forgets a recorded deletion, the way a real store does: the tombstone goes and nothing takes
+     * its place. The document is *not* restored here — the rows it described are already gone — so
+     * what this leaves behind is a device that holds nothing and claims nothing, which is exactly
+     * the state that lets the server's copy return on the next pull.
+     */
+    override fun discardDeletion(documentId: String) {
+        if (documents[documentId]?.isDeleted == true) documents.remove(documentId)
+    }
+
+    /**
      * Every asset a held page places whose bytes are not here — the same question the real store
      * answers from the image rows.
      */

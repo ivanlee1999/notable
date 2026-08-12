@@ -348,6 +348,37 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * "Delete them on the server too" — publishes the batch the mass-deletion guard is holding.
+     *
+     * Scoped to the ids in [SyncSettingsUiState.couchState]'s held set and spent once they are
+     * sent: it answers the one question the guard asked rather than turning the guard off.
+     */
+    fun onCouchConfirmHeldDeletions() {
+        appScope.launch { couchSyncController.approveHeldDeletions() }
+    }
+
+    /**
+     * "Keep them on the server" — drops the held tombstones without publishing them.
+     *
+     * The snack repeats what the dialog said, because this is the surprising half: the notebooks
+     * are not restored here, the server is simply never told they went, so they arrive again on the
+     * next pull. That is the undo, and someone who does not expect it will read it as sync
+     * resurrecting notebooks by itself.
+     */
+    fun onCouchDiscardHeldDeletions() {
+        appScope.launch {
+            couchSyncController.discardHeldDeletions()
+            snackDispatcher.showOrUpdateSnack(
+                SnackConf(
+                    text = "Deletions dropped. The notebooks are still on the server and will " +
+                        "come back on the next sync.",
+                    duration = 5000,
+                )
+            )
+        }
+    }
+
     private fun restartCouchFeed() {
         couchSyncController.stop()
         couchSyncController.start()

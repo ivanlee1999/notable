@@ -108,6 +108,10 @@ data class CouchSyncCallbacks(
     val onSave: () -> Unit = {},
     val onSyncNow: () -> Unit = {},
     val onUploadEverything: () -> Unit = {},
+    /** "Delete them on the server too" — publish the batch the mass-deletion guard is holding. */
+    val onConfirmHeldDeletions: () -> Unit = {},
+    /** "Keep them on the server" — drop the held tombstones; the notebooks return on the next pull. */
+    val onDiscardHeldDeletions: () -> Unit = {},
 )
 
 private val EInkFieldShape = RoundedCornerShape(4.dp)
@@ -796,6 +800,112 @@ private fun CouchSection(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colors.onSurface,
             modifier = Modifier.padding(start = 4.dp)
+        )
+
+        // The status line above says the guard is holding deletions; this is the only place the
+        // user can do anything about it, so it lives directly beneath that sentence rather than in
+        // a section of its own.
+        val held = state.couchState.heldDeletions
+        if (held.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            HeldDeletionsPanel(
+                count = held.size,
+                onConfirm = callbacks.couch.onConfirmHeldDeletions,
+                onDiscard = callbacks.couch.onDiscardHeldDeletions,
+            )
+        }
+    }
+}
+
+/**
+ * The mass-deletion guard's two answers (protocol §6.7).
+ *
+ * The asymmetry is deliberate and is the whole design. Publishing the deletions removes those
+ * notebooks from every device that syncs with this server, and nothing here can put them back — so
+ * it is behind a confirmation, the way the WebDAV force operations are. Keeping them is the
+ * reversible choice and needs no dialog, but it does need explaining: it does *not* restore anything
+ * locally, it stops this device claiming the deletion, and the server's copies then come back on the
+ * next pull. Someone who was not told that will read the notebooks reappearing as sync misbehaving.
+ */
+@Composable
+private fun HeldDeletionsPanel(
+    count: Int,
+    onConfirm: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    var showConfirm by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+            .padding(12.dp)
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colors.onSurface
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = pluralStringResource(
+                        R.plurals.sync_couch_held_deletions_title, count, count
+                    ),
+                    style = MaterialTheme.typography.body2,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colors.onSurface
+                )
+                Text(
+                    text = stringResource(R.string.sync_couch_held_deletions_body),
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        EInkActionButton(
+            text = stringResource(R.string.sync_couch_held_deletions_confirm_button),
+            onClick = { showConfirm = true },
+            modifier = Modifier.fillMaxWidth(),
+            isBold = true,
+            fontSize = 12.sp,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        EInkActionButton(
+            text = stringResource(R.string.sync_couch_held_deletions_discard_button),
+            onClick = onDiscard,
+            modifier = Modifier.fillMaxWidth(),
+            isSecondary = true,
+            fontSize = 12.sp,
+        )
+        Text(
+            text = stringResource(R.string.sync_couch_held_deletions_discard_hint),
+            style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+        )
+    }
+
+    if (showConfirm) {
+        ConfirmationDialog(
+            title = stringResource(R.string.sync_couch_held_deletions_confirm_title),
+            message = pluralStringResource(
+                R.plurals.sync_couch_held_deletions_confirm_message, count, count
+            ),
+            onConfirm = {
+                showConfirm = false
+                onConfirm()
+            },
+            onDismiss = { showConfirm = false }
         )
     }
 }

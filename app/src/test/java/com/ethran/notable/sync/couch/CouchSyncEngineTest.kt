@@ -545,6 +545,156 @@ class CouchSyncEngineTest {
     }
 
     /**
+     * Twelve notebook tombstones, which is what the guard is built to notice. Returns the ids in
+     * the order they were created; the report's held set is in push order, so compare as sets.
+     */
+    private fun stageMassDeletion(count: Int = 12, from: Int = 0): List<String> =
+        (from until from + count).map { index ->
+            val id = CouchDocId.notebook("nb$index")
+            ipadStore.set(
+                id,
+                CouchDocBody.Deleted(
+                    CouchDeletedDoc(
+                        type = CouchDocType.NOTEBOOK, deletedAt = stamp(10), updatedBy = "ipad"
+                    )
+                )
+            )
+            id
+        }
+
+    /**
+     * A count is something to warn with; the ids are what a decision needs. Without them the UI can
+     * say "twelve deletions are held" and then has nothing to hand back when the user answers.
+     */
+    @Test
+    fun the_guard_reports_which_deletions_it_held() = runBlocking {
+        val ids = stageMassDeletion()
+        ipad.markDirty(ids)
+
+        val report = ipad.flush()
+
+        assertEquals(ids.toSet(), report.heldDeletions.toSet())
+        assertEquals(ids.size, report.deletionsHeldBack)
+        assertTrue(report.blockedByDeletionGuard)
+    }
+
+    /** "Delete them on the server too": the named ids go out, and nothing else changes. */
+    @Test
+    fun approved_deletions_are_sent_on_the_next_flush() = runBlocking {
+        val ids = stageMassDeletion()
+        ipad.markDirty(ids)
+        val held = ipad.flush().heldDeletions
+        assertTrue("nothing should have reached the server yet", server.documentIds().isEmpty())
+
+        ipad.approveHeldDeletions(held)
+        val report = ipad.flush()
+
+        assertFalse("the guard must let an answered batch through", report.blockedByDeletionGuard)
+        assertEquals(ids.toSet(), report.pushed.toSet())
+        assertEquals(ids.toSet(), server.documentIds().toSet())
+        ids.forEach { assertTrue("$it should be a tombstone on the server", server.isDeleted(it)) }
+        assertEquals("the outbox must drain", 0, ipad.pendingCount)
+    }
+
+    /** ...and *only* the named ids: approval is set-scoped, not a blanket exemption. */
+    @Test
+    fun approving_some_deletions_leaves_the_rest_held() = runBlocking {
+        val ids = stageMassDeletion()
+        ipad.markDirty(ids)
+        ipad.flush()
+
+        val approved = ids.take(3)
+        ipad.approveHeldDeletions(approved)
+        val report = ipad.flush()
+
+        assertEquals(approved.toSet(), report.pushed.toSet())
+        assertEquals(approved.toSet(), server.documentIds().toSet())
+        assertEquals(
+            "the deletions nobody approved must still be waiting",
+            (ids - approved.toSet()).toSet(),
+            report.heldDeletions.toSet(),
+        )
+    }
+
+    /**
+     * The one property that makes this a confirmation rather than a setting. A blanket "stop
+     * guarding" flag would be the obvious implementation and would disarm the guard for the *next*
+     * device-wipe too, which is the accident it exists to catch.
+     */
+    @Test
+    fun approval_does_not_carry_over_to_a_later_batch() = runBlocking {
+        val first = stageMassDeletion()
+        ipad.markDirty(first)
+        ipad.approveHeldDeletions(ipad.flush().heldDeletions)
+        ipad.flush()
+        assertEquals("the approved batch should have gone", 0, ipad.pendingCount)
+
+        // Later, a different set of notebooks is deleted — a restore gone wrong, a wiped database.
+        // Larger than the first batch on purpose: the tombstones already pushed are still part of
+        // what this device holds, so they sit in the guard's denominator too.
+        val second = stageMassDeletion(count = 20, from = 100)
+        ipad.markDirty(second)
+        val report = ipad.flush()
+
+        assertTrue("a fresh batch has to ask again", report.blockedByDeletionGuard)
+        assertEquals(second.toSet(), report.heldDeletions.toSet())
+        assertEquals(
+            "and none of it may reach the server",
+            first.toSet(),
+            server.documentIds().toSet(),
+        )
+    }
+
+    /**
+     * "Keep them on the server": both records go — the tombstone and the outbox row — and nothing
+     * is published. The notebooks are still on the server, which is what brings them back on the
+     * next pull; that is the undo, not a side effect.
+     */
+    @Test
+    fun discarded_deletions_leave_nothing_to_send() = runBlocking {
+        val ids = stageMassDeletion()
+        ipad.markDirty(ids)
+        val held = ipad.flush().heldDeletions
+
+        ipad.discardHeldDeletions(held)
+
+        assertEquals("the outbox must be empty", 0, ipad.pendingCount)
+        ids.forEach { assertNull("$it's tombstone should be gone", ipadStore.body(it)) }
+
+        val report = ipad.flush()
+        assertTrue(report.pushed.isEmpty())
+        assertFalse(report.blockedByDeletionGuard)
+        assertTrue("nothing may reach the server", server.documentIds().isEmpty())
+    }
+
+    /** And the server's copy comes back, because the server was never told anything. */
+    @Test
+    fun a_discarded_deletion_returns_from_the_server_on_the_next_pull() = runBlocking {
+        // The notebook exists on the server, pushed by the peer.
+        booxStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "boox")))
+        boox.markDirty(listOf(notebookId))
+        boox.flush()
+        ipad.pull()
+
+        // The iPad deletes it as part of a batch big enough to trip the guard, then changes its mind.
+        val ids = stageMassDeletion(count = 11, from = 200) + notebookId
+        ipadStore.set(notebookId, tombstone(at = 10, by = "ipad"))
+        ipad.markDirty(ids)
+        val held = ipad.flush().heldDeletions
+        assertTrue(held.contains(notebookId))
+        ipad.discardHeldDeletions(held)
+
+        ipad.pull()
+
+        assertFalse("the server never heard about it", server.isDeleted(notebookId))
+        assertEquals(
+            "so its copy comes back — that is the undo",
+            "notes",
+            ipadStore.notebook(notebookId)?.title,
+        )
+    }
+
+    /**
      * The notebook-level twin of [erasure_on_one_device_sticks_on_the_other]. `mergeNotebook` is an
      * add-wins union, so a manifest that merely stopped naming a page has the peer's copy appended
      * straight back onto it — deleting a page on the BOOX was guaranteed to come back from the iPad

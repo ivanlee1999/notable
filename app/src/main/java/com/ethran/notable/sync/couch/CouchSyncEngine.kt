@@ -231,6 +231,20 @@ interface CouchLocalStore {
 
     /** Forgets a document the server has now accepted. */
     fun dequeueOutbox(documentId: String) {}
+
+    /**
+     * Forgets a locally recorded deletion **without** deleting anything in its place, and without
+     * bringing the document back.
+     *
+     * This is the half of "keep them on the server" that only the store can do: the row is already
+     * gone from the library — the delete and the tombstone were written in one transaction — so
+     * dropping the tombstone leaves this device holding nothing and telling the server nothing. The
+     * server still has the document, and the next pull brings it back. That *is* the undo, and it
+     * is the outcome the user has to be told about before choosing (protocol §6.7).
+     *
+     * A store with nowhere to record deletions has none to discard, which is why this has a default.
+     */
+    fun discardDeletion(documentId: String) {}
 }
 
 // endregion
@@ -258,14 +272,27 @@ class CouchSyncEngine(
         val merged: List<String> = emptyList(),
         val stillDirty: List<String> = emptyList(),
         val failures: Map<String, String> = emptyMap(),
-        /** Set when the mass-deletion guard refused the run (protocol §6.6). */
-        val blockedByDeletionGuard: Boolean = false,
+        /**
+         * The notebook tombstones the mass-deletion guard held back (protocol §6.7) — **which**
+         * ones, not merely how many.
+         *
+         * A count is enough to warn with and useless to act on: the whole point of the guard is that
+         * a human decides, and the two things they can decide — send these deletions after all, or
+         * drop them — both need the exact set. So the set is what travels up to the UI, and the two
+         * summaries below are read off it rather than reported alongside it, because two fields that
+         * can disagree eventually will.
+         */
+        val heldDeletions: List<String> = emptyList(),
+    ) {
+        /** Set when the mass-deletion guard held something back. */
+        val blockedByDeletionGuard: Boolean get() = heldDeletions.isNotEmpty()
+
         /**
          * How many notebook tombstones the guard held back — not the size of the whole queue,
          * which is what the warning used to report.
          */
-        val deletionsHeldBack: Int = 0,
-    )
+        val deletionsHeldBack: Int get() = heldDeletions.size
+    }
 
     data class PullReport(
         val applied: List<String> = emptyList(),
@@ -292,6 +319,23 @@ class CouchSyncEngine(
     private var lastSeq: String = state.lastSeq
     private val revs: MutableMap<String, String> = LinkedHashMap(state.revs)
     private val dirty: MutableSet<String> = LinkedHashSet(state.dirty)
+
+    /**
+     * Document ids the user has explicitly waved past the mass-deletion guard, and nothing else.
+     *
+     * Deliberately *not* persisted and deliberately *not* a boolean. A "stop guarding" flag is the
+     * obvious implementation and the wrong one: one tap on one alarming batch would disarm the guard
+     * for every batch afterwards, including the one that follows a wiped database — which is the
+     * exact accident §6.7 exists to catch. Naming the ids keeps the approval as narrow as the
+     * question that was asked.
+     *
+     * An entry lives until its document leaves the outbox, not until the next flush returns. The
+     * flush that *acts* on the approval is the one that gets the deletion accepted; a flush that
+     * failed offline acted on nothing, and making the user confirm a second time because the network
+     * dropped would be punishing them for the wrong thing. Ids that are no longer queued at all are
+     * pruned below, so this cannot accumulate.
+     */
+    private val approvedDeletions: MutableSet<String> = LinkedHashSet()
 
     init {
         // The checkpoint blob's copy of the outbox is written asynchronously (see
@@ -331,7 +375,56 @@ class CouchSyncEngine(
      */
     private fun clearDirty(documentId: String) {
         dirty.remove(documentId)
+        // An approval is spent the moment the document it named is off the queue — see
+        // [approvedDeletions]. Anything else would leave a standing exemption behind.
+        approvedDeletions.remove(documentId)
         runCatching { store.dequeueOutbox(documentId) }
+    }
+
+    /**
+     * Lets exactly [ids] past the mass-deletion guard on the next flush — the "yes, delete them on
+     * the server too" answer to the question the guard asked.
+     *
+     * Set-scoped and one-shot: see [approvedDeletions] for why it is neither a setting nor a flag.
+     * Ids that are not actually held are harmless — they are pruned at the next flush.
+     */
+    suspend fun approveHeldDeletions(ids: List<String>) = mutex.withLock {
+        approvedDeletions += ids
+    }
+
+    /**
+     * Drops [ids]' tombstones entirely — the "keep them on the server" answer.
+     *
+     * Both records go: the deletion the store recorded, and the outbox row that would have sent it.
+     * Nothing is pushed, and nothing is restored *here* — the notebooks are already gone from this
+     * device's library, since the delete and the tombstone were written together. What brings them
+     * back is the server, on the next pull, because it never heard about the deletion at all. That
+     * is the undo, and the caller must have said so before getting here (protocol §6.7).
+     */
+    suspend fun discardHeldDeletions(ids: List<String>) = mutex.withLock {
+        for (documentId in ids) {
+            runCatching { store.discardDeletion(documentId) }
+            clearDirty(documentId)
+            // Forget the revision as well. It is what makes an incoming row look like this device's
+            // own echo, and a document we are waiting to *receive* must not be suppressed as one we
+            // just sent.
+            revs.remove(documentId)
+        }
+        // ...and rewind the checkpoint, or the promise made to the user is not kept.
+        //
+        // "They come back on the next pull" is only true if the server mentions them again, and the
+        // change feed does not repeat itself: these documents were announced long ago, the
+        // checkpoint is far past them, and nothing will re-announce a notebook nobody is editing.
+        // Discarding without this would leave the user with the notebooks gone from this device,
+        // present on the server, and no path between the two.
+        //
+        // Replaying the whole feed is the sledgehammer, and this design already calls it safe — it
+        // is exactly what a lost checkpoint costs, slow but correct, because every merge is
+        // idempotent. Paying it here is fine: this is a deliberate, rare answer to a prompt, not
+        // something a drawing can trigger. It also survives being offline, which a targeted re-fetch
+        // would not — the replay simply happens whenever the network comes back.
+        if (ids.isNotEmpty()) lastSeq = "0"
+        persist()
     }
 
     /**
@@ -366,14 +459,22 @@ class CouchSyncEngine(
         adoptOutbox()
         var queue = orderedDirty()
 
+        // An approval names ids, so it goes stale the moment they leave the queue. Pruning here
+        // rather than at the end of the flush that used it keeps a set that can only ever shrink
+        // towards what is actually waiting.
+        approvedDeletions.retainAll(dirty)
+
         // Only the deletions are held back. Blocking the whole queue meant a guard meant to
-        // question a suspicious *deletion* also stopped ordinary edits syncing — and since the
-        // confirmation it asks for does not exist yet, that was a permanent stall rather than a
-        // prompt. Drawings keep flowing; the tombstones wait.
-        var deletionsHeldBack = 0
+        // question a suspicious *deletion* also stopped ordinary edits syncing — and while the
+        // confirmation it asks for did not exist, that was a permanent stall rather than a prompt.
+        // Drawings keep flowing; the tombstones wait for an answer.
+        var heldDeletions = emptyList<String>()
         if (exceedsDeletionGuard(queue)) {
-            val held = queue.filter { isNotebookTombstone(it) }
-            deletionsHeldBack = held.size
+            // Approved ids are not held — but they are still counted by the guard above, so a batch
+            // that is approved in part still asks about the rest rather than being waved through
+            // wholesale.
+            val held = queue.filter { isNotebookTombstone(it) && it !in approvedDeletions }
+            heldDeletions = held
             stillDirty += held
             queue = queue - held.toSet()
         }
@@ -411,8 +512,7 @@ class CouchSyncEngine(
             merged = merged,
             stillDirty = stillDirty,
             failures = failures,
-            blockedByDeletionGuard = deletionsHeldBack > 0,
-            deletionsHeldBack = deletionsHeldBack,
+            heldDeletions = heldDeletions,
         )
     }
 
@@ -538,7 +638,7 @@ class CouchSyncEngine(
     }
 
     /**
-     * Protocol §6.6: a device whose local database was wiped looks exactly like a user who deleted
+     * Protocol §6.7: a device whose local database was wiped looks exactly like a user who deleted
      * everything. Ten-plus notebook tombstones that are also most of what this device knows is
      * treated as the former until a human says otherwise.
      */
@@ -790,7 +890,7 @@ class CouchSyncEngine(
     companion object {
         private const val DEFAULT_MAX_PUSH_ATTEMPTS = 5
 
-        /** Protocol §6.6: below this many notebook tombstones, a flush is never refused. */
+        /** Protocol §6.7: below this many notebook tombstones, a flush is never refused. */
         private const val MASS_DELETION_FLOOR = 10
 
         /**
