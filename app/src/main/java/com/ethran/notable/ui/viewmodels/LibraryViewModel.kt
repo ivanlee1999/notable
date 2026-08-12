@@ -209,15 +209,11 @@ class LibraryViewModel @Inject constructor(
     val uiState: StateFlow<LibraryUiState> = combine(
         _screenFlow, _dbDataFlow
     ) { screen, dbData ->
-        val folderId = screen.folderId
-        val isLatestVersion = screen.isLatestVersion
-        val isImporting = screen.isImporting
-        val breadcrumbs = screen.breadcrumbFolders
         LibraryUiState(
-            folderId = folderId,
-            isLatestVersion = isLatestVersion,
-            isImporting = isImporting,
-            breadcrumbFolders = breadcrumbs,
+            folderId = screen.folderId,
+            isLatestVersion = screen.isLatestVersion,
+            isImporting = screen.isImporting,
+            breadcrumbFolders = screen.breadcrumbFolders,
             folders = dbData.folders,
             books = dbData.books,
             singlePages = dbData.singlePages,
