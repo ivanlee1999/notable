@@ -13,6 +13,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.net.UnknownServiceException
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * Typed failures from the CouchDB API. The distinctions matter: a 409 is the input to the merge
@@ -67,9 +69,37 @@ sealed class CouchError(val detail: String) : Exception(detail) {
 class CouchDbClient(
     private val transport: CouchTransport,
     private val database: String = "notes",
+    /**
+     * This device's wall clock, injectable so the skew check can be tested without waiting for one.
+     * Read at the moment a response comes back, which is as close to "when the server said that" as
+     * a client can get.
+     */
+    private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
 
     private fun path(suffix: String): String = "/$database/$suffix"
+
+    /**
+     * How far this device's clock is from the server's, signed, in seconds — positive when this
+     * device is ahead — or null when there is nothing worth saying.
+     *
+     * This matters because every merge decision in the protocol is made on client wall-clock
+     * timestamps: §6.2's scalar winners, and §6.4's delete-vs-edit. A device running fast stamps
+     * every edit into the future, so its older work defeats the peer's newer work, and a deletion it
+     * makes destroys edits the peer had not finished making. Hybrid logical clocks would remove the
+     * assumption; they are out of scope. Noticing that the assumption is broken, and saying so, is
+     * not.
+     *
+     * Strictly a warning. Sync carries on: refusing to sync over a wrong clock would turn a
+     * recoverable mess into an outage, and the wrong clock is usually the *other* device's anyway.
+     *
+     * `@Volatile` because a flush and the change-feed loop write it from different threads and the
+     * reporting reads it from a third. Only the freshest value matters, so there is nothing to
+     * serialize beyond visibility.
+     */
+    @Volatile
+    var clockSkewSeconds: Long? = null
+        private set
 
     // region Documents
 
@@ -358,7 +388,7 @@ class CouchDbClient(
     }
 
     private suspend fun send(request: CouchRequest): CouchResponse = withContext(Dispatchers.IO) {
-        try {
+        val response = try {
             transport.send(request)
         } catch (e: CouchError) {
             throw e
@@ -372,6 +402,39 @@ class CouchDbClient(
             // than statuses. They are all "try again later", never "the document is gone".
             throw CouchError.Transport(e.toString())
         }
+        // Before the status is examined, so a 404 or a 409 still tells us what time the server
+        // thinks it is — every response carries the header, and the interesting ones are often the
+        // failures.
+        noteClockSkew(response)
+        response
+    }
+
+    /**
+     * Records the disagreement between this device's clock and the server's, if it is large enough
+     * to be worth a word.
+     *
+     * RFC 9110 makes `Date` mandatory for an origin server with a clock, so this is information that
+     * arrives free with every request — no probe, no extra round trip. A header that is missing or
+     * will not parse is neither an error nor a warning: it is simply no information, and a proxy
+     * that strips it must not make sync look broken.
+     *
+     * The threshold is deliberately generous. The header has one-second granularity, the round trip
+     * is real time that has already passed by the moment the bytes arrive, and a device that is a
+     * few seconds out changes no merge outcome that a few seconds of network latency would not have
+     * changed anyway. Warning at that scale would be crying wolf, and a warning nobody believes is
+     * worse than none.
+     *
+     * Below the threshold the previous reading is *cleared*, not left standing: a clock that has
+     * been corrected should stop being complained about without needing the app restarted.
+     */
+    private fun noteClockSkew(response: CouchResponse) {
+        val header = response.headers.entries
+            .firstOrNull { it.key.equals("Date", ignoreCase = true) }
+            ?.value ?: return
+        val serverMs = parseHttpDate(header) ?: return
+        val skewSeconds = (nowMs() - serverMs) / 1_000
+        clockSkewSeconds =
+            if (kotlin.math.abs(skewSeconds) >= CLOCK_SKEW_THRESHOLD_SECONDS) skewSeconds else null
     }
 
     private fun jsonObject(body: ByteArray, what: String): JsonObject = try {
@@ -393,6 +456,13 @@ class CouchDbClient(
         const val DEFAULT_LONGPOLL_MS = 55_000L
 
         /**
+         * Two minutes. Normative — bopa uses the same number, because two apps that disagree about
+         * what counts as a broken clock would warn about the same server on one device and not the
+         * other, and the user would rightly trust neither.
+         */
+        const val CLOCK_SKEW_THRESHOLD_SECONDS = 120L
+
+        /**
          * Slack over the requested longpoll window, so the client never aborts first. Applied as
          * both a read timeout and a whole-call deadline: the call deadline is the one that holds if
          * a server ever streams keep-alive bytes at us anyway.
@@ -407,6 +477,21 @@ class CouchDbClient(
         private const val HTTP_NOT_FOUND = 404
         private const val HTTP_CONFLICT = 409
     }
+}
+
+/**
+ * An HTTP `Date` header — RFC 1123 / IMF-fixdate — as epoch millis, or null when it will not parse.
+ *
+ * [DateTimeFormatter.RFC_1123_DATE_TIME] is a thread-safe singleton, unlike `SimpleDateFormat`, and
+ * this is called from every response on whichever thread made the request. `WebDAVClient` has the
+ * same parser for the same header; it is not shared because it logs through `android.util.Log`, and
+ * nothing in the couch package may touch `android.*` — the whole package is exercised by plain JVM
+ * tests.
+ */
+internal fun parseHttpDate(header: String): Long? = try {
+    ZonedDateTime.parse(header, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+} catch (_: Exception) {
+    null
 }
 
 /**

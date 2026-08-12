@@ -283,6 +283,8 @@ class CouchSyncEngine(
          * can disagree eventually will.
          */
         val heldDeletions: List<String> = emptyList(),
+        /** See [CouchDbClient.clockSkewSeconds]. Null means "nothing worth saying". */
+        val clockSkewSeconds: Long? = null,
     ) {
         /** Set when the mass-deletion guard held something back. */
         val blockedByDeletionGuard: Boolean get() = heldDeletions.isNotEmpty()
@@ -303,6 +305,8 @@ class CouchSyncEngine(
         /** Image blobs downloaded for pages that reference them (protocol §3.4). */
         val fetchedAssets: List<String> = emptyList(),
         val lastSeq: String = "0",
+        /** See [CouchDbClient.clockSkewSeconds]. Null means "nothing worth saying". */
+        val clockSkewSeconds: Long? = null,
     ) {
         /** Folds a later batch of the same pull into this one. */
         fun merge(next: PullReport) = PullReport(
@@ -312,6 +316,7 @@ class CouchSyncEngine(
             conflictCopies = conflictCopies + next.conflictCopies,
             fetchedAssets = fetchedAssets + next.fetchedAssets,
             lastSeq = next.lastSeq,
+            clockSkewSeconds = next.clockSkewSeconds,
         )
     }
 
@@ -513,6 +518,9 @@ class CouchSyncEngine(
             stillDirty = stillDirty,
             failures = failures,
             heldDeletions = heldDeletions,
+            // Whatever the last response said about the server's clock. Reported rather than acted
+            // on: it is a warning, and a warning must never be able to fail a push.
+            clockSkewSeconds = client.clockSkewSeconds,
         )
     }
 
@@ -718,7 +726,10 @@ class CouchSyncEngine(
         // Also outside the lock: this is a download queue, and the blobs belong to the store rather
         // than to any state this engine guards. Fetching them under the lock would reintroduce
         // exactly the stall the split above exists to remove, just with images instead of waiting.
-        return report.copy(fetchedAssets = fetchMissingAssets())
+        return report.copy(
+            fetchedAssets = fetchMissingAssets(),
+            clockSkewSeconds = client.clockSkewSeconds,
+        )
     }
 
     /**
