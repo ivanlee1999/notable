@@ -70,6 +70,7 @@ import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
 import com.ethran.notable.ui.dialogs.FolderConfigDialog
 import com.ethran.notable.ui.dialogs.NamePromptDialog
+import com.ethran.notable.ui.dialogs.NewNotebookDialog
 import com.ethran.notable.ui.dialogs.NotebookConfigDialog
 import com.ethran.notable.ui.dialogs.PdfImportChoiceDialog
 import com.ethran.notable.ui.noRippleClickable
@@ -135,13 +136,17 @@ fun Library(
         )
     }
 
+    // A notebook is asked more than a folder is: a folder has nothing to configure, while a
+    // notebook's sheet is fixed the moment its first page exists and cannot be changed afterwards.
     if (pendingNewNotebook) {
-        NamePromptDialog(
-            title = stringResource(R.string.name_prompt_notebook_title),
-            initialValue = defaultNotebookName,
-            onConfirm = { name ->
+        val settings = GlobalAppSettings.current
+        NewNotebookDialog(
+            initialName = defaultNotebookName,
+            initialPageSize = settings.defaultPageSize,
+            initialTemplate = settings.defaultNativeTemplate,
+            onConfirm = { name, pageSize, template ->
                 pendingNewNotebook = false
-                viewModel.onCreateNewNotebook(name)
+                viewModel.onCreateNewNotebook(name, pageSize, template)
             },
             onDismiss = { pendingNewNotebook = false }
         )
