@@ -23,6 +23,21 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
+ * Which device this invocation is playing. `boox` — notable's own role in the cross-app run — unless
+ * the driver says otherwise, so bopa's `scripts/couch-scenarios.sh` is unaffected.
+ *
+ * The override exists because every one of the 22 scenarios has an iPad step, so notable's half
+ * cannot be run at all without a peer: with no bopa checkout the whole suite is unrunnable rather
+ * than partly runnable. Notable's harness happens to implement a superset of the ops the iPad steps
+ * use, so pointing a second invocation at `ipad` lets one checkout drive both sides through a real
+ * server (`scripts/couch-scenarios-solo.sh`). That proves notable satisfies the shared script and
+ * that two independent engines converge; it does **not** prove the Swift implementation agrees —
+ * only bopa's driver does that, and this changes nothing about how it runs.
+ */
+private val DEVICE_ID: String =
+    System.getenv("COUCH_SCENARIO_DEVICE")?.takeIf { it.isNotBlank() } ?: "boox"
+
+/**
  * notable's half of the cross-app scenario suite. The iPad half is bopa's `CouchScenarioTests.swift`;
  * bopa's `scripts/couch-scenarios.sh` interleaves them against one real CouchDB, and the script both
  * halves execute is bopa's `docs/couch-sync-vectors/interop-scenarios.json` (passed by path, so
@@ -92,10 +107,6 @@ class CouchScenarioTest {
         // is indistinguishable from one where every scenario passed.
         File(stateDirectory, "ran.$DEVICE_ID.$step").writeText(ran.toString())
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
-    }
-
-    private companion object {
-        const val DEVICE_ID = "boox"
     }
 }
 
@@ -536,9 +547,6 @@ private class ScenarioDevice(
 
     // endregion
 
-    private companion object {
-        const val DEVICE_ID = "boox"
-    }
 }
 
 // region Persistence
