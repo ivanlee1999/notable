@@ -43,6 +43,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.lang.ref.SoftReference
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -203,7 +204,19 @@ class PageDataManager @Inject constructor(
 
     val dataLoadingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    val saveTopic = MutableSharedFlow<String>()
+    /**
+     * Page ids whose windowed bitmap should be written out as a preview and a thumbnail.
+     *
+     * Buffered, because the two producers reach it by different routes: [onExit] can suspend, but
+     * [com.ethran.notable.editor.canvas.CanvasObserverRegistry] posts from a plain observer and has
+     * only `tryEmit`. On a bufferless `MutableSharedFlow` `tryEmit` returns false whenever a
+     * collector is attached, so every one of those saves was silently dropped.
+     */
+    val saveTopic = MutableSharedFlow<String>(extraBufferCapacity = 64)
+
+    // The persist collector is started by whichever PageView opens first and then outlives it; see
+    // [startPersistingBitmaps].
+    private val persistingBitmaps = AtomicBoolean(false)
 
     init {
         collectBackgroundFileChanges()
@@ -808,10 +821,24 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    fun collectAndPersistBitmapsBatch(
-        context: Context, scope: CoroutineScope
-    ) {
-        scope.launch(Dispatchers.IO) {
+    /**
+     * Starts draining [saveTopic] to disk. Idempotent: the collector belongs to this singleton, not
+     * to the editor that happened to open first.
+     *
+     * It used to run on the [PageView][com.ethran.notable.editor.PageView]'s scope, which is the
+     * editor's `rememberCoroutineScope()`. Compose cancels that scope as the editor leaves the
+     * composition — the same moment [onExit] posts the page that was just drawn on — so the last
+     * save of every session, the one that would capture the finished page, was cancelled before it
+     * ran. The Library then showed whatever thumbnail predated the editing session.
+     */
+    fun startPersistingBitmaps(context: Context) {
+        if (!persistingBitmaps.compareAndSet(false, true)) return
+
+        // The collector now outlives the editor that started it, so it must not hold that editor's
+        // Activity. Only the files dir is wanted here anyway.
+        val appContext = context.applicationContext
+
+        dataScope.launch {
             saveTopic.buffer(10).chunked(1000).collect { pageIdBatch ->
                 val uniquePageIds = pageIdBatch.distinct()
                 if (uniquePageIds.isEmpty()) return@collect
@@ -828,9 +855,11 @@ class PageDataManager @Inject constructor(
                         continue
                     }
 
-                    scope.launch(Dispatchers.IO) {
-                        saveHQPagePreview(context, bitmap, pageId, currentScroll, currentZoomLevel)
-                        savePageThumbnail(context, bitmap, pageId)
+                    dataScope.launch {
+                        saveHQPagePreview(
+                            appContext, bitmap, pageId, currentScroll, currentZoomLevel
+                        )
+                        savePageThumbnail(appContext, bitmap, pageId)
                     }
                 }
             }
@@ -1256,11 +1285,16 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    fun onExit(targetPageId: String, windowedBitmap: Bitmap, scope: CoroutineScope) {
+    /**
+     * Posted on [dataScope] rather than on the caller's scope: the caller is the editor, and the
+     * one time this matters most is when the editor is being torn down and its scope cancelled with
+     * it. See [startPersistingBitmaps].
+     */
+    fun onExit(targetPageId: String, windowedBitmap: Bitmap) {
         log.i("Page exit, is page loaded: ${validatePageDataLoaded(targetPageId)}")
         if (validatePageDataLoaded(targetPageId)) {
             cacheBitmap(targetPageId, windowedBitmap)
-            scope.launch {
+            dataScope.launch {
                 saveTopic.emit(targetPageId)
             }
             recomputeHeight(targetPageId)

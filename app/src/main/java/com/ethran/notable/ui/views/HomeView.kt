@@ -172,7 +172,7 @@ fun Library(
         },
         onImportPdf = viewModel::onPdfFile,
         onImportXopp = viewModel::onXoppFile,
-        onPreviewMissing = viewModel::onPreviewRequested
+        onPreviewNeeded = viewModel::onPreviewRequested
     )
 }
 
@@ -202,7 +202,7 @@ fun LibraryContent(
     onCreateNewNotebook: () -> Unit,
     onImportPdf: (Uri, Boolean) -> Unit,
     onImportXopp: (Uri) -> Unit,
-    onPreviewMissing: (String) -> Unit
+    onPreviewNeeded: (String) -> Unit
 ) {
     BoxWithConstraints(
         Modifier
@@ -279,7 +279,7 @@ fun LibraryContent(
                         onSelectPage = goToPage,
                         showAddQuickPage = true,
                         onCreateNewQuickPage = onCreateNewQuickPage,
-                        onPreviewMissing = onPreviewMissing
+                        onPreviewNeeded = onPreviewNeeded
                     )
                 }
 
@@ -318,7 +318,7 @@ fun LibraryContent(
                             syncScheduler = syncScheduler,
                             syncBadges = uiState.syncBadges,
                             onNavigateToEditor = onNavigateToEditor,
-                            onPreviewMissing = onPreviewMissing,
+                            onPreviewNeeded = onPreviewNeeded,
                             importTile = { ImportTile(onClick = pickImportFile) },
                         )
                         if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
@@ -355,7 +355,7 @@ fun LibraryContent(
                             syncScheduler = syncScheduler,
                             syncBadge = uiState.syncBadges[book.id],
                             onNavigateToEditor = onNavigateToEditor,
-                            onPreviewMissing = onPreviewMissing,
+                            onPreviewNeeded = onPreviewNeeded,
                         )
                     }
                 }
@@ -499,7 +499,7 @@ private fun NotebookRow(
     syncScheduler: SyncScheduler,
     syncBadges: Map<String, SyncBadge>,
     onNavigateToEditor: (String, String) -> Unit,
-    onPreviewMissing: (String) -> Unit,
+    onPreviewNeeded: (String) -> Unit,
     importTile: @Composable () -> Unit,
 ) {
     Row(
@@ -517,7 +517,7 @@ private fun NotebookRow(
                     syncScheduler = syncScheduler,
                     syncBadge = syncBadges[book.id],
                     onNavigateToEditor = onNavigateToEditor,
-                    onPreviewMissing = onPreviewMissing,
+                    onPreviewNeeded = onPreviewNeeded,
                 )
             }
         }
@@ -538,7 +538,7 @@ private fun NotebookEntry(
     syncScheduler: SyncScheduler,
     syncBadge: SyncBadge?,
     onNavigateToEditor: (String, String) -> Unit,
-    onPreviewMissing: (String) -> Unit,
+    onPreviewNeeded: (String) -> Unit,
 ) {
     var isSettingsOpen by remember { mutableStateOf(false) }
     var isConflictOpen by remember { mutableStateOf(false) }
@@ -556,7 +556,7 @@ private fun NotebookEntry(
             onOpen = open,
             onOpenSettings = { isSettingsOpen = true },
             syncBadge = syncBadge,
-            onPreviewMissing = onPreviewMissing,
+            onPreviewNeeded = onPreviewNeeded,
         )
     } else {
         NotebookListRow(
@@ -565,7 +565,7 @@ private fun NotebookEntry(
             onOpen = open,
             onOpenSettings = { isSettingsOpen = true },
             syncBadge = syncBadge,
-            onPreviewMissing = onPreviewMissing,
+            onPreviewNeeded = onPreviewNeeded,
         )
     }
 
