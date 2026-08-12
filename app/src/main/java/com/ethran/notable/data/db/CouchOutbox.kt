@@ -46,6 +46,14 @@ interface CouchOutboxDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun add(row: CouchOutbox)
 
+    /**
+     * One statement per row is fine for an edit, which queues two or three. "Upload everything"
+     * queues the entire library at once, and Room wraps a list insert in a single transaction
+     * rather than paying for one per document.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun addAll(rows: List<CouchOutbox>)
+
     @Query("SELECT * FROM couch_outbox WHERE docId = :docId")
     suspend fun get(docId: String): CouchOutbox?
 
@@ -86,8 +94,9 @@ class CouchOutboxRepository @Inject constructor(
      */
     suspend fun queue(documentIds: List<String>) {
         if (currentCoroutineContext()[RemoteApply] != null) return
+        if (documentIds.isEmpty()) return
         val now = System.currentTimeMillis()
-        for (documentId in documentIds) db.add(CouchOutbox(docId = documentId, queuedAt = now))
+        db.addAll(documentIds.map { CouchOutbox(docId = it, queuedAt = now) })
     }
 
     suspend fun pendingIds(): List<String> = db.allIds()
