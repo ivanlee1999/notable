@@ -152,6 +152,18 @@ class CouchSyncHost @Inject constructor(
         current.engine.markDirty(listOf(documentId))
     }
 
+    /**
+     * The durable table as well as the engine's own set. The repositories queue a document by
+     * writing its outbox row inside the transaction that changed the data, without going through
+     * the engine at all, so the engine only learns about those at its next flush — and this number
+     * is read precisely to decide whether that flush is worth making.
+     */
+    override suspend fun pendingCount(): Int {
+        val current = stack() ?: return 0
+        val queued = runCatching { current.store.pendingOutboxIds() }.getOrNull().orEmpty()
+        return (queued + current.engine.currentState.dirty).toSet().size
+    }
+
     // endregion
 
     // region Assembly

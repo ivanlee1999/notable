@@ -105,6 +105,18 @@ class CouchSyncControllerTest {
         override suspend fun recordDeletion(documentId: String) {
             synchronized(lock) { deletions += documentId }
         }
+
+        /** What the durable outbox still holds; the reconnect drain reads it. */
+        @Volatile
+        var pending = 0
+
+        /** How many times the controller asked, so a test can tell "never asked" from "asked, 0". */
+        val pendingReads = AtomicInteger(0)
+
+        override suspend fun pendingCount(): Int {
+            pendingReads.incrementAndGet()
+            return pending
+        }
     }
 
     /**
