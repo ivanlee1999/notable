@@ -9,6 +9,7 @@ import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageSyncState
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
+import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.sync.PageSyncSelector.selectDirtyPages
 import com.ethran.notable.sync.serializers.NotebookSerializer
 import com.ethran.notable.utils.AppResult
@@ -1269,6 +1270,10 @@ class NotebookSyncService @Inject constructor(
         //    so a crash can't leave the page with old strokes gone and new ones not yet written.
         try {
             appRepository.replaceDownloadedPage(page, strokes, updatedImages)
+            // The rows this page is drawn from have just been swapped out from under whoever is
+            // holding them in memory. Without this the page keeps its pre-download strokes for as
+            // long as it stays cached, and the download reads as a sync that did nothing.
+            CanvasEventBus.pagesChangedInDb.tryEmit(setOf(pageId))
         } catch (e: Exception) {
             errors.add(DomainError.DatabaseError("Failed to save page $pageId: ${e.message}"))
         }

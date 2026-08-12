@@ -53,7 +53,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -877,19 +876,6 @@ class PageView(
         }
     }
 
-
-    // updates page setting in db, (for instance type of background)
-    // and redraws page to view.
-    suspend fun refreshCurrentPage() {
-        val pageId = currentPageId
-        log.d("Refresh page: $pageId")
-        pageDataManager.refreshPageFromDb(pageId)
-        withContext(Dispatchers.Main) {
-            drawAreaScreenCoordinates(Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT))
-//            persistBitmapDebounced()
-        }
-
-    }
 
     fun drawBgToCanvas(clipRect: Rect?) {
         val backgroundType = pageDataManager.getBackgroundType() ?: BackgroundType.Native

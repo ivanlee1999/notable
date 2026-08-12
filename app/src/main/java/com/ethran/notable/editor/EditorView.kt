@@ -171,7 +171,9 @@ fun EditorView(
                     }
 
                     CanvasCommand.RefreshCanvas -> {
-                        CanvasEventBus.reloadFromDb.emit(Unit)
+                        CanvasEventBus.pagesChangedInDb.emit(
+                            setOfNotNull(viewModel.toolbarState.value.pageId)
+                        )
                     }
 
                     is CanvasCommand.CopyImageToCanvas -> {

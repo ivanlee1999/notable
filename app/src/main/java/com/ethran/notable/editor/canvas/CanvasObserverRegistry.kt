@@ -78,7 +78,6 @@ class CanvasObserverRegistry(
         observeSelectionGesture()
         observeClearPage()
         observeRestartAfterConfChange()
-        observeReloadFromDb()
         observePenChanges()
         observeIsDrawingSnapshot()
         observeToolbar()
@@ -207,15 +206,6 @@ class CanvasObserverRegistry(
                 log.v("Configuration changed!")
                 drawCanvas.init()
                 drawCanvas.refreshManager.drawCanvasToView(null)
-            }
-        }
-    }
-
-    private fun observeReloadFromDb() {
-        observerScope.launch {
-            CanvasEventBus.reloadFromDb.collect {
-                page.refreshCurrentPage()
-                refreshManager.refreshUiSuspend()
             }
         }
     }

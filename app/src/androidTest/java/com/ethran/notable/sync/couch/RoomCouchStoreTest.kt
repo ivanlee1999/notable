@@ -29,6 +29,7 @@ import com.ethran.notable.data.db.StrokePoint
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.data.db.encodeStrokePoints
 import com.ethran.notable.data.events.DefaultAppEventBus
+import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.testing.TestDatabaseFactory
 import kotlinx.coroutines.CoroutineScope
@@ -623,6 +624,148 @@ class RoomCouchStoreTest {
         id = id, x = 0, y = 0, width = 10, height = 10, uri = null, pageId = pageId,
         createdAt = Date(1_770_000_000_000L), updatedAt = Date(1_770_000_000_000L),
     )
+
+    // endregion
+
+    // region Reaching the screen
+
+    /**
+     * A [PageDataManager] wired the way the app wires it, and a store wired the way
+     * [CouchSyncHost] wires it — the two halves this scenario needs joined.
+     */
+    private fun pageCache() = PageDataManager(
+        appRepository = repository,
+        appEventBus = DefaultAppEventBus(),
+        backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
+        viewport = PageViewportState(),
+        couchSync = inertCouchSync(),
+    )
+
+    private fun reportingStore() = RoomCouchStore(
+        repository, db.kvDao(), deviceId = "boox", imagesFolder = { images },
+        onPagesApplied = { CanvasEventBus.pagesChangedInDb.tryEmit(it) },
+    )
+
+    /** Opens [pageId] in [cache] and waits for its strokes to be resident, as the editor does. */
+    private fun openAndLoad(cache: PageDataManager, pageId: String) = runBlocking {
+        cache.setPage(pageId)
+        cache.requestCurrentPageLoadJoin()
+    }
+
+    /**
+     * The cache is corrected off the caller's thread; give it a bounded chance to catch up.
+     * Sorted, because a page's strokes come back through a Room `@Relation`, which promises no
+     * order — this is about which strokes are on the page, not the order they are drawn in.
+     */
+    private fun awaitStrokeIds(cache: PageDataManager, pageId: String, expected: List<String>) =
+        generateSequence(0) { it + 1 }
+            .take(100)
+            .map {
+                Thread.sleep(50)
+                cache.getStrokes(pageId).map { stroke -> stroke.id }.sorted()
+            }
+            .firstOrNull { it == expected.sorted() }
+            ?: cache.getStrokes(pageId).map { it.id }.sorted()
+
+    private fun seedPage(vararg strokeIds: String) = runBlocking {
+        repository.bookRepository.createEmpty(
+            Notebook(id = "nb1", pageIds = listOf("p1", "p2"))
+        )
+        repository.pageRepository.create(Page(id = "p1", notebookId = "nb1"))
+        repository.pageRepository.create(Page(id = "p2", notebookId = "nb1"))
+        repository.strokeRepository.create(strokeIds.map { strokeRow(it, "p1") })
+    }
+
+    /**
+     * The bug this closes. A pulled stroke reached Room but never the screen: [PageDataManager] is
+     * the editor's only source of strokes and never re-reads a page it has already loaded, so the
+     * open page went on showing its pre-pull ink — while the Library thumbnail, rendered straight
+     * from Room, showed the new stroke. Applying a page is only half the job; naming the pages that
+     * moved is the other half.
+     */
+    @Test
+    fun aPulledStrokeReachesThePageAlreadyOpen() {
+        val cache = pageCache()
+        seedPage("s1")
+        openAndLoad(cache, "p1")
+        assertEquals(listOf("s1"), cache.getStrokes("p1").map { it.id })
+
+        reportingStore().apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(
+                page(
+                    listOf(stroke("s1", at = 1), stroke("s2", at = 5, device = "ipad")),
+                    notebookId = "nb1", updatedAt = 5, by = "ipad",
+                )
+            ),
+            basedOn = null,
+        )
+
+        assertEquals(listOf("s1", "s2"), awaitStrokeIds(cache, "p1", listOf("s1", "s2")))
+    }
+
+    /**
+     * The other direction: a stroke the incoming page dropped has to leave the screen too, or the
+     * cache goes on drawing ink that Room has no copy of.
+     */
+    @Test
+    fun aStrokeTheChangeRemovedLeavesTheOpenPage() {
+        val cache = pageCache()
+        seedPage("s1", "s2")
+        openAndLoad(cache, "p1")
+        assertEquals(2, cache.getStrokes("p1").size)
+
+        // basedOn names what the merge was looking at, so dropping s2 from the result is a decision
+        // about s2 rather than a stroke the merge never saw.
+        reportingStore().apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(
+                page(listOf(stroke("s1", at = 1)), notebookId = "nb1", updatedAt = 5, by = "ipad")
+            ),
+            basedOn = CouchDocBody.Page(
+                page(
+                    listOf(stroke("s1", at = 1), stroke("s2", at = 1)),
+                    notebookId = "nb1", updatedAt = 1,
+                )
+            ),
+        )
+
+        assertEquals(listOf("s1"), awaitStrokeIds(cache, "p1", listOf("s1")))
+    }
+
+    /**
+     * A page nobody is drawing is forgotten rather than corrected, so its next open reads Room.
+     * Left resident it would be served from memory forever: a loaded page is never read again.
+     */
+    @Test
+    fun aPulledStrokeReachesAPageThatIsMerelyCached() {
+        val cache = pageCache()
+        seedPage("s1")
+        openAndLoad(cache, "p1")
+        // Turn the page: p1 stays resident, but it is no longer the current one.
+        runBlocking { cache.setPage("p2") }
+
+        reportingStore().apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(
+                page(
+                    listOf(stroke("s1", at = 1), stroke("s2", at = 5, device = "ipad")),
+                    notebookId = "nb1", updatedAt = 5, by = "ipad",
+                )
+            ),
+            basedOn = null,
+        )
+
+        // Dropped, so nothing is left to serve the stale copy from...
+        assertEquals(emptyList<String>(), awaitStrokeIds(cache, "p1", emptyList()))
+        // ...and opening it again reads Room.
+        openAndLoad(cache, "p1")
+        assertEquals(listOf("s1", "s2"), cache.getStrokes("p1").map { it.id }.sorted())
+    }
+
+    // endregion
+
+    // region Helpers (continued)
 
     private fun <T> await(read: suspend () -> List<T>): List<T> = generateSequence(0) { it + 1 }
         .take(100)

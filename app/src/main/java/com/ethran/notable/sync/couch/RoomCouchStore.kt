@@ -52,8 +52,12 @@ class RoomCouchStore(
     private val appRepository: AppRepository,
     private val kvDao: KvDao,
     private val deviceId: String,
-    /** Called after any change the engine applied, so the UI can reload. Never called for reads. */
-    private val onApplied: (() -> Unit)? = null,
+    /**
+     * The pages an applied change rewrote, so anything holding them in memory can re-read them.
+     * Never called for reads, and never with an empty set — a change that touched no page's rows
+     * (a folder, an asset's bytes) leaves nothing cached to correct.
+     */
+    private val onPagesApplied: ((Set<String>) -> Unit)? = null,
     /**
      * Where placed images live. A function rather than a `File` because resolving it touches
      * external storage, which a plain JVM test has none of — and this class is otherwise free of
@@ -93,8 +97,15 @@ class RoomCouchStore(
     ) = runBlocking<Unit> {
         val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking
 
+        // Which pages this change rewrites, collected as it goes. A page still on screen or held in
+        // a cache is showing what it held before this call, and only these ids say so.
+        val rewrittenPages = mutableSetOf<String>()
+
         when (body) {
             is CouchDocBody.Notebook -> {
+                // Read before the apply: the pages it drops are deleted by it, and afterwards there
+                // is nothing left to name them.
+                rewrittenPages += body.notebook.deletedPageIds.map { it.id }
                 applyNotebook(id, body.notebook)
                 // A notebook arriving from the server un-deletes it here — that decision was
                 // already made by the merge, which resurrects only when the edit is newer than the
@@ -102,8 +113,10 @@ class RoomCouchStore(
                 appRepository.couchDeletionRepository.clear(documentId)
             }
 
-            is CouchDocBody.Page ->
+            is CouchDocBody.Page -> {
                 applyPage(id, body.page, basedOn = (basedOn as? CouchDocBody.Page)?.page)
+                rewrittenPages += id
+            }
 
             // Where the bytes go was decided when the page that places them was applied: under
             // the hash that names them, which is the path that page's rows already point at.
@@ -117,7 +130,12 @@ class RoomCouchStore(
             is CouchDocBody.Deleted -> {
                 when (type) {
                     // Room cascades: the notebook's pages, and their strokes and images, go with it.
-                    CouchDocType.NOTEBOOK -> appRepository.bookRepository.delete(id)
+                    CouchDocType.NOTEBOOK -> {
+                        // Again read first: the cascade is what makes these unnameable afterwards.
+                        rewrittenPages += appRepository.bookRepository.getById(id)?.pageIds.orEmpty()
+                        appRepository.bookRepository.delete(id)
+                    }
+
                     CouchDocType.FOLDER -> appRepository.folderRepository.delete(id)
                     // Page deletions travel inside their notebook's `deletedPageIds`, not as their
                     // own tombstone document; nothing to do here.
@@ -128,7 +146,7 @@ class RoomCouchStore(
                 appRepository.couchDeletionRepository.clear(documentId)
             }
         }
-        onApplied?.invoke()
+        if (rewrittenPages.isNotEmpty()) onPagesApplied?.invoke(rewrittenPages)
     }
 
     /**
@@ -176,7 +194,8 @@ class RoomCouchStore(
                 value = couchJson.encodeToString(JsonObject.serializer(), json),
             )
         )
-        onApplied?.invoke()
+        // No notification: every row this wrote is new, so nothing in memory can be holding a
+        // stale copy of it.
     }
 
     /**
