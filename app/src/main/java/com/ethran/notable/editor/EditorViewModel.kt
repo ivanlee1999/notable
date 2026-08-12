@@ -89,6 +89,8 @@ data class ToolbarUiState(
      * differ only here). */
     val penPresetId: String = ToolbarPen.DEFAULT_PENS.first().id,
     val eraser: Eraser = Eraser.PEN,
+    /** Which shape the SHAPE tool draws. Only read while [mode] is [Mode.Line]. */
+    val shape: Shape = Shape.LINE,
     /** Color/size per pen preset, keyed by preset id — a projection of
      * AppSettings.toolbarPens kept in sync by the ViewModel (the preset is the source
      * of truth). */
@@ -120,6 +122,9 @@ sealed class ToolbarAction {
     data class ChangePen(val presetId: String) : ToolbarAction()
     data class ChangePenSetting(val presetId: String, val setting: PenSetting) : ToolbarAction()
     data class ChangeEraser(val eraser: Eraser) : ToolbarAction()
+
+    /** Picks the shape *and* selects the shape tool: choosing a shape means "draw that". */
+    data class ChangeShape(val shape: Shape) : ToolbarAction()
     object ToggleMenu : ToolbarAction()
     data class ToggleEraserManu(val isOpen: Boolean) : ToolbarAction()
     data class ToggleBackgroundSelector(val isOpen: Boolean) : ToolbarAction()
@@ -255,6 +260,7 @@ class EditorViewModel @Inject constructor(
                 pen = preset?.pen ?: Pen.BALLPEN,
                 penPresetId = preset?.id ?: it.penPresetId,
                 eraser = settings?.eraser ?: Eraser.PEN,
+                shape = settings?.shape ?: Shape.LINE,
                 isToolbarOpen = settings?.isToolbarOpen ?: false,
                 penSettings = pens.associate { p -> p.id to p.setting() }
                     .ifEmpty { DEFAULT_PEN_SETTINGS }
@@ -638,6 +644,7 @@ class EditorViewModel @Inject constructor(
                 mode = currentState.mode,
                 penPresetId = currentState.penPresetId,
                 eraser = currentState.eraser,
+                shape = currentState.shape,
             )
         )
     }

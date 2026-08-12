@@ -3,6 +3,7 @@ package com.ethran.notable.data.datastore
 import com.ethran.notable.data.db.Kv
 import com.ethran.notable.data.db.KvRepository
 import com.ethran.notable.editor.state.Mode
+import com.ethran.notable.editor.state.Shape
 import com.ethran.notable.editor.utils.Eraser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,9 @@ class EditorSettingCacheManager
         val isToolbarOpen: Boolean,
         val penPresetId: String,
         val eraser: Eraser? = Eraser.PEN,
+        // Nullable with a default so a settings blob written by an older build still decodes;
+        // the persist version is only bumped for changes that cannot be defaulted through.
+        val shape: Shape? = Shape.LINE,
         val mode: Mode
     )
 
