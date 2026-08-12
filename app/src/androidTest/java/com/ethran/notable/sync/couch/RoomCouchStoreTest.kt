@@ -35,6 +35,7 @@ import com.ethran.notable.testing.TestDatabaseFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -995,6 +996,10 @@ private fun inertCouchSync(): CouchSyncController = CouchSyncController(
         override suspend fun markUnsentDirty(): Int = 0
         override suspend fun markEverythingDirty() = Unit
         override suspend fun recordDeletion(documentId: String) = Unit
+
+        // Null is what the interface reserves for "CouchDB is not the live backend", which is
+        // exactly what this stand-in is.
+        override val documentState = MutableStateFlow<CouchDocumentState?>(null)
     },
     clock = CouchSyncClock(),
 )
