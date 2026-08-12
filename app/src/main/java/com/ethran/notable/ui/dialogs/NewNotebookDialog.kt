@@ -143,7 +143,7 @@ fun NewNotebookDialog(
                 PageSizePreset.entries.forEach { preset ->
                     OptionChip(
                         label = preset.displayName,
-                        detail = "${preset.millimetresWidth.toInt()}×${preset.millimetresHeight.toInt()} mm",
+                        detail = preset.millimetreLabel,
                         selected = preset == pageSize,
                         onClick = { pageSize = preset }
                     )

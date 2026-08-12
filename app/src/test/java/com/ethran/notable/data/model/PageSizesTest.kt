@@ -96,6 +96,17 @@ class PageSizesTest {
         assertNull(PageSizePreset.matching(PageSize(1401, 1980)))
     }
 
+    /**
+     * Letter is 215.9 mm wide, so truncating calls it 215 while the same sheet, arrived at from
+     * its units, rounds to 216. One sheet, one number.
+     */
+    @Test
+    fun a_preset_is_measured_in_rounded_millimetres() {
+        assertEquals("216×279 mm", PageSizePreset.LETTER.millimetreLabel)
+        assertEquals("Letter · 216×279 mm", PageSizePreset.LETTER.label)
+        assertEquals("210×297 mm", PageSizePreset.A4.millimetreLabel)
+    }
+
     /** A size from a build with more presets than this one still reads as something. */
     @Test
     fun an_unknown_size_is_labelled_in_millimetres() {
