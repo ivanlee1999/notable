@@ -144,7 +144,9 @@ object CouchMerge {
             .filter { it.id !in removedImageIds }
             .sortedBy { orderKey(it.createdAt, it.id) }
 
-        val winner = if (pageWins(a, b)) a else b
+        val pageAWins = pageWins(a, b)
+        val winner = if (pageAWins) a else b
+        val pageLoser = if (pageAWins) b else a
         return CouchPage(
             type = CouchDocType.PAGE,
             schema = maxOf(a.schema, b.schema),
@@ -152,6 +154,12 @@ object CouchMerge {
             title = winner.title,
             background = winner.background,
             backgroundType = winner.backgroundType,
+            // A declared sheet is never lost to a peer that has none: geometry describes how the
+            // ink already on the page is laid out, so a writer that has not learned the field
+            // cannot un-declare it by winning the scalar tiebreak. When both declare, the winner's
+            // wins like any other scalar.
+            pageWidth = winner.pageWidth ?: pageLoser.pageWidth,
+            pageHeight = winner.pageHeight ?: pageLoser.pageHeight,
             strokes = strokes,
             deletedStrokes = deletedStrokes,
             images = images,
@@ -230,6 +238,8 @@ object CouchMerge {
             "updatedBy" to page.updatedBy, "notebookId" to page.notebookId,
             "title" to page.title,
             "background" to page.background, "backgroundType" to page.backgroundType,
+            "pageWidth" to page.pageWidth?.toString(),
+            "pageHeight" to page.pageHeight?.toString(),
         )
     )
 
@@ -260,6 +270,8 @@ object CouchMerge {
             parentFolderId = winner.parentFolderId,
             defaultBackground = winner.defaultBackground,
             defaultBackgroundType = winner.defaultBackgroundType,
+            defaultPageWidth = winner.defaultPageWidth ?: loser.defaultPageWidth,
+            defaultPageHeight = winner.defaultPageHeight ?: loser.defaultPageHeight,
             createdAt = earlier(a.createdAt, b.createdAt),
             updatedAt = later(a.updatedAt, b.updatedAt),
             updatedBy = winner.updatedBy,
@@ -279,6 +291,8 @@ object CouchMerge {
             "parentFolderId" to notebook.parentFolderId,
             "defaultBackground" to notebook.defaultBackground,
             "defaultBackgroundType" to notebook.defaultBackgroundType,
+            "defaultPageWidth" to notebook.defaultPageWidth?.toString(),
+            "defaultPageHeight" to notebook.defaultPageHeight?.toString(),
         )
     )
 

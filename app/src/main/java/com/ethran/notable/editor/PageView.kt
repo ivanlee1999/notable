@@ -25,6 +25,7 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.SimplePointF
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.canvas.CanvasEventBus.drawingInProgress
@@ -135,12 +136,31 @@ class PageView(
 
     // we need to observe zoom level, to adjust strokes size.
     val zoomLevel: MutableStateFlow<Float> =
-        MutableStateFlow(pageDataManager.getPageZoom(currentPageId))
+        MutableStateFlow(pageDataManager.getPageZoom(currentPageId, ifUnzoomed = 1f))
 
     var height: Int
         get() = pageDataManager.getPageHeight(currentPageId) ?: viewHeight
         set(value) {
             pageDataManager.setPageHeight(currentPageId, value)
+        }
+
+    /** The sheet the current page is laid out on, in page units. */
+    val sheet: PageSize
+        get() = pageDataManager.getSheet(currentPageId)
+
+    /**
+     * The zoom at which the sheet exactly fills the view's width.
+     *
+     * This is what makes a declared page size mean the same thing on both devices: the page is the
+     * page, and the device scales to it. Before page sizes, zoom 1.0 *was* the fit because the page
+     * width was the screen width — which is precisely why the same page came out different sizes on
+     * the two apps.
+     */
+    val fitToWidthZoom: Float
+        get() {
+            val sheetWidth = sheet.width
+            if (sheetWidth <= 0 || viewWidth <= 0) return 1f
+            return viewWidth.toFloat() / sheetWidth
         }
 
 
@@ -184,7 +204,9 @@ class PageView(
             if(currentPageId.isEmpty())
                 log.e("Current page id is empty")
 
-            zoomLevel.value = pageDataManager.getPageZoom(currentPageId)
+            // The sheet is only known once the page row is loaded, so the fit is computed here
+            // rather than at construction: a page that has not been zoomed yet opens fitted.
+            zoomLevel.value = pageDataManager.getPageZoom(currentPageId, fitToWidthZoom)
             pageDataManager.getCachedBitmap(currentPageId)?.let { cached ->
                 log.i("PageView: using cached bitmap")
                 windowedBitmap = cached
@@ -230,7 +252,7 @@ class PageView(
         coroutineScope.launch(Dispatchers.IO) {
             pageDataManager.onExit(oldId, windowedBitmap)
             pageDataManager.setPage(newPageId)
-            zoomLevel.value = pageDataManager.getPageZoom(currentPageId)
+            zoomLevel.value = pageDataManager.getPageZoom(currentPageId, fitToWidthZoom)
             pageDataManager.getCachedBitmap(newPageId)?.let { cached ->
                 log.i("PageView: using cached bitmap")
                 windowedBitmap = cached
@@ -577,6 +599,14 @@ class PageView(
         if (scroll.y + deltaInPage.y < 0) {
             deltaInPage = deltaInPage.copy(y = -scroll.y)
         }
+        // …and not past the far edge of the content either. The content is the sheet or the ink,
+        // whichever reaches further (PageDataManager.computeWidth), so panning right always reaches
+        // ink written off the page — and stops once there is nothing more to see, instead of
+        // wandering into unbounded blank space.
+        val maxScrollX = maxHorizontalScroll()
+        if (scroll.x + deltaInPage.x > maxScrollX) {
+            deltaInPage = deltaInPage.copy(x = maxScrollX - scroll.x)
+        }
 
         // There is nothing to do, return.
         if (deltaInPage == Offset.Zero) return
@@ -617,22 +647,36 @@ class PageView(
     }
 
 
+    /**
+     * How far right the page can be panned: enough to bring the far edge of the content to the
+     * right edge of the view, and never negative (content narrower than the view does not pan).
+     */
+    private fun maxHorizontalScroll(): Float {
+        val contentWidth = pageDataManager.computeWidth(currentPageId).toFloat()
+        val visibleWidth = viewWidth / zoomLevel.value.coerceAtLeast(0.01f)
+        return (contentWidth - visibleWidth).coerceAtLeast(0f)
+    }
+
     private fun calculateZoomLevel(
         scaleDelta: Float,
         currentZoom: Float,
     ): Float {
         // TODO: Better snapping logic
-        val portraitRatio = SCREEN_WIDTH.toFloat() / SCREEN_HEIGHT
+        // The two zooms worth snapping to: the whole sheet across the view, and 1:1 (one page unit
+        // per pixel). Before page sizes these were the same thing in portrait, so the snap target
+        // was derived from the screen; now the page decides, and the fit is what has to be easy to
+        // land on, since it is the zoom at which the page looks like the page.
+        val fitZoom = fitToWidthZoom
 
         return if (!GlobalAppSettings.current.continuousZoom) {
-            // Discrete zoom mode - snap to either 1.0 or screen ratio.
+            // Discrete zoom mode - snap to either 1.0 or the fit.
             // scaleDelta is a growth ratio minus 1 (see PointerTracker.pinchRatio),
             // so it is negative when pinching in (zoom out) and positive when
             // spreading (zoom in); split on 0, not 1.
             if (scaleDelta <= 0f) {
-                if (SCREEN_HEIGHT > SCREEN_WIDTH) portraitRatio else 1.0f
+                min(fitZoom, 1.0f)
             } else {
-                if (SCREEN_HEIGHT > SCREEN_WIDTH) 1.0f else portraitRatio
+                max(fitZoom, 1.0f)
             }
         } else {
             // Continuous zoom: scaleDelta is the per-frame growth ratio minus 1,
@@ -642,11 +686,11 @@ class PageView(
             val newZoom =
                 (currentZoom * (1f + scaleDelta * ZOOM_SENSITIVITY)).coerceIn(MIN_ZOOM, MAX_ZOOM)
 
-            // Snap to either 1.0 or screen ratio depending on which is closer
-            val snapTarget = if (abs(newZoom - 1.0f) < abs(newZoom - portraitRatio)) {
+            // Snap to either 1.0 or the fit, depending on which is closer
+            val snapTarget = if (abs(newZoom - 1.0f) < abs(newZoom - fitZoom)) {
                 1.0f
             } else {
-                portraitRatio
+                fitZoom
             }
 
             if (abs(newZoom - snapTarget) < ZOOM_SNAP_THRESHOLD) {
@@ -872,6 +916,7 @@ class PageView(
             canvas = windowedCanvas,
             backgroundType = backgroundType,
             background = bg,
+            sheet = sheet,
             scroll = scroll,
             resourceBitmap = bgImage,
             scale = scale,
@@ -893,8 +938,10 @@ class PageView(
     private fun updateCanvasDimensions() {
         // Recreate bitmap and canvas with new dimensions
         recreateCanvas()
-        //Reset zoom level.
-        zoomLevel.value = 1.0f
+        // Re-fit to the new width. Resetting to 1.0 was the old "fit", back when the page was the
+        // screen; on a declared sheet it would leave the page adrift after every rotation.
+        zoomLevel.value = fitToWidthZoom
+        pageDataManager.setPageZoom(currentPageId, zoomLevel.value)
         // TODO: it might be worth to do it
         //  by redrawing only part of the screen, like in scroll and zoom.
         coroutineScope.launch {

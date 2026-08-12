@@ -76,10 +76,14 @@ fun HorizontalScrollIndicator(viewModel: EditorViewModel, page: PageView) {
         ) {
             val viewportWidthPx = convertDpToPixel(this.maxWidth, LocalContext.current).toInt()
 
-            // Total scrollable width approximation:
-            // page.width is the total content width (page coordinates)
-            // page.scroll.x + viewportWidthPx ensures indicator still shows while near right edge
-            val virtualWidth = max(page.viewWidth, page.scroll.x.toInt() + viewportWidthPx)
+            // Total scrollable width approximation: the page's own sheet, so the indicator shows
+            // up whenever the page is wider than the view and there is something to the right worth
+            // scrolling to. It used to be the *view's* width, which by definition never was.
+            // Deliberately the sheet rather than the ink extent (PageDataManager.computeWidth):
+            // that takes a lock and walks every stroke, which is not something to do during
+            // composition. page.scroll.x + viewportWidthPx keeps the indicator alive while panned
+            // past the sheet's edge, which is where out-of-bounds ink lives.
+            val virtualWidth = max(page.sheet.width, page.scroll.x.toInt() + viewportWidthPx)
             if (virtualWidth <= viewportWidthPx) return@BoxWithConstraints
 
             val indicatorSizeDp = (viewportWidthPx / virtualWidth.toFloat()) * this.maxWidth.value

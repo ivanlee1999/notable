@@ -1,6 +1,8 @@
 package com.ethran.notable.sync.serializers
 
 import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.declaredDefaultPageSize
+import com.ethran.notable.data.model.PageSizePreset
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import org.junit.Assert.assertEquals
@@ -26,6 +28,8 @@ class NotebookSerializerTest {
         openPageId: String? = "p-1",
         parentFolderId: String? = "folder-1",
         linkedExternalUri: String? = null,
+        defaultPageWidth: Int? = null,
+        defaultPageHeight: Int? = null,
         createdAt: Date = Date(1_700_000_000_000),
         updatedAt: Date = Date(1_700_000_456_000),
     ) = Notebook(
@@ -37,9 +41,61 @@ class NotebookSerializerTest {
         defaultBackground = "blank",
         defaultBackgroundType = "native",
         linkedExternalUri = linkedExternalUri,
+        defaultPageWidth = defaultPageWidth,
+        defaultPageHeight = defaultPageHeight,
         createdAt = createdAt,
         updatedAt = updatedAt,
     )
+
+    /** The sheet new pages get has to survive a round trip, or the iPad lays them out differently. */
+    @Test
+    fun manifest_round_trip_preserves_the_default_page_size() {
+        val original = sampleNotebook(defaultPageWidth = 1400, defaultPageHeight = 1980)
+        val json = NotebookSerializer.serializeManifest(original)
+        assertTrue(json, json.contains("\"defaultPageWidth\": 1400"))
+
+        val result = NotebookSerializer.deserializeManifest(json)
+        assertTrue(result is AppResult.Success)
+        val restored = (result as AppResult.Success).data
+        assertEquals(1400, restored.defaultPageWidth)
+        assertEquals(1980, restored.defaultPageHeight)
+        assertEquals(PageSizePreset.A4.size, restored.declaredDefaultPageSize())
+    }
+
+    /** A manifest written before page sizes existed still parses, and declares nothing. */
+    @Test
+    fun manifest_without_a_page_size_declares_none() {
+        val json = """
+            {"version":1,"notebookId":"nb-1","title":"Old","pageIds":["p-1"],
+             "openPageId":null,"parentFolderId":null,"defaultBackground":"blank",
+             "defaultBackgroundType":"native","linkedExternalUri":null,
+             "createdAt":"2026-08-02T10:00:00Z","updatedAt":"2026-08-02T10:00:00Z",
+             "serverTimestamp":"2026-08-02T10:00:00Z"}
+        """.trimIndent()
+
+        val result = NotebookSerializer.deserializeManifest(json)
+        assertTrue(result is AppResult.Success)
+        val restored = (result as AppResult.Success).data
+        assertNull(restored.defaultPageWidth)
+        assertNull(restored.declaredDefaultPageSize())
+    }
+
+    /** A peer writing 0 for "unset" must not leave a notebook stamping unlayoutable pages. */
+    @Test
+    fun manifest_with_a_zero_page_size_declares_none() {
+        val json = """
+            {"version":1,"notebookId":"nb-1","title":"Zero","pageIds":["p-1"],
+             "openPageId":null,"parentFolderId":null,"defaultBackground":"blank",
+             "defaultBackgroundType":"native","linkedExternalUri":null,
+             "defaultPageWidth":0,"defaultPageHeight":0,
+             "createdAt":"2026-08-02T10:00:00Z","updatedAt":"2026-08-02T10:00:00Z",
+             "serverTimestamp":"2026-08-02T10:00:00Z"}
+        """.trimIndent()
+
+        val result = NotebookSerializer.deserializeManifest(json)
+        assertTrue(result is AppResult.Success)
+        assertNull((result as AppResult.Success).data.declaredDefaultPageSize())
+    }
 
     @Test
     fun manifest_round_trip_preserves_all_fields() {

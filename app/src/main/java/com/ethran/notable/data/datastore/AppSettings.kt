@@ -2,6 +2,8 @@ package com.ethran.notable.data.datastore
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
+import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.PageSizePreset
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarLayout
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import kotlinx.serialization.Serializable
@@ -44,6 +46,11 @@ data class AppSettings(
     val version: Int,
     val monitorBgFiles: Boolean = false,
     val defaultNativeTemplate: String = "blank",
+    // The paper size new notebooks and quick pages are created with, as a PageSizePreset key.
+    // Only consulted at creation: from then on the page's own pageWidth/pageHeight decides, on
+    // this app and on the iPad alike. Pages created before page sizes existed declare none and
+    // keep falling back to the screen width they were written against.
+    val defaultPageSizeKey: String = PageSizePreset.DEFAULT.key,
     val quickNavPages: List<String> = listOf(),
     val scribbleToEraseEnabled: Boolean = false,
     val toolbarPosition: Position = Position.Top,
@@ -88,6 +95,14 @@ data class AppSettings(
     val destructiveMigrations: Boolean = false,
 
     ) {
+    /**
+     * The sheet new pages get. Falls back to the default rather than throwing if the stored key
+     * came from a build with a preset this one does not have.
+     */
+    val defaultPageSize: PageSize
+        get() = (PageSizePreset.entries.firstOrNull { it.key == defaultPageSizeKey }
+            ?: PageSizePreset.DEFAULT).size
+
     enum class GestureAction {
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
     }

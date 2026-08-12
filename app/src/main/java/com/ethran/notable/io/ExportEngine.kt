@@ -14,6 +14,9 @@ import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.datastore.A4_HEIGHT
 import com.ethran.notable.data.datastore.A4_WIDTH
+import com.ethran.notable.data.model.declaredPageSize
+import com.ethran.notable.data.model.PageUnits
+import com.ethran.notable.data.model.sheet
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.events.AppEvent
 import com.ethran.notable.data.events.AppEventBus
@@ -396,20 +399,38 @@ class ExportEngine @Inject constructor(
         val data = pageContentRenderer.loadPageContent(pageId) ?: return
         val (_, contentHeightPx) = pageContentRenderer.computeContentDimensions(data)
 
-        val scaleFactor = A4_WIDTH.toFloat() / SCREEN_WIDTH.toFloat()
+        // The output page is the page's own sheet, in points. For a declared sheet this is exact
+        // (page units are 0.15 mm, so A4 lands on the standard 595x842pt box and the scale is just
+        // PageUnits.POINTS_PER_UNIT); for a page that declares none it reduces to the old
+        // "fit the screen width to A4", which is what those pages were exported as before.
+        val sheet = data.page.sheet()
+        val declared = data.page.declaredPageSize() != null
+        val outWidth: Int
+        val outHeight: Int
+        val scaleFactor: Float
+        if (declared) {
+            outWidth = Math.round(sheet.widthInPoints)
+            outHeight = Math.round(sheet.heightInPoints)
+            scaleFactor = PageUnits.POINTS_PER_UNIT.toFloat()
+        } else {
+            outWidth = A4_WIDTH
+            outHeight = A4_HEIGHT
+            scaleFactor = A4_WIDTH.toFloat() / sheet.width.toFloat()
+        }
         val scaledHeight = (contentHeightPx * scaleFactor).toInt()
 
         if (GlobalAppSettings.current.paginatePdf) {
             // drawPage consumes `scroll` in *content* pixels (it offsets strokes/images before
             // canvas.scale). So the vertical step and the loop bound must be in content pixels too.
-            // One A4 page shows A4_HEIGHT/scaleFactor content px; stepping by A4_HEIGHT (output px)
-            // instead advanced only ~scaleFactor of a page each time, so consecutive pages overlapped.
-            val pageContentHeightPx = A4_HEIGHT / scaleFactor
+            // One output page shows outHeight/scaleFactor content px; stepping by outHeight (output
+            // px) instead advanced only ~scaleFactor of a page each time, so consecutive pages
+            // overlapped.
+            val pageContentHeightPx = outHeight / scaleFactor
             var currentTop = 0f
             var logicalPageNumber = pageNumber
             while (currentTop < contentHeightPx) {
                 val pageInfo =
-                    PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, logicalPageNumber).create()
+                    PdfDocument.PageInfo.Builder(outWidth, outHeight, logicalPageNumber).create()
                 val page = doc.startPage(pageInfo)
                 pageContentRenderer.drawPage(
                     canvas = page.canvas,
@@ -422,7 +443,7 @@ class ExportEngine @Inject constructor(
                 logicalPageNumber++
             }
         } else {
-            val pageInfo = PdfDocument.PageInfo.Builder(A4_WIDTH, scaledHeight, pageNumber).create()
+            val pageInfo = PdfDocument.PageInfo.Builder(outWidth, scaledHeight, pageNumber).create()
             val page = doc.startPage(pageInfo)
             pageContentRenderer.drawPage(
                 canvas = page.canvas,

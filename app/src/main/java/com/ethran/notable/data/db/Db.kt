@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class],
-    version = 40,
+    version = 41,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -80,7 +80,10 @@ class Converters {
         // Adds the nullable `title` column to `page` — quick pages the user can name.
         AutoMigration(38, 39),
         // Adds the `DeletedPage` / `DeletedImage` tombstone tables.
-        AutoMigration(39, 40)
+        AutoMigration(39, 40),
+        // Page.pageWidth/pageHeight and Notebook.defaultPageWidth/defaultPageHeight: nullable
+        // columns, so Room adds them itself and every existing row reads as "declares no size".
+        AutoMigration(40, 41)
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

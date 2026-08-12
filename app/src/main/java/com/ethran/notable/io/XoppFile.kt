@@ -13,6 +13,10 @@ import com.ethran.notable.BuildConfig
 import com.ethran.notable.SCREEN_HEIGHT
 import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.datastore.A4_WIDTH
+import com.ethran.notable.data.model.declaredPageSize
+import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.PageUnits
+import com.ethran.notable.data.model.sheet
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.MAX_PRESSURE_NORMALIZED
@@ -62,7 +66,15 @@ class XoppFile @Inject constructor(
     private val appEventBus: AppEventBus,
 ) {
     private val log = ShipBook.getLogger("XoppFile")
-    private val scaleFactor = A4_WIDTH.toFloat() / SCREEN_WIDTH
+
+    /**
+     * Page units to PostScript points — what a .xopp stores geometry in.
+     *
+     * A page unit is exactly 0.15 mm, so this is an exact conversion with nothing device-specific
+     * in it. It replaces `A4_WIDTH / SCREEN_WIDTH`, which silently assumed every page was A4 and
+     * exactly as wide as this tablet's screen.
+     */
+    private val unitsToPoints = PageUnits.POINTS_PER_UNIT.toFloat()
 
     /**
      * Holds mutable buffers that are allocated once per import operation and reused across
@@ -142,12 +154,20 @@ class XoppFile @Inject constructor(
             val pageWithData = pageRepo.getWithDataById(pageId) ?: return@withContext
             val strokes = pageWithData.strokes
             val images = pageWithData.images
+            // Page units to points, from the page's own sheet: a declared sheet converts exactly
+            // (0.15 mm per unit, so A4 is the standard 595pt-wide page Xournal++ writes), while a
+            // page that declares none keeps the old "fit the screen width to A4" scaling.
+            val sheet = pageWithData.page.sheet()
+            val declared = pageWithData.page.declaredPageSize() != null
+            // A declared sheet converts exactly; a page that declares none keeps the old
+            // "fit the screen width to A4" scaling, so its exports look as they always did.
+            val scaleFactor = if (declared) unitsToPoints else A4_WIDTH.toFloat() / sheet.width
             val strokeHeight =
                 if (strokes.isEmpty()) 0 else strokes.maxOf(Stroke::bottom).toInt() + 50
-            val height = strokeHeight.coerceAtLeast(SCREEN_HEIGHT) * scaleFactor
+            val height = strokeHeight.coerceAtLeast(sheet.height) * scaleFactor
 
             writer.write("<page width=\"")
-            writer.write(A4_WIDTH.toString())
+            writer.write((sheet.width * scaleFactor).toString())
             writer.write("\" height=\"")
             writer.write(height.toString())
             writer.write("\">\n")
@@ -355,7 +375,13 @@ class XoppFile @Inject constructor(
                     var pageCount = 0
                     while (eventType != XmlPullParser.END_DOCUMENT) {
                         if (eventType == XmlPullParser.START_TAG && parser.name == "page") {
-                            val page = Page()
+                            // The .xopp declares each page's box in points, so an imported page can
+                            // declare a real sheet instead of inheriting this tablet's screen.
+                            val sheet = parsePageSheet(parser)
+                            val page = Page(
+                                pageWidth = sheet?.width,
+                                pageHeight = sheet?.height
+                            )
                             onPageCreated(page)
                             val images = parsePageContentStreaming(
                                 parser, page, parseState, onStrokeBatch
@@ -371,6 +397,19 @@ class XoppFile @Inject constructor(
         } catch (e: Exception) {
             log.e("Error importing book from $uri: ${e.message}")
         }
+    }
+
+    /**
+     * The `<page width= height=>` box, in page units, or null when the file does not give usable
+     * numbers (in which case the imported page declares no sheet, like any pre-page-size page).
+     */
+    private fun parsePageSheet(parser: XmlPullParser): PageSize? {
+        val widthPt = parser.getAttributeValue(null, "width")?.toFloatOrNull() ?: return null
+        val heightPt = parser.getAttributeValue(null, "height")?.toFloatOrNull() ?: return null
+        return PageSize.of(
+            Math.round(widthPt / unitsToPoints),
+            Math.round(heightPt / unitsToPoints)
+        )
     }
 
     /**
@@ -527,7 +566,7 @@ class XoppFile @Inject constructor(
         // Parse width attribute (strokeWidth [pressure0 pressure1 …]) into reusable buffer.
         val (newWidthsBuf, widthCount) = extractFloatsInto(widthString, state.widthsBuffer)
         state.widthsBuffer = newWidthsBuf
-        val strokeSize = if (widthCount > 0) state.widthsBuffer[0] / scaleFactor else 1.0f
+        val strokeSize = if (widthCount > 0) state.widthsBuffer[0] / unitsToPoints else 1.0f
 
         // Accumulate all TEXT children of <stroke> into the reusable buffer.
         // setLength(0) resets the internal counter with zero allocation.
@@ -554,8 +593,8 @@ class XoppFile @Inject constructor(
         val boundingBox = RectF()
 
         for (i in 0 until pointsCount) {
-            val x = state.coordsBuffer[i * 2] / scaleFactor
-            val y = state.coordsBuffer[i * 2 + 1] / scaleFactor
+            val x = state.coordsBuffer[i * 2] / unitsToPoints
+            val y = state.coordsBuffer[i * 2 + 1] / unitsToPoints
 
             // Width attribute layout: index 0 = stroke width, indices 1..N = per-point pressure.
             // Stored normalized to [0, 1] (the stroke is created with MAX_PRESSURE_NORMALIZED).
@@ -604,14 +643,14 @@ class XoppFile @Inject constructor(
 
     private fun parseImageStreaming(parser: XmlPullParser, page: Page): Image? {
         val left =
-            parser.getAttributeValue(null, "left")?.toFloatOrNull()?.div(scaleFactor) ?: return null
+            parser.getAttributeValue(null, "left")?.toFloatOrNull()?.div(unitsToPoints) ?: return null
         val top =
-            parser.getAttributeValue(null, "top")?.toFloatOrNull()?.div(scaleFactor) ?: return null
+            parser.getAttributeValue(null, "top")?.toFloatOrNull()?.div(unitsToPoints) ?: return null
         val right =
-            parser.getAttributeValue(null, "right")?.toFloatOrNull()?.div(scaleFactor)
+            parser.getAttributeValue(null, "right")?.toFloatOrNull()?.div(unitsToPoints)
                 ?: return null
         val bottom =
-            parser.getAttributeValue(null, "bottom")?.toFloatOrNull()?.div(scaleFactor)
+            parser.getAttributeValue(null, "bottom")?.toFloatOrNull()?.div(unitsToPoints)
                 ?: return null
 
         val outputDir = ensureImagesFolder()

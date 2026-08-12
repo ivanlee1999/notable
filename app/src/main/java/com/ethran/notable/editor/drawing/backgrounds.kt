@@ -10,17 +10,15 @@ import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntOffset
-import com.ethran.notable.SCREEN_HEIGHT
-import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.editor.utils.scaleRect
 import com.onyx.android.sdk.extension.copy
 import io.shipbook.shipbooksdk.ShipBook
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -176,7 +174,7 @@ fun drawHexagon(canvas: Canvas, centerX: Float, centerY: Float, r: Float) {
 }
 
 
-fun drawTitleBox(canvas: Canvas) {
+fun drawTitleBox(canvas: Canvas, sheet: PageSize) {
 
     // Draw label-like area in center
     val paint = Paint().apply {
@@ -192,10 +190,9 @@ fun drawTitleBox(canvas: Canvas) {
         isAntiAlias = true
     }
 
-    // This might not be actual width in some situations
-    // investigate it, in case of problems
-    val canvasHeight = max(SCREEN_WIDTH, SCREEN_HEIGHT)
-    val canvasWidth = min(SCREEN_WIDTH, SCREEN_HEIGHT)
+    // The sheet, not the screen: a cover's label has to land in the same place on both devices.
+    val canvasHeight = sheet.height
+    val canvasWidth = sheet.width
 
     // Dimensions for the label box
     val labelWidth = canvasWidth * 0.8f
@@ -223,7 +220,8 @@ private val bgBitmapPaint = Paint().apply {
 }
 
 fun drawBitmapToCanvas(
-    canvas: Canvas, imageBitmap: Bitmap, scroll: Offset, scale: Float, repeat: Boolean
+    canvas: Canvas, imageBitmap: Bitmap, scroll: Offset, scale: Float, repeat: Boolean,
+    sheet: PageSize
 ) {
     canvas.drawColor(Color.WHITE)
     val imageWidth = imageBitmap.width
@@ -232,7 +230,9 @@ fun drawBitmapToCanvas(
 
 //    val canvasWidth = canvas.width
     val canvasHeight = canvas.height
-    val widthOnCanvas = min(SCREEN_WIDTH, SCREEN_HEIGHT)
+    // The background is fitted to the *sheet*, so a PDF or image page covers the same area of the
+    // page on every device instead of being stretched to whatever screen is showing it.
+    val widthOnCanvas = sheet.width
 
     val scaleFactor = widthOnCanvas.toFloat() / imageWidth
     val scaledHeight = (imageHeight * scaleFactor).toInt()
@@ -275,10 +275,17 @@ fun drawBitmapToCanvas(
     }
 }
 
+/**
+ * @param sheet the page's own sheet, in page units — what the margin, the pagination lines and a
+ *   fitted background image are measured against. It is the page that decides how wide a page is,
+ *   never the screen: a screen-derived width is a different page on every device, so ink written
+ *   past a narrower device's edge would sit outside the page there.
+ */
 fun drawBg(
     canvas: Canvas,
     backgroundType: BackgroundType,
     background: String,
+    sheet: PageSize,
     scroll: Offset = Offset.Zero,
     resourceBitmap: Bitmap?,
     scale: Float = 1f,          // When exporting, we change scale of canvas. therefore canvas.width/height is scaled
@@ -313,9 +320,9 @@ fun drawBg(
 
         else -> {
             if (resourceBitmap != null) {
-                drawBitmapToCanvas(canvas, resourceBitmap, scroll, scale, repeat)
+                drawBitmapToCanvas(canvas, resourceBitmap, scroll, scale, repeat, sheet)
                 if (backgroundType is BackgroundType.CoverImage) {
-                    drawTitleBox(canvas)
+                    drawTitleBox(canvas, sheet)
                 }
             } else {
                 log.i("No resource provided to draw, maybe out of pages in pdf?")
@@ -323,39 +330,43 @@ fun drawBg(
             }
         }
     }
-    drawMargin(canvas, scroll, scale)
+    drawMargin(canvas, scroll, scale, sheet)
 
     if (GlobalAppSettings.current.visualizePdfPagination) {
-        drawPaginationLine(canvas, scroll, scale)
+        drawPaginationLine(canvas, scroll, scale, sheet)
     }
     if (clipRect != null) {
         canvas.restore()
     }
 }
 
-// TODO: make sure it respects horizontal scroll
-fun drawMargin(canvas: Canvas, scroll: Offset, scale: Float) {
-    // in landscape orientation add margin to indicate what will be visible in vertical orientation.
-    if (SCREEN_WIDTH > SCREEN_HEIGHT || scale < 1.0f || scroll.x > 1) {
-        val margin = min(SCREEN_HEIGHT, SCREEN_WIDTH) - scroll.x
-        // Draw vertical line with x= SCREEN_HEIGHT
-        canvas.drawLine(
-            margin, padding.toFloat(), margin, (SCREEN_HEIGHT / scale - padding), marginPaint
-        )
-    }
+/**
+ * Marks the right edge of the sheet, so it is obvious when writing has left the page.
+ *
+ * It used to mark "what will still be visible in portrait", because the page *was* the screen and
+ * there was no page edge to draw. Now there is one, and it is the same edge on every device — which
+ * is the point: ink to the right of this line is off-page for the iPad too, rather than lost.
+ */
+fun drawMargin(canvas: Canvas, scroll: Offset, scale: Float, sheet: PageSize) {
+    val margin = sheet.width - scroll.x
+    if (margin < 0 || margin > canvas.width / scale) return
+    canvas.drawLine(
+        margin, padding.toFloat(), margin, (canvas.height / scale - padding), marginPaint
+    )
 }
 
-fun drawPaginationLine(canvas: Canvas, scroll: Offset, scale: Float) {
+fun drawPaginationLine(canvas: Canvas, scroll: Offset, scale: Float, sheet: PageSize) {
     val textPaint = Paint().apply {
         color = Color.BLACK
         textSize = 24f
         isAntiAlias = true
     }
 
-    // A4 paper ratio (height/width in portrait)
-    val a4Ratio = 297f / 210f
-    val screenWidth = min(SCREEN_HEIGHT, SCREEN_WIDTH)
-    val pageHeight = screenWidth * a4Ratio
+    // The sheet's own height, rather than the screen width times an assumed A4 ratio: subpage
+    // breaks have to fall in the same place on both devices, and on a Letter page they are not
+    // A4-shaped at all.
+    val sheetWidth = sheet.width
+    val pageHeight = sheet.height.toFloat()
 
     // Convert scroll position to canvas coordinates
     // Calculate current page number (1-based)
@@ -369,7 +380,7 @@ fun drawPaginationLine(canvas: Canvas, scroll: Offset, scale: Float) {
         if (yPos >= 0) { // Only draw visible lines
             val yPosScaled = yPos
             canvas.drawLine(
-                0f, yPosScaled, screenWidth.toFloat(), yPosScaled, paginationLinePaint
+                0f, yPosScaled, sheetWidth.toFloat(), yPosScaled, paginationLinePaint
             )
 
             // Draw page number label (offset slightly below the line)

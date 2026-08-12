@@ -263,6 +263,8 @@ trailing slash and appends the path, percent-encoding each path segment.
   "defaultBackground": "blank",
   "defaultBackgroundType": "native",
   "linkedExternalUri": null,
+  "defaultPageWidth": 1400,
+  "defaultPageHeight": 1980,
   "createdAt": "2026-07-27T10:00:00Z",
   "updatedAt": "2026-07-27T10:05:00.123Z",
   "serverTimestamp": "2026-07-27T10:05:01.456Z"
@@ -277,11 +279,20 @@ trailing slash and appends the path, percent-encoding each path segment.
   than overwriting it. Older manifests that still carry the key are tolerated and ignored
   (`ignoreUnknownKeys = true`).
 
+`defaultPageWidth`/`defaultPageHeight` are the sheet new pages in the notebook are created with, in
+**page units** — the space stroke and image geometry is already expressed in, one unit being exactly
+0.15 mm (so A4 is 1400 x 1980 and converts to the standard 595 x 842 pt PDF box). Sizes are stored
+portrait; orientation is a fit, not a size. Absent, null or non-positive means the notebook was
+created before page sizes existed, and its pages fall back to the device's own screen width the way
+everything used to. See `PageSizes.kt`, and the normative table in bopa's
+`docs/notable-sync-protocol.md` §3.1 — both apps have to agree on it exactly.
+
 ### 4.3 Page JSON (`pages/{uuid}.json`)
 
 Page JSON schema version is `1`. It contains `id`, a nullable `notebookId` (`null` for standalone
 Quick Pages, which are never synced), background fields, nullable `parentFolderId`, scroll position,
-timestamps, and arrays of strokes and images.
+the page's own nullable `pageWidth`/`pageHeight` (§4.2 — this is the authoritative geometry for
+laying the page out), timestamps, and arrays of strokes and images.
 
 Each stroke carries geometry/style metadata plus `pointsData` — the current stroke binary encoding
 returned by `encodeStrokePoints`, Base64-wrapped for JSON transport. The binary encoder currently

@@ -187,11 +187,14 @@ class LibraryViewModel @Inject constructor(
     fun onCreateNewNotebook(title: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val settings = GlobalAppSettings.current
+            val sheet = settings.defaultPageSize
             val notebook = Notebook(
                 title = title,
                 parentFolderId = _folderId.value,
                 defaultBackground = settings.defaultNativeTemplate,
-                defaultBackgroundType = BackgroundType.Native.key
+                defaultBackgroundType = BackgroundType.Native.key,
+                defaultPageWidth = sheet.width,
+                defaultPageHeight = sheet.height
             )
             bookRepository.create(notebook)
             // Queue it now rather than waiting for someone to draw in it. Nothing else here ever
