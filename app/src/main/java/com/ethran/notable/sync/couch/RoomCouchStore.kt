@@ -250,6 +250,8 @@ class RoomCouchStore(
             parentFolderId = notebook.parentFolderId,
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
+            defaultPageWidth = notebook.defaultPageWidth,
+            defaultPageHeight = notebook.defaultPageHeight,
             createdAt = iso(notebook.createdAt),
             updatedAt = iso(notebook.updatedAt),
             updatedBy = deviceId,
@@ -263,6 +265,8 @@ class RoomCouchStore(
             title = data.page.title,
             background = data.page.background,
             backgroundType = data.page.backgroundType,
+            pageWidth = data.page.pageWidth,
+            pageHeight = data.page.pageHeight,
             strokes = data.strokes.mapNotNull(::couchStroke),
             deletedStrokes = appRepository.deletedStrokeRepository.getByPage(id)
                 .map { CouchTombstone(id = it.strokeId, deletedAt = iso(it.deletedAt)) },
@@ -372,6 +376,10 @@ class RoomCouchStore(
             parentFolderId = resolveFolder(notebook.parentFolderId),
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
+            // A declared sheet is kept when the peer names none — the same rule the merge uses, and
+            // for the same reason: a build that has not learned the field must not reflow pages.
+            defaultPageWidth = notebook.defaultPageWidth ?: existing?.defaultPageWidth,
+            defaultPageHeight = notebook.defaultPageHeight ?: existing?.defaultPageHeight,
             linkedExternalUri = existing?.linkedExternalUri,
             createdAt = date(notebook.createdAt),
             updatedAt = date(notebook.updatedAt),
@@ -421,6 +429,8 @@ class RoomCouchStore(
             title = page.title,
             background = page.background,
             backgroundType = page.backgroundType,
+            pageWidth = page.pageWidth ?: existing?.page?.pageWidth,
+            pageHeight = page.pageHeight ?: existing?.page?.pageHeight,
             parentFolderId = existing?.page?.parentFolderId,
             createdAt = date(page.createdAt),
             updatedAt = date(page.updatedAt),

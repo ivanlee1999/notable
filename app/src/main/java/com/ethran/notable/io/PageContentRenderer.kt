@@ -9,8 +9,6 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.res.imageResource
 import androidx.core.graphics.createBitmap
 import com.ethran.notable.R
-import com.ethran.notable.SCREEN_HEIGHT
-import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.PageRepository
@@ -18,6 +16,8 @@ import com.ethran.notable.data.db.PageWithData
 import com.ethran.notable.data.db.getBackgroundType
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.BackgroundType.Native
+import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.drawing.drawBg
 import com.ethran.notable.editor.drawing.drawImage
 import com.ethran.notable.editor.drawing.StrokeRenderers
@@ -48,7 +48,7 @@ class PageContentRenderer @Inject constructor(
 
         return withContext(Dispatchers.Default) {
             val (contentWidth, contentHeight) = computeContentDimensions(data)
-            val size = resolveRenderSize(contentWidth, contentHeight, target)
+            val size = resolveRenderSize(contentWidth, contentHeight, target, data.page.sheet())
 
             Log.d("PageContentRenderer", "size: ${size.width}, ${size.height}, ${size.scale}")
             createBitmap(size.width, size.height).also { bitmap ->
@@ -118,6 +118,7 @@ class PageContentRenderer @Inject constructor(
                 canvas = canvas,
                 backgroundType = resolvedBackgroundType,
                 background = data.page.background,
+                sheet = data.page.sheet(),
                 scroll = scroll,
                 resourceBitmap = bgImage,
                 scale = scaleFactor,
@@ -131,8 +132,11 @@ class PageContentRenderer @Inject constructor(
 
     // Returns (width, height)
     fun computeContentDimensions(data: PageWithData): Pair<Int, Int> {
+        // The page's own sheet is the floor, not the screen: an export has to contain the page,
+        // not whatever device happens to be running the export.
+        val sheet = data.page.sheet()
         if (data.strokes.isEmpty() && data.images.isEmpty()) {
-            return SCREEN_WIDTH to SCREEN_HEIGHT
+            return sheet.width to sheet.height
         }
 
         val strokeBottom = data.strokes.maxOfOrNull { it.bottom.toInt() } ?: 0
@@ -144,8 +148,8 @@ class PageContentRenderer @Inject constructor(
                 if (GlobalAppSettings.current.visualizePdfPagination) 0 else 50
         val rawWidth = maxOf(strokeRight, imageRight) + 50
 
-        val height = rawHeight.coerceAtLeast(SCREEN_HEIGHT)
-        val width = rawWidth.coerceAtLeast(SCREEN_WIDTH)
+        val height = rawHeight.coerceAtLeast(sheet.height)
+        val width = rawWidth.coerceAtLeast(sheet.width)
         return width to height
     }
 
@@ -153,11 +157,13 @@ class PageContentRenderer @Inject constructor(
         contentWidth: Int,
         contentHeight: Int,
         target: RenderTarget,
+        sheet: PageSize,
     ): RenderSize {
         return when (target) {
             RenderTarget.Full -> RenderSize(contentWidth, contentHeight, 1f)
             is RenderTarget.Thumbnail -> {
-                val screenRatio = SCREEN_HEIGHT.toFloat() / SCREEN_WIDTH.toFloat()
+                // The sheet's aspect, so a thumbnail is page-shaped rather than device-shaped.
+                val screenRatio = sheet.height.toFloat() / sheet.width.toFloat()
 
                 val width: Int
                 val height: Int

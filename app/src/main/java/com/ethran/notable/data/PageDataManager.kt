@@ -23,6 +23,9 @@ import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.BackgroundType.AutoPdf.getPage
 import com.ethran.notable.data.model.BackgroundType.CoverImage
 import com.ethran.notable.data.model.BackgroundType.ImageRepeating
+import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.legacyScreenSheet
+import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
@@ -899,23 +902,41 @@ class PageDataManager @Inject constructor(
     fun getPageHeight(pageId: String): Int? = viewport.height(pageId)
     fun setPageHeight(pageId: String, height: Int) = viewport.setHeight(pageId, height)
 
+    /**
+     * The sheet [pageId] is laid out on, in page units — its own declaration, or the screen's
+     * portrait width for a page created before page sizes existed. Only the current page is in
+     * [pageFromDb], which is the page every renderer asks about.
+     */
+    fun getSheet(pageId: String): PageSize =
+        pageFromDb?.takeIf { it.id == pageId }?.sheet() ?: legacyScreenSheet()
+
+    /**
+     * The scrollable height: the sheet, or further if ink runs past the bottom of it.
+     *
+     * Covering ink beyond the sheet is not cosmetic. Ink lands outside the sheet whenever it was
+     * written on a device bigger than the page, and a canvas that stops at the sheet's edge makes
+     * that ink unreachable rather than merely off-page.
+     */
     fun recomputeHeight(pageId: String): Int {
+        val sheetHeight = getSheet(pageId).height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
         val newHeight = synchronized(lock) {
             val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return SCREEN_HEIGHT
-            max(list.maxOf { it.bottom }.plus(50).toInt(), SCREEN_HEIGHT)
+            if (list.isNullOrEmpty()) return sheetHeight
+            max(list.maxOf { it.bottom }.plus(50).toInt(), sheetHeight)
         }
         viewport.setHeight(pageId, newHeight)
         return newHeight
     }
 
+    /** The scrollable width, by the same rule as [recomputeHeight]. */
     fun computeWidth(pageId: String): Int {
+        val sheetWidth = getSheet(pageId).width
         synchronized(lock) {
             val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return SCREEN_WIDTH
-            return max(list.maxOf { it.right }.plus(50).toInt(), SCREEN_WIDTH)
+            if (list.isNullOrEmpty()) return sheetWidth
+            return max(list.maxOf { it.right }.plus(50).toInt(), sheetWidth)
         }
     }
 
@@ -927,8 +948,15 @@ class PageDataManager @Inject constructor(
         viewport.setScroll(pageId, scroll)
     }
 
-    /** Stored zoom for [pageId]; 1f (unzoomed) for a page that has not been zoomed this session. */
-    fun getPageZoom(pageId: String): Float = viewport.zoom(pageId) ?: 1f
+    /**
+     * The zoom [pageId] was last left at, or [ifUnzoomed] if it has not been zoomed this session.
+     *
+     * The caller supplies the default because "no zoom yet" means *fit the page to the view*, and
+     * only the view knows how wide it is. It used to mean 1.0, which was the fit only because the
+     * page width was the screen width.
+     */
+    fun getPageZoom(pageId: String, ifUnzoomed: Float = 1f): Float =
+        viewport.zoom(pageId) ?: ifUnzoomed
 
     fun setPageZoom(pageId: String, zoom: Float) {
         viewport.setZoom(pageId, zoom)

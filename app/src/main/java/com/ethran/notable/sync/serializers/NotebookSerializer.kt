@@ -57,6 +57,8 @@ object NotebookSerializer {
             defaultBackground = notebook.defaultBackground,
             defaultBackgroundType = notebook.defaultBackgroundType,
             linkedExternalUri = notebook.linkedExternalUri,
+            defaultPageWidth = notebook.defaultPageWidth,
+            defaultPageHeight = notebook.defaultPageHeight,
             createdAt = notebook.createdAt.toInstant().toString(),
             updatedAt = notebook.updatedAt.toInstant().toString(),
             serverTimestamp = Instant.now().toString()
@@ -91,6 +93,10 @@ object NotebookSerializer {
                     defaultBackground = manifestDto.defaultBackground,
                     defaultBackgroundType = manifestDto.defaultBackgroundType,
                     linkedExternalUri = manifestDto.linkedExternalUri,
+                    // A non-positive dimension counts as no declaration: a peer writing 0 for
+                    // "unset" must not produce a notebook nothing can lay out.
+                    defaultPageWidth = manifestDto.defaultPageWidth?.takeIf { it > 0 },
+                    defaultPageHeight = manifestDto.defaultPageHeight?.takeIf { it > 0 },
                     createdAt = createdAt,
                     updatedAt = updatedAt
                 )
@@ -137,6 +143,8 @@ object NotebookSerializer {
             backgroundType = page.backgroundType,
             parentFolderId = page.parentFolderId,
             scroll = page.scroll,
+            pageWidth = page.pageWidth,
+            pageHeight = page.pageHeight,
             createdAt = page.createdAt.toInstant().toString(),
             updatedAt = page.updatedAt.toInstant().toString()
         )
@@ -212,6 +220,8 @@ object NotebookSerializer {
                 backgroundType = pageDto.backgroundType,
                 parentFolderId = pageDto.parentFolderId,
                 scroll = pageDto.scroll,
+                pageWidth = pageDto.pageWidth?.takeIf { it > 0 },
+                pageHeight = pageDto.pageHeight?.takeIf { it > 0 },
                 createdAt = pageCreated,
                 updatedAt = pageUpdated
             )
@@ -344,6 +354,10 @@ object NotebookSerializer {
         val defaultBackground: String,
         val defaultBackgroundType: String,
         val linkedExternalUri: String?,
+        // Sheet for new pages, in page units; null = declares none. Nullable *with* a default so
+        // a manifest written before the field existed still parses.
+        val defaultPageWidth: Int? = null,
+        val defaultPageHeight: Int? = null,
         val createdAt: String,
         val updatedAt: String,
         val serverTimestamp: String
@@ -362,6 +376,9 @@ object NotebookSerializer {
         val backgroundType: String,
         val parentFolderId: String?,
         val scroll: Int,
+        // The sheet this page is laid out on, in page units; null = declares none.
+        val pageWidth: Int? = null,
+        val pageHeight: Int? = null,
         val createdAt: String,
         val updatedAt: String
     )
@@ -376,6 +393,8 @@ object NotebookSerializer {
         val backgroundType: String,
         val parentFolderId: String?,
         val scroll: Int,
+        val pageWidth: Int? = null,
+        val pageHeight: Int? = null,
         val createdAt: String,
         val updatedAt: String,
         val strokes: List<StrokeDto>,

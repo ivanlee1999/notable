@@ -116,6 +116,10 @@ data class CouchPage(
     val title: String? = null,
     val background: String = "blank",
     val backgroundType: String = "native",
+    // The sheet this page's coordinates are laid out on, in page units; null for a page written
+    // before page sizes existed. Mirrors the WebDAV page DTO — see [PageSize].
+    val pageWidth: Int? = null,
+    val pageHeight: Int? = null,
     val strokes: List<CouchStroke> = emptyList(),
     val deletedStrokes: List<CouchTombstone> = emptyList(),
     val images: List<CouchImage> = emptyList(),
@@ -139,6 +143,9 @@ data class CouchNotebook(
     val parentFolderId: String? = null,
     val defaultBackground: String = "blank",
     val defaultBackgroundType: String = "native",
+    // Sheet for new pages here, in page units; null for a notebook created before page sizes.
+    val defaultPageWidth: Int? = null,
+    val defaultPageHeight: Int? = null,
     val createdAt: String,
     var updatedAt: String = "",
     val updatedBy: String = "",

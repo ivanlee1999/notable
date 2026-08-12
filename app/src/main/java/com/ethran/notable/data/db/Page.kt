@@ -42,8 +42,16 @@ data class Page(
     // date instead of showing a blank label, and an empty string stays available as a real (if
     // odd) choice rather than being indistinguishable from "untitled".
     val title: String? = null,
+    // The sheet this page's coordinates are laid out on, in page units (see [PageSize]).
+    // Null for a page created before page sizes existed: nothing retrofits one, so those keep
+    // falling back to the screen width they were written against. Denormalized from the notebook
+    // at creation, the way [background] is, because it is what the renderer needs in hand — and
+    // because a page outside a notebook has no notebook to ask.
+    val pageWidth: Int? = null,
+    val pageHeight: Int? = null,
     val createdAt: Date = Date(), val updatedAt: Date = Date()
 )
+
 
 data class PageWithData(
     @Embedded val page: Page,

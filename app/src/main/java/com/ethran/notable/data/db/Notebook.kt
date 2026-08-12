@@ -10,6 +10,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.PageSize
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.Flow
 import java.util.Date
@@ -38,6 +39,13 @@ data class Notebook(
     val defaultBackground: String = "blank",
     @ColumnInfo(defaultValue = "native")
     val defaultBackgroundType: String = "native",
+
+    // The sheet new pages here are created with, in page units (see [PageSize]). Chosen once,
+    // when the notebook is created: a page's own pageWidth/pageHeight is what lays it out, the
+    // same division of labour as defaultBackground and background. Null for a notebook created
+    // before page sizes existed.
+    val defaultPageWidth: Int? = null,
+    val defaultPageHeight: Int? = null,
 
     // File that its linked to:
     val linkedExternalUri: String? = null,
@@ -103,7 +111,9 @@ class BookRepository @Inject constructor(
         val page = Page(
             notebookId = notebook.id,
             background = notebook.defaultBackground,
-            backgroundType = notebook.defaultBackgroundType
+            backgroundType = notebook.defaultBackgroundType,
+            pageWidth = notebook.defaultPageWidth,
+            pageHeight = notebook.defaultPageHeight
         )
         pageDao.create(page)
 
@@ -208,9 +218,17 @@ fun Notebook.newPage(): Page {
     return Page(
         notebookId = id,
         background = defaultBackground,
-        backgroundType = defaultBackgroundType
+        backgroundType = defaultBackgroundType,
+        // A notebook that declares no sheet keeps declaring none, so it never ends up part
+        // page-sized and part legacy.
+        pageWidth = defaultPageWidth,
+        pageHeight = defaultPageHeight
     )
 }
+
+/** The sheet new pages here get, or null if this notebook declares none. */
+fun Notebook.declaredDefaultPageSize(): PageSize? =
+    PageSize.of(defaultPageWidth, defaultPageHeight)
 
 fun Notebook.getPageIndex(pageId: String): Int {
     return pageIds.indexOf(pageId)

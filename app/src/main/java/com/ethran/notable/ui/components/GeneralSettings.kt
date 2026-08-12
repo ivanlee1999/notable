@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.AppSettings
+import com.ethran.notable.data.model.PageSizePreset
 
 
 @Composable
@@ -22,6 +23,14 @@ fun GeneralSettings(
             ), value = settings.defaultNativeTemplate, onValueChange = {
                 onSettingsChange(settings.copy(defaultNativeTemplate = it))
             })
+        // Applies to notebooks and quick pages created from now on. Existing pages keep the sheet
+        // they were written against — changing a page's size would move its ink relative to the
+        // paper — so this is not a way to reflow what already exists.
+        SelectorRow(
+            label = stringResource(R.string.default_page_size),
+            options = PageSizePreset.entries.map { it.key to it.label },
+            value = settings.defaultPageSizeKey,
+            onValueChange = { onSettingsChange(settings.copy(defaultPageSizeKey = it)) })
         // Left/Right dock the rail vertically — the tablet arrangement, where it stays within
         // thumb reach of the bezel and the page keeps its full height.
         SelectorRow(

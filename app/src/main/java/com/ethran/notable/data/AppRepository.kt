@@ -197,11 +197,14 @@ class AppRepository @Inject constructor(
     }
 
     suspend fun createNewQuickPage(parentFolderId: String? = null): String? {
+        val sheet = GlobalAppSettings.current.defaultPageSize
         val page = Page(
             notebookId = null,
             background = GlobalAppSettings.current.defaultNativeTemplate,
             backgroundType = BackgroundType.Native.key,
-            parentFolderId = parentFolderId
+            parentFolderId = parentFolderId,
+            pageWidth = sheet.width,
+            pageHeight = sheet.height
         )
         try {
             pageRepository.create(page)
