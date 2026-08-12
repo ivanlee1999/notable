@@ -152,9 +152,10 @@ fun NotebookConfigDialog(
                 "Trash in your library until you empty it.",
             onConfirm = {
                 // Nothing is tombstoned or uploaded here. Deletion is now two steps — stage
-                // locally, publish on purge — so that a notebook can come back, and so the
-                // tombstone is written in the same transaction as the row that goes away. Peers
-                // keep their copy meanwhile, which is what makes the restore mean anything.
+                // locally, publish on purge — so that a notebook can come back. The transaction
+                // main wrote for this, `AppRepository.deleteNotebookLocally`, is what the purge
+                // calls when the Trash is emptied; peers keep their copy until then, which is what
+                // makes the restore mean anything.
                 scope.launch {
                     appRepository.trashRepository.trashNotebook(bookId)
                 }

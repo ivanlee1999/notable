@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Notebook
@@ -13,6 +14,7 @@ import io.shipbook.shipbooksdk.ShipBook
 import java.time.Instant
 import java.util.Date
 import javax.inject.Inject
+import javax.inject.Provider
 import javax.inject.Singleton
 
 /**
@@ -47,8 +49,16 @@ class TrashRepository @Inject constructor(
     private val bookRepository: BookRepository,
     private val pageRepository: PageRepository,
     private val couchDeletionRepository: CouchDeletionRepository,
+    private val couchOutboxRepository: CouchOutboxRepository,
+    /**
+     * Lazy because the cycle is real and shallow: `AppRepository` holds this so every caller can
+     * reach the Trash, and this reaches back for the one-document delete transaction rather than
+     * writing a second copy of it.
+     */
+    private val appRepositoryProvider: Provider<AppRepository>,
     private val db: AppDatabase,
 ) {
+    private val appRepository: AppRepository get() = appRepositoryProvider.get()
     private val log = ShipBook.getLogger("TrashRepository")
 
     /**
@@ -212,13 +222,15 @@ class TrashRepository @Inject constructor(
         if (scope.folders.isEmpty()) return scope
 
         val deletedAt = Instant.now().toString()
+        val documentIds = scope.folders.map { CouchDocId.folder(it.id) } +
+            scope.notebooks.map { CouchDocId.notebook(it.id) }
         db.withTransaction {
-            scope.folders.forEach {
-                couchDeletionRepository.record(CouchDocId.folder(it.id), deletedAt)
-            }
-            scope.notebooks.forEach {
-                couchDeletionRepository.record(CouchDocId.notebook(it.id), deletedAt)
-            }
+            documentIds.forEach { couchDeletionRepository.record(it, deletedAt) }
+            // The outbox entry belongs in the transaction too: a tombstone nothing queued is a
+            // deletion the push never looks at, so the subtree would be gone here and live on the
+            // peer. Same rule the single-document `AppRepository.deleteFolderLocally` follows —
+            // this is that, for a whole subtree at once.
+            couchOutboxRepository.queue(documentIds)
             folderRepository.delete(folderId)
         }
         log.i(
@@ -232,11 +244,8 @@ class TrashRepository @Inject constructor(
         val scope = scopeOfNotebook(notebookId)
         if (scope.notebooks.isEmpty()) return scope
 
-        val deletedAt = Instant.now().toString()
-        db.withTransaction {
-            couchDeletionRepository.record(CouchDocId.notebook(notebookId), deletedAt)
-            bookRepository.delete(notebookId)
-        }
+        // One document, so main's own transaction says it: row, tombstone and outbox entry together.
+        appRepository.deleteNotebookLocally(notebookId)
         log.i("Purged notebook $notebookId with ${scope.pageCount} page(s)")
         return scope
     }

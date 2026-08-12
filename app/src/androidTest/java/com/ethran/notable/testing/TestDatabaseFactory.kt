@@ -5,19 +5,26 @@ import androidx.room.Room
 import com.ethran.notable.data.TrashRepository
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.PageRepository
+import javax.inject.Provider
 
 /**
  * The deletion path, wired from a test database. Every `AppRepository` a test builds needs one,
  * and assembling it by hand at four call sites is four chances to wire it differently.
  */
-fun trashRepositoryFor(db: AppDatabase) = TrashRepository(
-    folderRepository = FolderRepository(db.folderDao()),
-    bookRepository = BookRepository(db.notebookDao(), db.pageDao()),
-    pageRepository = PageRepository(db.pageDao()),
+fun trashRepositoryFor(
+    db: AppDatabase, appRepository: Provider<AppRepository> = Provider { error("not wired") }
+) = TrashRepository(
+    folderRepository = FolderRepository(db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
+    bookRepository = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
+    pageRepository = PageRepository(db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
     couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
+    couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+    appRepositoryProvider = appRepository,
     db = db,
 )
 

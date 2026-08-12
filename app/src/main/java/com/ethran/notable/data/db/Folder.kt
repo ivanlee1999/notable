@@ -188,10 +188,6 @@ class FolderRepository @Inject constructor(
     suspend fun getChildrenIncludingTrashed(folderId: String?): List<Folder> =
         db.getChildrenIncludingTrashed(folderId)
 
-    /**
-     * Removes the row only — see [BookRepository.delete] for why a deletion queues nothing on its
-     * own. A folder the user deleted goes through
-     * [com.ethran.notable.data.AppRepository.deleteFolderLocally].
     /** Folders currently in the Trash, most recently thrown away first. */
     fun getTrashed(): LiveData<List<Folder>> = db.getTrashed()
 
@@ -200,13 +196,18 @@ class FolderRepository @Inject constructor(
     /**
      * Move to Trash, or restore with null. Touches one column, so it cannot race a concurrent
      * write of the folder's other fields into overwriting them.
+     *
+     * Queues nothing: the Trash never leaves this device, so there is no change for a peer to
+     * hear about until the item is really deleted.
      */
     suspend fun setDeletedAt(id: String, deletedAt: Date?) = db.setDeletedAt(id, deletedAt)
 
     /**
-     * Permanently remove the row. `ON DELETE CASCADE` takes every descendant folder, notebook and
-     * page with it, which is why the only caller is [com.ethran.notable.data.TrashRepository],
-     * where the matching tombstones are written in the same transaction.
+     * Removes the row only — see [BookRepository.delete] for why a deletion queues nothing on its
+     * own. `ON DELETE CASCADE` takes every descendant folder, notebook and page with it, which is
+     * why a folder the user deleted goes through
+     * [com.ethran.notable.data.AppRepository.deleteFolderSubtreeLocally], where the tombstones for
+     * the whole subtree are written in the same transaction.
      */
     suspend fun delete(id: String) {
         db.delete(id)

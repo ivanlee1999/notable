@@ -103,6 +103,9 @@ interface PageDao {
     @Query("SELECT id FROM page WHERE notebookId = :notebookId")
     suspend fun getPageIdsForNotebook(notebookId: String): List<String>
 
+    /** Quick pages parked directly in [folderId] — they belong to no notebook, so nothing else counts them. */
+    @Query("SELECT id FROM page WHERE notebookId IS NULL AND parentFolderId IS :folderId")
+    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String>
     /**
      * The owning notebook, and nothing else.
      *
@@ -116,9 +119,6 @@ interface PageDao {
      */
     @Query("SELECT notebookId FROM page WHERE id = :pageId")
     suspend fun getNotebookId(pageId: String): String?
-    /** Quick pages parked directly in [folderId] — they belong to no notebook, so nothing else counts them. */
-    @Query("SELECT id FROM page WHERE notebookId IS NULL AND parentFolderId IS :folderId")
-    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String>
 
     @Insert
     suspend fun create(page: Page): Long

@@ -277,12 +277,6 @@ class BookRepository @Inject constructor(
         return pageIds[index]
     }
 
-    /**
-     * Removes the rows only. Deleting queues nothing, because an outbox entry for a notebook with
-     * no tombstone beside it resolves to "nothing to send" — absence is not a fact the peer can
-     * read. A deletion the user made goes through [com.ethran.notable.data.AppRepository
-     * .deleteNotebookLocally], which writes the tombstone and the outbox entry in one transaction
-     * with this delete.
     /** Notebooks directly inside [folderId], trashed ones included. */
     suspend fun getInFolderIncludingTrashed(folderId: String?): List<Notebook> =
         notebookDao.getInFolderIncludingTrashed(folderId)
@@ -295,14 +289,18 @@ class BookRepository @Inject constructor(
     /**
      * Move to Trash, or restore with null. A single-column write, so it cannot race a concurrent
      * page-list update into losing it.
+     *
+     * Queues nothing: the Trash never leaves this device, so there is no change for a peer to hear
+     * about until the item is really deleted.
      */
     suspend fun setDeletedAt(id: String, deletedAt: Date?) = notebookDao.setDeletedAt(id, deletedAt)
 
     /**
-     * Permanently remove the row; `ON DELETE CASCADE` takes its pages with it. Called from
-     * [com.ethran.notable.data.TrashRepository], which writes the tombstone in the same
-     * transaction — a deleted row on its own is indistinguishable from a notebook this device
-     * never had, so without one a peer simply sends it back.
+     * Removes the rows only. Deleting queues nothing, because an outbox entry for a notebook with
+     * no tombstone beside it resolves to "nothing to send" — absence is not a fact the peer can
+     * read. A deletion the user made goes through [com.ethran.notable.data.AppRepository
+     * .deleteNotebookLocally], which writes the tombstone and the outbox entry in one transaction
+     * with this delete.
      */
     suspend fun delete(id: String) {
         notebookDao.delete(id)
