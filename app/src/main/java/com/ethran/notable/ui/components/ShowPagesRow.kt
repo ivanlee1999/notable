@@ -49,7 +49,7 @@ fun ShowPagesRow(
     onSelectPage: (String) -> Unit,
     showAddQuickPage: Boolean = false,
     onCreateNewQuickPage: () -> Unit = {},
-    onPreviewMissing: (String) -> Unit = {},
+    onPreviewNeeded: (String) -> Unit = {},
 ) {
 
     if (title != null) {
@@ -110,7 +110,7 @@ fun ShowPagesRow(
                                     RectangleShape
                                 ),
                             pageId = pageId,
-                            onPreviewMissing = onPreviewMissing
+                            onPreviewNeeded = onPreviewNeeded
                         )
                         if (isPageSelected) PageMenu(
                             appRepository = appRepository,

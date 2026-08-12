@@ -29,9 +29,6 @@ enum class ThumbnailEnsureResult {
     PAGE_NOT_FOUND
 }
 
-
-const val thumbnailGeneratorStaleMs = 60000 // 1 min
-
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 interface ThumbnailGeneratorEntryPoint {
@@ -127,12 +124,19 @@ class ThumbnailGenerator @Inject constructor(
         return ThumbnailEnsureResult.GENERATED
     }
 
+    /**
+     * A thumbnail is stale iff it predates the page's last edit.
+     *
+     * The previous test demanded the file be a full minute *newer* than the edit, so every
+     * thumbnail counted as stale for a minute after it was written. That was invisible while only
+     * a missing file could ask for a render; now that [com.ethran.notable.ui.components.PagePreview]
+     * asks on every mount, it would re-render every visible cover on every visit to the Library.
+     */
     private suspend fun isThumbnailStale(page: Page): Boolean = withContext(ioDispatcher) {
         val thumbFile = getThumbnailFile(context, page.id)
         if (!thumbFile.exists()) return@withContext true
 
-        if (page.updatedAt.time + thumbnailGeneratorStaleMs > thumbFile.lastModified()) return@withContext true
-        else return@withContext false
+        return@withContext thumbFile.lastModified() < page.updatedAt.time
     }
 
 

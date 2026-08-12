@@ -39,6 +39,12 @@ class ThumbnailBackfillQueue @Inject constructor(
     private var cycleTotal = 0
     private var cycleDone = 0
 
+    // How many of this cycle's pages actually needed a render. Every visible cover asks for its
+    // thumbnail on each mount, so most sweeps find everything current and finish in milliseconds;
+    // reporting those would put a "Generating previews" snackbar on screen every time the Library
+    // is opened. Progress stays silent until there is real work to report.
+    private var cycleGenerated = 0
+
     private var lastUpdateMs = 0L
 
     init {
@@ -70,6 +76,7 @@ class ThumbnailBackfillQueue @Inject constructor(
                     if (!isCycleActive) {
                         isCycleActive = true
                         cycleDone = 0
+                        cycleGenerated = 0
                         cycleTotal = added.size
                     } else {
                         cycleTotal += added.size
@@ -91,8 +98,10 @@ class ThumbnailBackfillQueue @Inject constructor(
     }
 
     private suspend fun processOne(pageId: String, mode: PreviewSaveMode) {
+        var generated = false
         try {
-            thumbnailGenerator.ensureThumbnail(pageId, mode)
+            generated = thumbnailGenerator.ensureThumbnail(pageId, mode) ==
+                ThumbnailEnsureResult.GENERATED
         } catch (t: Throwable) {
             // Log the throwable (not just t.message) so the throw site is visible in ShipBook.
             log.e("Thumbnail generation failed for pageId=$pageId", t)
@@ -100,6 +109,7 @@ class ThumbnailBackfillQueue @Inject constructor(
             mutex.withLock {
                 queuedPageIds.remove(pageId)
                 cycleDone += 1
+                if (generated) cycleGenerated += 1
 
                 if (queuedPageIds.isEmpty()) {
                     finalizeCycleLocked()
@@ -111,6 +121,8 @@ class ThumbnailBackfillQueue @Inject constructor(
     }
 
     private fun updateProgressLocked(throttled: Boolean = false) {
+        if (cycleGenerated == 0) return
+
         val now = System.currentTimeMillis()
         if (throttled && now - lastUpdateMs < 300) return
 
@@ -127,8 +139,13 @@ class ThumbnailBackfillQueue @Inject constructor(
         isCycleActive = false
         val done = cycleDone
         val total = cycleTotal
+        val generated = cycleGenerated
         cycleDone = 0
         cycleTotal = 0
+        cycleGenerated = 0
+
+        // A sweep that rendered nothing never announced itself, so it has nothing to close.
+        if (generated == 0) return
 
         // Use a small delay to ensure the user sees the 100% state or "Done" state
         applicationScope.launch {

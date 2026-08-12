@@ -19,9 +19,7 @@ import coil.request.ImageRequest
 import com.ethran.notable.editor.utils.getThumbnailFile
 import com.ethran.notable.io.ThumbnailGeneratorEntryPoint
 import dagger.hilt.EntryPoints
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.withContext
 
 /**
  * Renders a preview image for a page.
@@ -33,7 +31,12 @@ import kotlinx.coroutines.withContext
 fun PagePreview(
     modifier: Modifier = Modifier,
     pageId: String,
-    onPreviewMissing: (String) -> Unit = {},
+    /**
+     * Called once per mount to have a thumbnail rendered if the stored one no longer matches the
+     * page. Not "the file is missing": a notebook whose cover was first drawn while it was still
+     * empty *has* a thumbnail, and it is the one that needs replacing.
+     */
+    onPreviewNeeded: (String) -> Unit = {},
     /**
      * What shows through until the thumbnail loads. Transparent lets a caller draw its own
      * placeholder underneath — the notebook cover paints the book's paper template there.
@@ -69,12 +72,12 @@ fun PagePreview(
         }
     }
 
-    // Check if the file exists initially or when refreshed
-    LaunchedEffect(pageId, refreshTrigger) {
-        val exists = withContext(Dispatchers.IO) { imgFile.exists() }
-        if (!exists) {
-            onPreviewMissing(pageId)
-        }
+    // Declared after the collector above, so the subscription is in place before a render this
+    // asks for can finish and report itself. Keyed on pageId alone — keying it on refreshTrigger
+    // too would let a regeneration's own update event ask for the next one, round and round, for
+    // any page whose updatedAt sits in the future (a clock-skewed sync download, say).
+    LaunchedEffect(pageId) {
+        onPreviewNeeded(pageId)
     }
 
     val painter = rememberAsyncImagePainter(

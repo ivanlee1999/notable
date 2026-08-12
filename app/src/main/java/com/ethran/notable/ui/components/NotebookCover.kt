@@ -63,7 +63,7 @@ fun NotebookCoverCard(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     syncBadge: SyncBadge? = null,
-    onPreviewMissing: (String) -> Unit = {},
+    onPreviewNeeded: (String) -> Unit = {},
 ) {
     Column(
         modifier
@@ -74,7 +74,7 @@ fun NotebookCoverCard(
             notebook = notebook,
             spine = Kaleido.Spine,
             syncBadge = syncBadge,
-            onPreviewMissing = onPreviewMissing,
+            onPreviewNeeded = onPreviewNeeded,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(3f / 4f)
@@ -106,7 +106,7 @@ fun NotebookListRow(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     syncBadge: SyncBadge? = null,
-    onPreviewMissing: (String) -> Unit = {},
+    onPreviewNeeded: (String) -> Unit = {},
 ) {
     ListRow(
         hit = hit + 22.dp, // the 46dp chip needs more room than a plain row
@@ -121,7 +121,7 @@ fun NotebookListRow(
                 spine = 6.dp,
                 syncBadge = syncBadge,
                 showPageCount = false,
-                onPreviewMissing = onPreviewMissing,
+                onPreviewNeeded = onPreviewNeeded,
                 modifier = Modifier.size(34.dp, 46.dp)
             )
         }
@@ -135,7 +135,7 @@ private fun NotebookCoverFace(
     modifier: Modifier = Modifier,
     syncBadge: SyncBadge? = null,
     showPageCount: Boolean = true,
-    onPreviewMissing: (String) -> Unit = {},
+    onPreviewNeeded: (String) -> Unit = {},
 ) {
     Box(
         modifier
@@ -150,7 +150,7 @@ private fun NotebookCoverFace(
             PagePreview(
                 modifier = Modifier.fillMaxSize(),
                 pageId = notebook.openPageId ?: firstPage,
-                onPreviewMissing = onPreviewMissing,
+                onPreviewNeeded = onPreviewNeeded,
                 background = Color.Transparent,
             )
         }
