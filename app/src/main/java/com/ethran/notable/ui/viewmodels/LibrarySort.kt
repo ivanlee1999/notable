@@ -49,8 +49,8 @@ object LibrarySort {
                 compareBy<Notebook> { it.createdAt }.thenBy { it.id })
             // The id breaks ties so two notebooks with the same name do not swap places between
             // launches.
-            LibrarySortOrder.TITLE -> books.sortedWith(
-                compareBy(collator) { it.title }.thenBy { it.id })
+            LibrarySortOrder.TITLE ->
+                books.sortedWith(byTitle<Notebook>({ it.title }, { it.id }))
         }
         return if (descending) sorted.reversed() else sorted
     }
@@ -63,10 +63,22 @@ object LibrarySort {
                 compareBy<Folder> { it.updatedAt }.thenBy { it.id })
             LibrarySortOrder.CREATED -> folders.sortedWith(
                 compareBy<Folder> { it.createdAt }.thenBy { it.id })
-            LibrarySortOrder.TITLE -> folders.sortedWith(
-                compareBy(collator) { it.title }.thenBy { it.id })
+            LibrarySortOrder.TITLE ->
+                folders.sortedWith(byTitle<Folder>({ it.title }, { it.id }))
         }
         return if (descending) sorted.reversed() else sorted
+    }
+
+    /**
+     * Orders by title through the collator, breaking ties on the id.
+     *
+     * Spelled out rather than `compareBy(collator) { … }`: [Collator] implements the raw
+     * `Comparator<Any>`, so there is nothing for the key type to be inferred from. The tie-break
+     * is what keeps two notebooks with the same name from swapping places between launches.
+     */
+    private fun <T> byTitle(title: (T) -> String, id: (T) -> String) = Comparator<T> { a, b ->
+        val byName = collator.compare(title(a), title(b))
+        if (byName != 0) byName else id(a).compareTo(id(b))
     }
 
     /**

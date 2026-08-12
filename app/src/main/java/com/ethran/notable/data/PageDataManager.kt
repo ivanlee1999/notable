@@ -40,7 +40,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -134,10 +133,13 @@ sealed interface SaveState {
     data class Saving(val pending: Int) : SaveState
 
     /**
-     * [failing] writes have failed at least once and are being retried. The page is not safe: what
-     * is on screen may not survive a restart.
+     * Writes that did not land. The page is not safe: what is on screen may not survive a restart.
+     *
+     * [retrying] separates the two kinds, because they need different words. A disk error is
+     * being retried and may well fix itself; a constraint violation is a statement about the data
+     * and will fail identically on the tenth attempt, so promising a retry would be a lie.
      */
-    data class Failed(val failing: Int, val message: String?) : SaveState
+    data class Failed(val failing: Int, val message: String?, val retrying: Boolean) : SaveState
 }
 
 // Cache manager companion object
@@ -160,6 +162,15 @@ class PageDataManager @Inject constructor(
     /** Content writes queued or in flight, and how many of those are currently failing. */
     private val pendingWrites = AtomicInteger(0)
     private val failingWrites = AtomicInteger(0)
+
+    /**
+     * Writes given up on: a constraint violation cannot succeed however often it is tried.
+     *
+     * Counted separately and never decremented by a retry, because there is no retry. It survives
+     * until the process does, which is the honest lifetime — the change it represents is not on
+     * disk and nothing here is going to put it there.
+     */
+    private val abandonedWrites = AtomicInteger(0)
 
     @Volatile
     private var lastSaveError: String? = null
@@ -1152,15 +1163,19 @@ class PageDataManager @Inject constructor(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: SQLiteConstraintException) {
-                        // Never going to succeed; retrying is a spin, not a recovery.
+                        // Never going to succeed; retrying is a spin, not a recovery. Counted as
+                        // abandoned rather than failing, so the state does not fall back to Saved
+                        // the moment the queue drains — the write did not land, and saying it did
+                        // is the failure mode this whole mechanism exists to remove.
                         log.e("DB write '$op' rejected on page $currentPage: ${e.message}", e)
-                        recordSaveFailure(op, e)
+                        abandonedWrites.incrementAndGet()
+                        recordSaveFailure(op, e, retrying = false)
                         return@launch
                     } catch (e: SQLException) {
                         if (!failing) {
                             failing = true
                             failingWrites.incrementAndGet()
-                            recordSaveFailure(op, e)
+                            recordSaveFailure(op, e, retrying = true)
                         }
                         log.e(
                             "DB write '$op' failed on page $currentPage " +
@@ -1196,10 +1211,14 @@ class PageDataManager @Inject constructor(
      * way the user finds out otherwise is if something says so. [saveState] then keeps saying it
      * for as long as the write is outstanding.
      */
-    private fun recordSaveFailure(op: String, error: Throwable) {
+    private fun recordSaveFailure(op: String, error: Throwable, retrying: Boolean) {
         lastSaveError = error.message ?: error.toString()
         appEventBus.tryEmit(
-            AppEvent.ActionHint("Could not save this page — retrying", duration = 4000)
+            AppEvent.ActionHint(
+                if (retrying) "Could not save this page — retrying"
+                else "Could not save this page",
+                duration = 4000
+            )
         )
         appEventBus.tryEmit(
             AppEvent.LogMessage(reason = "save", message = "Could not save ($op): $lastSaveError")
@@ -1210,8 +1229,10 @@ class PageDataManager @Inject constructor(
     private fun publishSaveState() {
         val pending = pendingWrites.get()
         val failing = failingWrites.get()
+        val abandoned = abandonedWrites.get()
         _saveState.value = when {
-            failing > 0 -> SaveState.Failed(failing, lastSaveError)
+            failing > 0 -> SaveState.Failed(failing, lastSaveError, retrying = true)
+            abandoned > 0 -> SaveState.Failed(abandoned, lastSaveError, retrying = false)
             pending > 0 -> SaveState.Saving(pending)
             else -> SaveState.Saved
         }

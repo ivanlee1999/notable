@@ -21,6 +21,7 @@ import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.state.SelectionState
+import com.ethran.notable.editor.state.Shape
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.Eraser
@@ -314,6 +315,7 @@ class EditorViewModel @Inject constructor(
             is ToolbarAction.ChangePenSetting ->
                 handlePenSettingChange(action.presetId, action.setting)
             is ToolbarAction.ChangeEraser -> handleEraserChange(action.eraser)
+            is ToolbarAction.ChangeShape -> handleShapeChange(action.shape)
             is ToolbarAction.ToggleMenu -> {
                 _toolbarState.update { it.copy(isMenuOpen = !it.isMenuOpen) }
 //                updateDrawingState() // on focus change is doing this
@@ -384,6 +386,18 @@ class EditorViewModel @Inject constructor(
 
     private fun handleEraserChange(eraser: Eraser) {
         _toolbarState.update { it.copy(eraser = eraser) }
+        updateDrawingState()
+        saveToolbarState()
+    }
+
+    /**
+     * Picking a shape also picks the shape tool.
+     *
+     * The alternative — set the shape and leave the mode alone — means choosing "Rectangle" from a
+     * menu while drawing does nothing visible, which reads as the menu being broken.
+     */
+    private fun handleShapeChange(shape: Shape) {
+        _toolbarState.update { it.copy(shape = shape, mode = Mode.Line) }
         updateDrawingState()
         saveToolbarState()
     }

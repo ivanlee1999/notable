@@ -169,11 +169,27 @@ class TrashRepository @Inject constructor(
         return emptyList()
     }
 
-    /** A null parent is the top level, which is always there. */
+    /**
+     * Whether something filed under [parentFolderId] would actually be visible.
+     *
+     * Walks the whole chain to the root, not just the immediate parent: a parent can be perfectly
+     * untrashed and still sit inside a trashed grandparent, and restoring into that puts the item
+     * somewhere the user cannot reach — which looks exactly like the restore having silently
+     * failed. A null parent is the top level, which is always there.
+     *
+     * The visited set is the same guard the subtree walk uses: the folder tree is user-built and
+     * merged data, and a cycle in it reaches no root.
+     */
     private suspend fun isReachable(parentFolderId: String?): Boolean {
-        if (parentFolderId == null) return true
-        val parent = folderRepository.get(parentFolderId) ?: return false
-        return parent.deletedAt == null
+        val seen = mutableSetOf<String>()
+        var cursor = parentFolderId
+        while (cursor != null) {
+            if (!seen.add(cursor)) return false
+            val folder = folderRepository.get(cursor) ?: return false
+            if (folder.deletedAt != null) return false
+            cursor = folder.parentFolderId
+        }
+        return true
     }
 
     // endregion

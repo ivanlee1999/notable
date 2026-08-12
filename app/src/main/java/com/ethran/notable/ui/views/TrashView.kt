@@ -35,6 +35,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import com.ethran.notable.R
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
@@ -97,16 +100,16 @@ private fun TrashContent(
 
     if (confirmingEmpty) {
         ShowSimpleConfirmationDialog(
-            title = "Empty the Trash?",
-            message = "This permanently deletes ${uiState.size} item" +
-                "${if (uiState.size == 1) "" else "s"} and everything inside them, here and on " +
-                "every device you sync with. It cannot be undone.",
+            title = stringResource(R.string.trash_confirm_empty_title),
+            message = pluralStringResource(
+                R.plurals.trash_confirm_empty_message, uiState.size, uiState.size
+            ),
             onConfirm = {
                 confirmingEmpty = false
                 onEmptyTrash()
             },
             onCancel = { confirmingEmpty = false },
-            confirmButtonText = "Delete permanently",
+            confirmButtonText = stringResource(R.string.trash_delete_permanently),
         )
     }
 
@@ -135,15 +138,15 @@ private fun TrashContent(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            FeatherIcons.ArrowLeft, "Back",
+                            FeatherIcons.ArrowLeft, stringResource(R.string.trash_back),
                             tint = Kaleido.Ink, modifier = Modifier.size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Kicker("Library")
+                        Kicker(stringResource(R.string.trash_kicker))
                         Text(
-                            text = "Trash",
+                            text = stringResource(R.string.trash_title),
                             fontSize = metrics.titleSize,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = (-0.9).sp,
@@ -154,7 +157,7 @@ private fun TrashContent(
                     }
                     if (!uiState.isEmpty) {
                         Text(
-                            text = "Empty Trash",
+                            text = stringResource(R.string.trash_empty_action),
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = Kaleido.Ink,
@@ -183,7 +186,7 @@ private fun TrashContent(
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text(
-                        text = "Nothing has been deleted.",
+                        text = stringResource(R.string.trash_nothing_deleted),
                         color = Kaleido.Muted,
                         fontSize = 14.sp,
                     )
@@ -202,7 +205,7 @@ private fun TrashContent(
             ) {
                 if (uiState.folders.isNotEmpty()) {
                     item(key = "folders-header") {
-                        SectionHeader("Folders")
+                        SectionHeader(stringResource(R.string.trash_section_folders))
                         Spacer(Modifier.height(12.dp))
                     }
                     items(uiState.folders, key = { "folder-${it.id}" }) { folder ->
@@ -212,11 +215,12 @@ private fun TrashContent(
                             deletedAtMillis = folder.deletedAt?.time,
                             // Everything under a trashed folder went with it, and the row is the
                             // only place that is ever said.
-                            secondary = "Folder, with everything inside it",
+                            secondary = stringResource(R.string.trash_folder_subtitle),
                             onRestore = { onRestoreFolder(folder.id) },
                             onPurge = { onPurgeFolder(folder.id) },
-                            purgeMessage = "\"${folder.title}\" and everything inside it will be " +
-                                "deleted here and on every device you sync with.",
+                            purgeMessage = stringResource(
+                                R.string.trash_purge_folder_message, folder.title
+                            ),
                             leading = {
                                 Box(
                                     Modifier
@@ -231,7 +235,7 @@ private fun TrashContent(
 
                 if (uiState.notebooks.isNotEmpty()) {
                     item(key = "notebooks-header") {
-                        SectionHeader("Notebooks")
+                        SectionHeader(stringResource(R.string.trash_section_notebooks))
                         Spacer(Modifier.height(12.dp))
                     }
                     items(uiState.notebooks, key = { "book-${it.id}" }) { book ->
@@ -239,12 +243,15 @@ private fun TrashContent(
                             hit = metrics.hit,
                             label = book.title,
                             deletedAtMillis = book.deletedAt?.time,
-                            secondary = "${book.pageIds.size} page" +
-                                if (book.pageIds.size == 1) "" else "s",
+                            secondary = pluralStringResource(
+                                R.plurals.trash_notebook_pages,
+                                book.pageIds.size, book.pageIds.size
+                            ),
                             onRestore = { onRestoreNotebook(book.id) },
                             onPurge = { onPurgeNotebook(book.id) },
-                            purgeMessage = "\"${book.title}\" will be deleted here and on every " +
-                                "device you sync with.",
+                            purgeMessage = stringResource(
+                                R.string.trash_purge_notebook_message, book.title
+                            ),
                             leading = {
                                 Box(
                                     Modifier
@@ -281,24 +288,27 @@ private fun TrashRow(
 
     if (confirming) {
         ShowSimpleConfirmationDialog(
-            title = "Delete permanently?",
-            message = "$purgeMessage It cannot be undone.",
+            title = stringResource(R.string.trash_confirm_purge_title),
+            message = stringResource(R.string.trash_confirm_purge_message, purgeMessage),
             onConfirm = {
                 confirming = false
                 onPurge()
             },
             onCancel = { confirming = false },
-            confirmButtonText = "Delete permanently",
+            confirmButtonText = stringResource(R.string.trash_delete_permanently),
         )
     }
 
     val when_ = deletedAtMillis?.let { DateFormat.format("dd MMM yyyy HH:mm", it).toString() }
+    val subtitle =
+        if (when_ == null) secondary
+        else stringResource(R.string.trash_deleted_at, secondary, when_)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         ListRow(
             hit = hit,
             label = label,
-            secondary = if (when_ == null) secondary else "$secondary · deleted $when_",
+            secondary = subtitle,
             // Tapping the row restores: the recoverable action is the one that should be easy to
             // hit, and the destructive one is the button that has to be aimed at.
             onClick = onRestore,
@@ -315,7 +325,7 @@ private fun TrashRow(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                FeatherIcons.RotateCcw, "Restore",
+                FeatherIcons.RotateCcw, stringResource(R.string.trash_restore),
                 tint = Kaleido.Ink, modifier = Modifier.size(18.dp)
             )
         }
@@ -328,7 +338,7 @@ private fun TrashRow(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                FeatherIcons.Trash2, "Delete permanently",
+                FeatherIcons.Trash2, stringResource(R.string.trash_delete_permanently),
                 tint = Kaleido.Ink, modifier = Modifier.size(18.dp)
             )
         }

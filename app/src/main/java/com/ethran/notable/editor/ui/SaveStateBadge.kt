@@ -41,8 +41,11 @@ fun SaveStateBadge(
 
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Text(
-            text = if (failed.failing == 1) "Not saved — retrying"
-            else "Not saved — retrying ${failed.failing} changes",
+            text = when {
+                !failed.retrying -> "Not saved"
+                failed.failing == 1 -> "Not saved — retrying"
+                else -> "Not saved — retrying ${failed.failing} changes"
+            },
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White,

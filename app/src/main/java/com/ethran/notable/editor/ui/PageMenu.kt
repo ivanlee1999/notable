@@ -57,7 +57,7 @@ fun PageMenu(
     if (isConfirmingDelete) {
         ShowSimpleConfirmationDialog(
             title = "Delete this page?",
-            message = "The page and everything on it is deleted here and on every device you "
+            message = "The page and everything on it are deleted here and on every device you "
                 + "sync with. It cannot be undone.",
             onConfirm = {
                 // Closed from inside the coroutine for the same reason the rename is: `onClose`

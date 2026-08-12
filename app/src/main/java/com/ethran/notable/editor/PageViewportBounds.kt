@@ -3,6 +3,7 @@ package com.ethran.notable.editor
 import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.gestures.MAX_ZOOM
 import com.ethran.notable.gestures.MIN_ZOOM
+import kotlin.math.ceil
 
 /**
  * Where the view is allowed to sit over a page: how far out it may zoom, and how far it may pan.
@@ -75,6 +76,9 @@ object PageViewportBounds {
      */
     fun contentExtent(sheet: Int, contentEdges: List<Float>): Int {
         val furthest = contentEdges.filter { it.isFinite() }.maxOrNull() ?: return sheet
-        return maxOf(sheet, (furthest + CONTENT_SLACK).toInt())
+        // Rounded up, not truncated: a content edge at 100.1 truncates to 100, which puts the last
+        // fraction of a pixel back outside the canvas — the very thing this function exists to
+        // prevent, in miniature.
+        return maxOf(sheet, ceil(furthest + CONTENT_SLACK).toInt())
     }
 }

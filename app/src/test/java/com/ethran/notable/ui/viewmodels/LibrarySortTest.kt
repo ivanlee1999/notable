@@ -41,18 +41,36 @@ class LibrarySortTest {
 
     // MARK: Sorting
 
+    /**
+     * The bug this guards is code-point ordering, which files "Éclair" *after* "zebra" because
+     * U+00E9 is greater than 'z'. Asserted as "the accented title does not fall off the end"
+     * rather than as one exact sequence: the collator follows the platform's default locale, and
+     * a few locales legitimately file accented letters somewhere other than beside their base.
+     */
     @Test
-    fun `title order is locale aware and reversible`() {
+    fun `an accented title does not sort past the end of the alphabet`() {
         val books = listOf(
             book("1", "zebra"), book("2", "Éclair"), book("3", "apple")
         )
 
+        val ascending =
+            LibrarySort.notebooks(books, LibrarySortOrder.TITLE, descending = false).map { it.title }
+
+        assertEquals("apple", ascending.first())
+        assertEquals("zebra", ascending.last())
+        assertEquals(listOf("Éclair"), ascending.drop(1).dropLast(1))
+    }
+
+    @Test
+    fun `title order reverses`() {
+        val books = listOf(book("1", "zebra"), book("3", "apple"))
+
         assertEquals(
-            listOf("apple", "Éclair", "zebra"),
+            listOf("apple", "zebra"),
             LibrarySort.notebooks(books, LibrarySortOrder.TITLE, descending = false).map { it.title }
         )
         assertEquals(
-            listOf("zebra", "Éclair", "apple"),
+            listOf("zebra", "apple"),
             LibrarySort.notebooks(books, LibrarySortOrder.TITLE, descending = true).map { it.title }
         )
     }

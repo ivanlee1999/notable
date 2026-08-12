@@ -10,6 +10,30 @@
     <string name="home_search_clear">Clear search</string>
     <string name="home_folders_found">Folders found</string>
     <string name="home_notebooks_found">Notebooks found</string>
+    <string name="trash_title">Trash</string>
+    <string name="trash_kicker">Library</string>
+    <string name="trash_empty_action">Empty Trash</string>
+    <string name="trash_nothing_deleted">Nothing has been deleted.</string>
+    <string name="trash_section_folders">Folders</string>
+    <string name="trash_section_notebooks">Notebooks</string>
+    <string name="trash_folder_subtitle">Folder, with everything inside it</string>
+    <plurals name="trash_notebook_pages">
+        <item quantity="one">%d page</item>
+        <item quantity="other">%d pages</item>
+    </plurals>
+    <string name="trash_deleted_at">%1$s · deleted %2$s</string>
+    <string name="trash_restore">Restore</string>
+    <string name="trash_delete_permanently">Delete permanently</string>
+    <string name="trash_confirm_purge_title">Delete permanently?</string>
+    <string name="trash_confirm_purge_message">%s It cannot be undone.</string>
+    <string name="trash_purge_folder_message">\"%s\" and everything inside it will be deleted here and on every device you sync with.</string>
+    <string name="trash_purge_notebook_message">\"%s\" will be deleted here and on every device you sync with.</string>
+    <string name="trash_confirm_empty_title">Empty the Trash?</string>
+    <plurals name="trash_confirm_empty_message">
+        <item quantity="one">This permanently deletes %d item and everything inside it, here and on every device you sync with. It cannot be undone.</item>
+        <item quantity="other">This permanently deletes %d items and everything inside them, here and on every device you sync with. It cannot be undone.</item>
+    </plurals>
+    <string name="trash_back">Back</string>
     <string name="home_new_folder">New Folder</string>
     <string name="home_new_notebook">New notebook</string>
     <string name="home_import_notebook">Import notebook</string>

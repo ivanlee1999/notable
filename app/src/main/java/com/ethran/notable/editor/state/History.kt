@@ -51,6 +51,16 @@ class History @AssistedInject constructor(
 ) {
     private var undoList: OperationList = mutableListOf()
     private var redoList: OperationList = mutableListOf()
+
+    /**
+     * Running total of [undoList]'s estimated bytes.
+     *
+     * Kept rather than recomputed: history is committed once per stroke, and re-summing every
+     * block would walk every point of every block on the drawing path — O(blocks × points) per
+     * stroke, which is exactly the work an e-ink device cannot spare. Each block is measured once,
+     * when it arrives.
+     */
+    private var undoBytes: Long = 0
     private val pageModel = pageView
 
     suspend fun handleHistoryBusActions(actions: HistoryBusActions) {
@@ -95,6 +105,7 @@ class History @AssistedInject constructor(
     fun cleanHistory() {
         undoList.clear()
         redoList.clear()
+        undoBytes = 0
     }
 
     private fun treatOperation(operation: Operation): Pair<Operation, Rect> {
@@ -151,6 +162,7 @@ class History @AssistedInject constructor(
         if (originList.isEmpty()) return null
 
         val operationBlock = originList.removeAt(originList.lastIndex)
+        if (type == UndoRedoType.Undo) undoBytes -= estimateBytes(operationBlock)
         val revertOperations = mutableListOf<Operation>()
         val zoneAffected = Rect()
         for (operation in operationBlock) {
@@ -158,7 +170,14 @@ class History @AssistedInject constructor(
             revertOperations.add(cancelOperation)
             zoneAffected.union(thisZoneAffected)
         }
-        targetList.add(revertOperations.reversed())
+        val reverted = revertOperations.reversed()
+        targetList.add(reverted)
+        // A redo puts a block back on the undo stack, so it is charged again — and it is a
+        // *different* block (the inverse), so it is measured rather than remembered.
+        if (type == UndoRedoType.Redo) {
+            undoBytes += estimateBytes(reverted)
+            trimUndoList()
+        }
 
         // update the affected zone
         return zoneAffected
@@ -170,6 +189,7 @@ class History @AssistedInject constructor(
             return
         }
         undoList.add(operations)
+        undoBytes += estimateBytes(operations)
         trimUndoList()
         redoList.clear()
     }
@@ -189,13 +209,12 @@ class History @AssistedInject constructor(
      * against pathological churn of blocks too small for the byte budget to notice.
      */
     private fun trimUndoList() {
-        while (undoList.size > MAX_BLOCKS) undoList.removeAt(0)
+        while (undoList.size > MAX_BLOCKS) undoBytes -= estimateBytes(undoList.removeAt(0))
 
-        var bytes = undoList.sumOf { estimateBytes(it) }
         // Never below one block: the most recent operation stays undoable whatever it cost, since
         // a history that drops the thing you just did is worse than no history at all.
-        while (undoList.size > 1 && bytes > MAX_BYTES) {
-            bytes -= estimateBytes(undoList.removeAt(0))
+        while (undoList.size > 1 && undoBytes > MAX_BYTES) {
+            undoBytes -= estimateBytes(undoList.removeAt(0))
         }
     }
 
