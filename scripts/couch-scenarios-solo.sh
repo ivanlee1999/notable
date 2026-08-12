@@ -4,14 +4,14 @@
 #
 # bopa's scripts/couch-scenarios.sh is the real proof: it interleaves *bopa's* Swift engine with
 # notable's Kotlin one, and only that can show the two implementations agree. But every one of the
-# 22 scenarios has an iPad step, so without a bopa checkout notable's half is not partly runnable,
-# it is unrunnable — 22 scenarios that have never been executed here at all.
+# shared scenarios has an iPad step, so without a bopa checkout notable's half is not partly
+# runnable, it is unrunnable — a whole suite that has never been executed here at all.
 #
 # This runs the same file, same steps, same server, with a second notable invocation standing in for
 # the iPad (COUCH_SCENARIO_DEVICE=ipad; notable's harness implements a superset of the ops the iPad
 # steps use). What that proves:
 #
-#   - notable's engine satisfies the shared script end to end, on all 22 scenarios
+#   - notable's engine satisfies the shared script end to end, on every scenario in it
 #   - two independent engines, two independent stores, one real database, converge
 #
 # What it does not prove: that Swift agrees. Nothing here executes bopa's code. When both checkouts
