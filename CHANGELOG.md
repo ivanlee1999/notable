@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.8.0
+
+CouchDB only. If you sync over WebDAV, nothing here changes for you.
+
+### Deleting something no longer undoes itself
+
+- **A page you deleted came back.** notable removed the page and then said nothing about it, so the
+  other device — which still had it — offered it back on the next sync, and notable took it. A
+  removal is now recorded as a fact of its own, so a page deleted here stays deleted everywhere.
+- **An image you erased came back the same way**, for the same reason, and is now recorded too.
+- **Deleting the same notebook on both devices jammed that notebook's sync.** The server refuses a
+  second deletion of something already deleted, and notable read that refusal as "try again" — so
+  the notebook sat in the queue and every later sync replayed the same doomed request.
+
+### Ink drawn while a sync was running could disappear
+
+- **Strokes drawn during a sync could be deleted.** Combining your page with the server's copy takes
+  a moment, and anything drawn in that moment was not part of what was being combined — so it was
+  treated as something you had removed: erased here, and never sent anywhere either. It is exactly
+  the case syncing two devices exists for, drawing on one while the other has the same page open.
+
+### Deletions that carried no date no longer win
+
+- **A deletion recorded without a time deleted work done after it.** notable filled the gap with the
+  current time, which is newer than any edit anyone has ever made, so the deletion always won and
+  the rule that a later edit brings a notebook back could never apply. An unknown time now loses
+  that comparison instead of winning it.
+
+### Changing servers
+
+- **Pointing notable at a different server — or a different database on the same one — reused the
+  old one's place in the change history.** That does not announce itself: notable simply skips
+  changes it believes it has already seen. Each server is remembered separately now.
+
+### Catching up on a large library
+
+- **A first sync asked for the whole library in one answer** and held all of it in memory before
+  saving any of it. It now arrives in batches, each saved as it lands, so a catch-up that is
+  interrupted carries on from where it stopped rather than starting again.
+
+### Smaller things
+
+- A large batch of deletions no longer holds up everything else while it waits to be confirmed —
+  only the deletions wait, and your drawings keep syncing. (The confirmation itself is still not
+  built, so those deletions stay queued.)
+- That same safeguard had been quietly losing its ability to trigger as a library aged. It now
+  measures against what is on the device rather than against everything it has ever seen.
+- A document notable cannot read now produces one "Unreadable sync copy" notebook rather than
+  another one each time it re-reads the change history, and an unreadable *folder* is copied too
+  instead of being dropped without a word.
+
+### Upgrading
+
+The database moves from 39 to 40, to make room for recording deletions. That happens by itself when
+you open the app.
+
+Two things to expect once, on the first sync after upgrading:
+
+- It will read the whole change history again, because sync state is now kept per server. Slower
+  than usual, exactly once.
+- **Pages and images you deleted before upgrading may come back.** Those removals were never
+  recorded, so if your other device still has them, this is the last sync that can bring them back.
+  Delete them again afterwards and they will stay gone.
+
 ## 0.7.3
 
 CouchDB only. If you sync over WebDAV, nothing here changes for you.
