@@ -24,7 +24,9 @@ import com.ethran.notable.data.db.getPageIndex
 import com.ethran.notable.data.db.newPage
 import com.ethran.notable.data.events.AppEvent
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
+import java.time.Instant
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -241,6 +243,44 @@ class AppRepository @Inject constructor(
         } catch (e: Exception) {
             log.e("Failed to create page in book: ${e.message}")
             return null
+        }
+    }
+
+    /**
+     * Delete a notebook here and record the tombstone that will publish the deletion, in one
+     * transaction.
+     *
+     * The order used to be the other way round and unguarded: the tombstone was written first and
+     * the Room delete launched afterwards. `RoomCouchStore.load` consults the tombstone table
+     * *before* the live rows — deliberately, since the cascade may not have run — so a delete that
+     * failed left the device holding a notebook it still shows the user while telling the server it
+     * is gone. One transaction makes both happen or neither.
+     *
+     * The tombstone stays durable, which is the property that matters most here: a deletion made
+     * offline is still pushed days later, after a restart.
+     */
+    suspend fun deleteNotebookLocally(
+        notebookId: String,
+        deletedAt: String = Instant.now().toString(),
+    ) {
+        val documentId = CouchDocId.notebook(notebookId)
+        db.withTransaction {
+            bookRepository.delete(notebookId)
+            couchDeletionRepository.record(documentId, deletedAt)
+            couchOutboxRepository.queue(documentId)
+        }
+    }
+
+    /** The folder twin of [deleteNotebookLocally], for the same reason. */
+    suspend fun deleteFolderLocally(
+        folderId: String,
+        deletedAt: String = Instant.now().toString(),
+    ) {
+        val documentId = CouchDocId.folder(folderId)
+        db.withTransaction {
+            folderRepository.delete(folderId)
+            couchDeletionRepository.record(documentId, deletedAt)
+            couchOutboxRepository.queue(documentId)
         }
     }
 

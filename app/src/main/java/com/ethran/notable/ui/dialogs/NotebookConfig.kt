@@ -150,14 +150,19 @@ fun NotebookConfigDialog(
             title = "Confirm Deletion",
             message = "Are you sure you want to delete \"${book!!.title}\"?",
             onConfirm = {
-                // Record the deletion as a durable fact rather than as a queued request. An absent
-                // notebook is also what a device that never saw it looks like, so without a
-                // tombstone the peer's copy simply comes back on the next merge — and because the
-                // row survives a restart, deleting while offline still reaches the server later.
-                couchSync.noteDeleted(CouchDocId.notebook(bookId))
-
                 scope.launch {
-                    bookRepository.delete(bookId)
+                    // The row and its tombstone in one transaction. An absent notebook is also what
+                    // a device that never saw it looks like, so the tombstone is what makes the
+                    // deletion travel — and it survives a restart, which is what makes deleting
+                    // while offline reach the server days later.
+                    //
+                    // Recorded *with* the delete rather than before it: `RoomCouchStore.load`
+                    // consults the tombstone table ahead of the live rows, so a tombstone written
+                    // beside a delete that then failed would have this device tell the server to
+                    // remove a notebook it is still showing the user.
+                    appRepository.deleteNotebookLocally(bookId)
+                    // Only for promptness now — the intent is already durable above.
+                    couchSync.noteDeleted(CouchDocId.notebook(bookId))
                 }
                 showDeleteDialog = false
                 onClose()

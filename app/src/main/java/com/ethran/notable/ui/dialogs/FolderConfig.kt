@@ -30,8 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.ethran.notable.R
+import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Folder
-import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
@@ -41,9 +41,10 @@ import kotlinx.coroutines.launch
 private val log = ShipBook.getLogger("FolderConfig")
 
 @Composable
-fun FolderConfigDialog(folderRepository: FolderRepository,
+fun FolderConfigDialog(appRepository: AppRepository,
                        folderId: String,
                        onClose: () -> Unit) {
+    val folderRepository = appRepository.folderRepository
     val scope = rememberCoroutineScope()
     val couchSync = rememberCouchSyncController()
     var folder by remember { mutableStateOf<Folder?>(null) }
@@ -151,11 +152,14 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                     text = "Delete Folder",
                     textAlign = TextAlign.Center,
                     modifier = Modifier.noRippleClickable {
-                        // Same reason as a notebook deletion: absence is not a syncable fact, so
-                        // the intent is recorded as a tombstone that survives being offline.
-                        couchSync.noteDeleted(CouchDocId.folder(folderId))
                         scope.launch {
-                            folderRepository.delete(folderId)
+                            // Same reason as a notebook deletion, and the same ordering: absence is
+                            // not a syncable fact, so a tombstone is recorded — inside the same
+                            // transaction as the delete, so a delete that fails cannot leave this
+                            // device publishing the removal of a folder it still has.
+                            appRepository.deleteFolderLocally(folderId)
+                            // Only for promptness now — the intent is already durable above.
+                            couchSync.noteDeleted(CouchDocId.folder(folderId))
                             onClose()
                         }
                     })
