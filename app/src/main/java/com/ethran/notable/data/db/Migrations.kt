@@ -167,3 +167,22 @@ val MIGRATION_41_42 = object : Migration(41, 42) {
         )
     }
 }
+
+/**
+ * Every hand-written migration, in one list, because opening the database at the current version
+ * needs *all* of them — the auto-migrations Room generates only cover the gaps between these.
+ *
+ * One list rather than one per caller: `MigrationTest` reaches the current version too, and it
+ * spelled out its own list. That list stopped at [MIGRATION_37_38], so once the schema reached 42
+ * every migration test failed with "a migration from N to 42 was required but not found" — the
+ * tests had not been run, so nothing said so. A shared list cannot fall behind a schema bump,
+ * because the bump that forgets it does not compile against a database that still opens.
+ */
+val APP_MIGRATIONS = arrayOf(
+    MIGRATION_16_17,
+    MIGRATION_17_18,
+    MIGRATION_22_23,
+    MIGRATION_32_33,
+    MIGRATION_37_38,
+    MIGRATION_41_42,
+)

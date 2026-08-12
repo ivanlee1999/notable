@@ -8,7 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.ethran.notable.data.db.AppDatabase
-import com.ethran.notable.data.db.MIGRATION_37_38
+import com.ethran.notable.data.db.APP_MIGRATIONS
 import junit.framework.TestCase.assertEquals
 import junit.framework.TestCase.assertTrue
 import org.junit.Rule
@@ -103,9 +103,9 @@ class MigrationTest {
 
         // 2. Reopen DB with version 31 (latest AppDatabase version) to trigger migration
         val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
-            // even for a test that is only interested in an earlier auto-migration.
-            .addMigrations(MIGRATION_37_38)
+            // The app's own list: reaching the current version needs every hand-written migration,
+            // even for a test that is only interested in one earlier auto-migration.
+            .addMigrations(*APP_MIGRATIONS)
             .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
@@ -147,9 +147,9 @@ class MigrationTest {
 
         // 2. Reopen at the latest version to trigger the 35 -> 36 auto-migration.
         val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
-            // even for a test that is only interested in an earlier auto-migration.
-            .addMigrations(MIGRATION_37_38)
+            // The app's own list: reaching the current version needs every hand-written migration,
+            // even for a test that is only interested in one earlier auto-migration.
+            .addMigrations(*APP_MIGRATIONS)
             .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
@@ -206,9 +206,9 @@ class MigrationTest {
 
         // 2. Reopen at the latest version to trigger the 36 -> 37 auto-migration.
         val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            // 37 -> 38 is hand-written, so reaching the current version needs it spelled out
-            // even for a test that is only interested in an earlier auto-migration.
-            .addMigrations(MIGRATION_37_38)
+            // The app's own list: reaching the current version needs every hand-written migration,
+            // even for a test that is only interested in one earlier auto-migration.
+            .addMigrations(*APP_MIGRATIONS)
             .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
@@ -262,7 +262,7 @@ class MigrationTest {
         oldDb.close()
 
         val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_37_38)
+            .addMigrations(*APP_MIGRATIONS)
             .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
@@ -323,8 +323,11 @@ class MigrationTest {
         )
         oldDb.close()
 
-        // No addMigrations call: 38 -> 39 is an auto-migration declared on @Database.
-        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName).build()
+        // 38 -> 39 is an auto-migration declared on @Database, but the hand-written ones after it
+        // still have to be here: the database opens at the current version, not at 39.
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
         val migratedDb = roomDb.openHelper.writableDatabase
 
         // The page survives intact, and is unnamed rather than blank-named.
@@ -340,6 +343,77 @@ class MigrationTest {
         migratedDb.query("SELECT title FROM Page WHERE id = 'page1'").use {
             assertTrue(it.moveToFirst())
             assertEquals("Shopping list", it.getString(it.getColumnIndexOrThrow("title")))
+        }
+
+        roomDb.close()
+    }
+
+    /**
+     * 41 -> 42 adds `couch_outbox`: the durable record that a document has changed and has not been
+     * accepted by the server yet. It is what makes an edit made offline survive being killed.
+     *
+     * This is the migration this branch introduces, so it runs against databases that are already
+     * full of users' notebooks — hence the assertion that the existing rows are still there, not
+     * only that the new table exists. Room validates the whole schema against `schemas/42.json`
+     * while opening, so a `CREATE TABLE` that disagreed with the entity would fail here too.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate41To42_addsCouchOutboxWithoutLosingData() {
+        val dbName = "migration-test-42"
+
+        val oldDb = helper.createDatabase(dbName, 41)
+        oldDb.execSQL(
+            """
+            INSERT INTO Notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                linkedExternalUri, createdAt, updatedAt)
+            VALUES ('notebook1', 'Kept', NULL, '["page1"]', NULL, 'blank', 'native', NULL, NULL,
+                NULL, 1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType, parentFolderId,
+                title, pageWidth, pageHeight, createdAt, updatedAt)
+            VALUES ('page1', 42, 'notebook1', 'blank', 'native', NULL, NULL, NULL, NULL,
+                1620000000000, 1620000000005)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // The library came through the upgrade intact.
+        migratedDb.query("SELECT title FROM Notebook WHERE id = 'notebook1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Kept", it.getString(it.getColumnIndexOrThrow("title")))
+        }
+        migratedDb.query("SELECT scroll FROM Page WHERE id = 'page1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(42, it.getInt(it.getColumnIndexOrThrow("scroll")))
+        }
+
+        // The outbox exists and holds what the repository puts in it.
+        migratedDb.execSQL(
+            "INSERT INTO couch_outbox (docId, queuedAt) VALUES ('page:page1', 1620000000010)"
+        )
+        migratedDb.query("SELECT queuedAt FROM couch_outbox WHERE docId = 'page:page1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1620000000010L, it.getLong(it.getColumnIndexOrThrow("queuedAt")))
+        }
+
+        // `docId` is the primary key, so re-queueing a document already waiting must not add a
+        // second row — the outbox is a set of documents, not a log of edits to them.
+        migratedDb.execSQL(
+            "INSERT OR REPLACE INTO couch_outbox (docId, queuedAt) VALUES ('page:page1', 1620000000020)"
+        )
+        migratedDb.query("SELECT COUNT(*) FROM couch_outbox WHERE docId = 'page:page1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1, it.getInt(0))
         }
 
         roomDb.close()
