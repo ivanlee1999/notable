@@ -5,6 +5,7 @@
     <string name="home_folders">Folders</string>
     <string name="home_all_notes">All notes</string>
     <string name="home_add_new_folder">Add new folder</string>
+    <string name="home_trash">Trash</string>
     <string name="home_new_folder">New Folder</string>
     <string name="home_new_notebook">New notebook</string>
     <string name="home_import_notebook">Import notebook</string>

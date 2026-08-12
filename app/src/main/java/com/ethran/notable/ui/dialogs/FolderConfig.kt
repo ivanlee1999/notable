@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.TrashRepository
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.noRippleClickable
@@ -45,11 +46,18 @@ fun FolderConfigDialog(appRepository: AppRepository,
                        folderId: String,
                        onClose: () -> Unit) {
     val folderRepository = appRepository.folderRepository
+    val trashRepository = appRepository.trashRepository
     val scope = rememberCoroutineScope()
     val couchSync = rememberCouchSyncController()
     var folder by remember { mutableStateOf<Folder?>(null) }
     var folderTitle by remember { mutableStateOf("") }
     var isRenaming by remember { mutableStateOf(false) }
+
+    // What deleting this folder would actually take. Measured when the dialog opens rather than
+    // when Delete is tapped, so the confirmation can be shown with the counts already in it
+    // instead of appearing empty and then filling in.
+    var deletionScope by remember { mutableStateOf<TrashRepository.DeletionScope?>(null) }
+    var isConfirmingDelete by remember { mutableStateOf(false) }
 
     LaunchedEffect(folderId) {
         val f = folderRepository.get(folderId)
@@ -59,10 +67,30 @@ fun FolderConfigDialog(appRepository: AppRepository,
         } else {
             folder = f
             folderTitle = f.title
+            deletionScope = trashRepository.scopeOfFolder(folderId)
         }
     }
 
     if (folder == null) return
+
+    if (isConfirmingDelete) {
+        ConfirmFolderDeletionDialog(
+            title = folderTitle,
+            scope = deletionScope,
+            onConfirm = {
+                isConfirmingDelete = false
+                // Nothing is published here. The folder is only staged locally, so a peer that
+                // still holds it is not wrong yet — the tombstones are written when the Trash is
+                // emptied, all of them, in one transaction. See [TrashRepository].
+                scope.launch {
+                    trashRepository.trashFolder(folderId)
+                    onClose()
+                }
+            },
+            onCancel = { isConfirmingDelete = false }
+        )
+        return
+    }
 
     if (isRenaming) {
         NamePromptDialog(
@@ -149,22 +177,56 @@ fun FolderConfigDialog(appRepository: AppRepository,
                 Modifier.padding(20.dp, 10.dp)
             ) {
                 Text(
-                    text = "Delete Folder",
+                    text = "Move Folder to Trash",
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.noRippleClickable {
-                        scope.launch {
-                            // Same reason as a notebook deletion, and the same ordering: absence is
-                            // not a syncable fact, so a tombstone is recorded — inside the same
-                            // transaction as the delete, so a delete that fails cannot leave this
-                            // device publishing the removal of a folder it still has.
-                            appRepository.deleteFolderLocally(folderId)
-                            // Only for promptness now — the intent is already durable above.
-                            couchSync.noteDeleted(CouchDocId.folder(folderId))
-                            onClose()
-                        }
-                    })
+                    modifier = Modifier.noRippleClickable { isConfirmingDelete = true })
             }
         }
 
     }
+}
+
+/**
+ * The confirmation that stands between one tap and a whole subtree.
+ *
+ * It says what is inside because the number is the decision: "Research" with three subfolders and
+ * forty notebooks in it is a different act from an empty folder someone made by accident, and the
+ * old dialog — which did not exist at all — could not tell them apart.
+ */
+@Composable
+private fun ConfirmFolderDeletionDialog(
+    title: String,
+    scope: TrashRepository.DeletionScope?,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val contents = when {
+        scope == null -> "Checking what is inside…"
+        scope.isEmpty -> "It is empty."
+        else -> buildString {
+            append("It holds ")
+            append(
+                listOfNotNull(
+                    scope.childFolderCount.takeIf { it > 0 }
+                        ?.let { "$it folder${if (it == 1) "" else "s"}" },
+                    scope.notebookCount.takeIf { it > 0 }
+                        ?.let { "$it notebook${if (it == 1) "" else "s"}" },
+                    scope.pageCount.takeIf { it > 0 }
+                        ?.let { "$it page${if (it == 1) "" else "s"}" },
+                ).joinToString(", ")
+            )
+            append(".")
+        }
+    }
+
+    ShowSimpleConfirmationDialog(
+        title = "Move \"$title\" to Trash?",
+        message = "$contents Everything inside goes with it, and stays recoverable from the " +
+            "Trash in your library until you empty it.",
+        // Disabled-looking rather than disabled: the scope is one query and lands immediately, but
+        // confirming before it arrives would delete without having shown what.
+        onConfirm = { if (scope != null) onConfirm() },
+        onCancel = onCancel,
+        confirmButtonText = "Move to Trash",
+    )
 }

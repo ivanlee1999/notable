@@ -24,6 +24,8 @@ import com.ethran.notable.ui.views.SettingsDestination
 import com.ethran.notable.ui.views.SettingsView
 import com.ethran.notable.ui.views.SystemInformationDestination
 import com.ethran.notable.ui.views.SystemInformationView
+import com.ethran.notable.ui.views.TrashDestination
+import com.ethran.notable.ui.views.TrashView
 import com.ethran.notable.ui.views.WelcomeDestination
 import com.ethran.notable.ui.views.WelcomeView
 import io.shipbook.shipbooksdk.ShipBook
@@ -135,6 +137,12 @@ fun NotableNavHost(
                     goToWelcome = { appNavigator.goToWelcome() },
                     goToSystemInfo = { appNavigator.goToSystemInfo() }
                 )
+                appNavigator.cleanCurrentPageId()
+            }
+            composable(
+                route = TrashDestination.route,
+            ) {
+                TrashView(onBack = { appNavigator.goBack() })
                 appNavigator.cleanCurrentPageId()
             }
             composable(

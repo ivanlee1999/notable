@@ -20,6 +20,7 @@ import com.ethran.notable.ui.views.BugReportDestination
 import com.ethran.notable.ui.views.LibraryDestination
 import com.ethran.notable.ui.views.PagesDestination
 import com.ethran.notable.ui.views.SystemInformationDestination
+import com.ethran.notable.ui.views.TrashDestination
 import com.ethran.notable.ui.views.WelcomeDestination
 import com.ethran.notable.utils.hasUsableStorage
 import io.shipbook.shipbooksdk.ShipBook
@@ -127,6 +128,10 @@ class NotableNavigator(
 
     fun goToSystemInfo() {
         navController.navigate(SystemInformationDestination.route)
+    }
+
+    fun goToTrash() {
+        navController.navigate(TrashDestination.route)
     }
 
     fun goToBugReport(){

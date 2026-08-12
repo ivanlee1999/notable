@@ -48,6 +48,10 @@ class AppRepository @Inject constructor(
     val deletedImageRepository: DeletedImageRepository,
     val couchDeletionRepository: CouchDeletionRepository,
     val couchOutboxRepository: CouchOutboxRepository,
+    // Deleting a folder or notebook goes through here, not through the plain `delete` on the two
+    // repositories above: those drop the row and let `ON DELETE CASCADE` take the subtree with no
+    // record that any of it happened. See [TrashRepository].
+    val trashRepository: TrashRepository,
     val kvProxy: KvProxy,
     private val db: AppDatabase
 ) {

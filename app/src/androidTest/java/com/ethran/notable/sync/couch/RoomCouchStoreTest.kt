@@ -55,6 +55,7 @@ import java.time.Instant
 import java.util.Base64
 import java.util.Date
 import java.util.UUID
+import com.ethran.notable.testing.trashRepositoryFor
 
 /**
  * [RoomCouchStore] against a real (in-memory) Room database, plus a round trip through the engine
@@ -111,6 +112,7 @@ class RoomCouchStoreTest {
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+        trashRepository = trashRepositoryFor(db),
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
     )

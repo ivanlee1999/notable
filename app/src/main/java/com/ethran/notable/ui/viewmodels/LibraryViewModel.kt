@@ -57,7 +57,9 @@ data class LibraryUiState(
     /** A sync is running right now, whichever backend is driving it. */
     val isSyncing: Boolean = false,
     /** Notebooks directly inside each folder, keyed by folder id — the count on its row. */
-    val folderBookCounts: Map<String, Int> = emptyMap()
+    val folderBookCounts: Map<String, Int> = emptyMap(),
+    /** How much is waiting in the Trash; 0 hides the row entirely. */
+    val trashedCount: Int = 0
 )
 
 // Private data class for clean Flow combining
@@ -67,7 +69,8 @@ private data class LibraryDatabaseState(
     val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
     val isSyncing: Boolean = false,
-    val folderBookCounts: Map<String, Int> = emptyMap()
+    val folderBookCounts: Map<String, Int> = emptyMap(),
+    val trashedCount: Int = 0
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -110,6 +113,16 @@ class LibraryViewModel @Inject constructor(
         books.mapNotNull { it.parentFolderId }.groupingBy { it }.eachCount()
     }
 
+    private val _trashedCountFlow = combine(
+        folderRepository.getTrashed().asFlow(), bookRepository.getTrashed().asFlow()
+    ) { folders, books -> folders.size + books.size }.distinctUntilChanged()
+
+    // Paired rather than combined as a sixth flow: `combine` has typed overloads up to five, and
+    // one more argument would drop the whole group into the untyped array form.
+    private val _countsFlow = combine(
+        _folderBookCountsFlow, _trashedCountFlow
+    ) { folderCounts, trashed -> folderCounts to trashed }
+
     // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
     // through different channels, and the header's Sync now button is about the run as a whole.
     //
@@ -129,9 +142,9 @@ class LibraryViewModel @Inject constructor(
 
     // 2. Group the database flows (plus per-notebook sync badges) semantically
     private val _dbDataFlow = combine(
-        _foldersFlow, _booksFlow, _singlePagesFlow, _syncStatusFlow, _folderBookCountsFlow
-    ) { folders, books, pages, (badges, syncing), folderCounts ->
-        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts)
+        _foldersFlow, _booksFlow, _singlePagesFlow, _syncStatusFlow, _countsFlow
+    ) { folders, books, pages, (badges, syncing), (folderCounts, trashed) ->
+        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts, trashed)
     }
 
     // 3. Expose the final UI State
@@ -148,7 +161,8 @@ class LibraryViewModel @Inject constructor(
             singlePages = dbData.singlePages,
             syncBadges = dbData.syncBadges,
             isSyncing = dbData.isSyncing,
-            folderBookCounts = dbData.folderBookCounts
+            folderBookCounts = dbData.folderBookCounts,
+            trashedCount = dbData.trashedCount
         )
     }.stateIn(
         scope = viewModelScope,

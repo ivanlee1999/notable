@@ -116,6 +116,9 @@ interface PageDao {
      */
     @Query("SELECT notebookId FROM page WHERE id = :pageId")
     suspend fun getNotebookId(pageId: String): String?
+    /** Quick pages parked directly in [folderId] — they belong to no notebook, so nothing else counts them. */
+    @Query("SELECT id FROM page WHERE notebookId IS NULL AND parentFolderId IS :folderId")
+    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String>
 
     @Insert
     suspend fun create(page: Page): Long
@@ -216,6 +219,10 @@ class PageRepository @Inject constructor(
 
     suspend fun getPageIdsForNotebook(notebookId: String): List<String> {
         return db.getPageIdsForNotebook(notebookId)
+    }
+
+    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String> {
+        return db.getSinglePageIdsInFolder(folderId)
     }
     suspend fun getWithDataById(pageId: String): PageWithData? {
         val data = db.getPageWithDataById(pageId)

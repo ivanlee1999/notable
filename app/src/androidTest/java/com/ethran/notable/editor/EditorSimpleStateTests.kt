@@ -37,6 +37,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.ethran.notable.testing.trashRepositoryFor
 
 @RunWith(AndroidJUnit4::class)
 class EditorSimpleStateTests {
@@ -90,6 +91,7 @@ class EditorSimpleStateTests {
             deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
             couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
             couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+            trashRepository = trashRepositoryFor(db),
             kvProxy = kvProxy,
             db = db,
         )

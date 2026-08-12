@@ -36,13 +36,26 @@ data class Folder(
     val parentFolderId: String? = null,
 
     val createdAt: Date = Date(),
-    val updatedAt: Date = Date()
+    val updatedAt: Date = Date(),
+
+    /**
+     * When this folder was moved to the Trash, or null while it is a normal folder.
+     *
+     * The row stays exactly where it was — nothing is re-parented and no content moves — so a
+     * restore is one column write and cannot half-fail. Only the library's listing queries filter
+     * on it; [getAll] deliberately does not, because a trashed folder is still this device's
+     * current answer for that id and must keep syncing until it is really deleted. See
+     * [com.ethran.notable.data.TrashRepository] for why deletion is staged this way.
+     */
+    @ColumnInfo(index = true)
+    val deletedAt: Date? = null
 )
 
 // DAO
 @Dao
 interface FolderDao {
-    @Query("SELECT * FROM folder WHERE parentFolderId IS :folderId")
+    // Trashed folders are hidden from the library but left in the table: see [Folder.deletedAt].
+    @Query("SELECT * FROM folder WHERE parentFolderId IS :folderId AND deletedAt IS NULL")
     fun getChildrenFolders(folderId: String?): LiveData<List<Folder>>
 
     @Query("SELECT * FROM folder WHERE id IS :folderId")
@@ -51,8 +64,26 @@ interface FolderDao {
     @Query("SELECT * FROM folder WHERE id IS :folderId")
     fun getLive(folderId: String): LiveData<Folder?>
 
+    /**
+     * Every folder, trashed ones included. Sync reads through here, and a folder waiting in the
+     * Trash has not been deleted anywhere yet — hiding it would make this device look like it had
+     * dropped the folder and let a peer's merge fight the local copy.
+     */
     @Query("SELECT * FROM folder")
     fun getAll(): List<Folder>
+
+    /** Direct children of [folderId], trashed ones included — the subtree walk purge does. */
+    @Query("SELECT * FROM folder WHERE parentFolderId IS :folderId")
+    suspend fun getChildrenIncludingTrashed(folderId: String?): List<Folder>
+
+    @Query("SELECT * FROM folder WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun getTrashed(): LiveData<List<Folder>>
+
+    @Query("SELECT * FROM folder WHERE deletedAt IS NOT NULL")
+    suspend fun getTrashedNow(): List<Folder>
+
+    @Query("UPDATE folder SET deletedAt=:deletedAt WHERE id=:id")
+    suspend fun setDeletedAt(id: String, deletedAt: Date?)
 
     @Insert
     suspend fun create(folder: Folder): Long
@@ -146,11 +177,29 @@ class FolderRepository @Inject constructor(
         return db.get(folderId)
     }
 
+    /** Direct child folders of [folderId], trashed ones included. */
+    suspend fun getChildrenIncludingTrashed(folderId: String?): List<Folder> =
+        db.getChildrenIncludingTrashed(folderId)
 
     /**
      * Removes the row only — see [BookRepository.delete] for why a deletion queues nothing on its
      * own. A folder the user deleted goes through
      * [com.ethran.notable.data.AppRepository.deleteFolderLocally].
+    /** Folders currently in the Trash, most recently thrown away first. */
+    fun getTrashed(): LiveData<List<Folder>> = db.getTrashed()
+
+    suspend fun getTrashedNow(): List<Folder> = db.getTrashedNow()
+
+    /**
+     * Move to Trash, or restore with null. Touches one column, so it cannot race a concurrent
+     * write of the folder's other fields into overwriting them.
+     */
+    suspend fun setDeletedAt(id: String, deletedAt: Date?) = db.setDeletedAt(id, deletedAt)
+
+    /**
+     * Permanently remove the row. `ON DELETE CASCADE` takes every descendant folder, notebook and
+     * page with it, which is why the only caller is [com.ethran.notable.data.TrashRepository],
+     * where the matching tombstones are written in the same transaction.
      */
     suspend fun delete(id: String) {
         db.delete(id)

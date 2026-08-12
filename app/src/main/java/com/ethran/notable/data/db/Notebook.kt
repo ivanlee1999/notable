@@ -52,20 +52,44 @@ data class Notebook(
     // File that its linked to:
     val linkedExternalUri: String? = null,
     val createdAt: Date = Date(),
-    val updatedAt: Date = Date()
+    val updatedAt: Date = Date(),
+
+    /**
+     * When this notebook was moved to the Trash, or null while it is a normal notebook. The twin
+     * of [Folder.deletedAt], and hidden from the library by the same rule: listing queries filter
+     * on it, [getAll] does not, because a notebook waiting in the Trash is not deleted anywhere
+     * yet and must keep syncing until it really is.
+     */
+    @ColumnInfo(index = true)
+    val deletedAt: Date? = null
 )
 
 // DAO
 @Dao
 interface NotebookDao {
-    @Query("SELECT * FROM notebook WHERE parentFolderId is :folderId")
+    // Trashed notebooks are hidden from the library but left in the table: see [Notebook.deletedAt].
+    @Query("SELECT * FROM notebook WHERE parentFolderId is :folderId AND deletedAt IS NULL")
     fun getAllInFolder(folderId: String? = null): LiveData<List<Notebook>>
 
+    /** Every notebook, trashed ones included — what sync reads. */
     @Query("SELECT * FROM notebook")
     fun getAll(): List<Notebook>
 
-    @Query("SELECT * FROM notebook")
+    @Query("SELECT * FROM notebook WHERE deletedAt IS NULL")
     fun getAllFlow(): Flow<List<Notebook>>
+
+    /** Notebooks anywhere inside [folderId], trashed ones included — the purge subtree walk. */
+    @Query("SELECT * FROM notebook WHERE parentFolderId IS :folderId")
+    suspend fun getInFolderIncludingTrashed(folderId: String?): List<Notebook>
+
+    @Query("SELECT * FROM notebook WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun getTrashed(): LiveData<List<Notebook>>
+
+    @Query("SELECT * FROM notebook WHERE deletedAt IS NOT NULL")
+    suspend fun getTrashedNow(): List<Notebook>
+
+    @Query("UPDATE notebook SET deletedAt=:deletedAt WHERE id=:id")
+    suspend fun setDeletedAt(id: String, deletedAt: Date?)
 
     // Nullable: Room emits null when the row is absent (e.g. the notebook was deleted while a
     // screen still observes it) and re-emits on every write to the table. Typing it non-null let
@@ -259,6 +283,26 @@ class BookRepository @Inject constructor(
      * read. A deletion the user made goes through [com.ethran.notable.data.AppRepository
      * .deleteNotebookLocally], which writes the tombstone and the outbox entry in one transaction
      * with this delete.
+    /** Notebooks directly inside [folderId], trashed ones included. */
+    suspend fun getInFolderIncludingTrashed(folderId: String?): List<Notebook> =
+        notebookDao.getInFolderIncludingTrashed(folderId)
+
+    /** Notebooks currently in the Trash, most recently thrown away first. */
+    fun getTrashed(): LiveData<List<Notebook>> = notebookDao.getTrashed()
+
+    suspend fun getTrashedNow(): List<Notebook> = notebookDao.getTrashedNow()
+
+    /**
+     * Move to Trash, or restore with null. A single-column write, so it cannot race a concurrent
+     * page-list update into losing it.
+     */
+    suspend fun setDeletedAt(id: String, deletedAt: Date?) = notebookDao.setDeletedAt(id, deletedAt)
+
+    /**
+     * Permanently remove the row; `ON DELETE CASCADE` takes its pages with it. Called from
+     * [com.ethran.notable.data.TrashRepository], which writes the tombstone in the same
+     * transaction — a deleted row on its own is indistinguishable from a notebook this device
+     * never had, so without one a peer simply sends it back.
      */
     suspend fun delete(id: String) {
         notebookDao.delete(id)

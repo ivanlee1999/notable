@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 43,
+    version = 44,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -88,6 +88,9 @@ class Converters {
         // Adds `couch_deletion.pending`. Every existing row is a deletion this device recorded and
         // has not been told is settled, so the column defaults to 1 and nothing changes for them.
         AutoMigration(42, 43),
+        // Folder.deletedAt / Notebook.deletedAt: nullable columns, so Room adds them itself and
+        // every existing row reads as "not in the Trash".
+        AutoMigration(43, 44),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

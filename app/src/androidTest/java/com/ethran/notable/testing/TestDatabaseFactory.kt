@@ -2,7 +2,24 @@ package com.ethran.notable.testing
 
 import android.content.Context
 import androidx.room.Room
+import com.ethran.notable.data.TrashRepository
 import com.ethran.notable.data.db.AppDatabase
+import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.FolderRepository
+import com.ethran.notable.data.db.PageRepository
+
+/**
+ * The deletion path, wired from a test database. Every `AppRepository` a test builds needs one,
+ * and assembling it by hand at four call sites is four chances to wire it differently.
+ */
+fun trashRepositoryFor(db: AppDatabase) = TrashRepository(
+    folderRepository = FolderRepository(db.folderDao()),
+    bookRepository = BookRepository(db.notebookDao(), db.pageDao()),
+    pageRepository = PageRepository(db.pageDao()),
+    couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
+    db = db,
+)
 
 /**
  * Helper for instrumentation tests.

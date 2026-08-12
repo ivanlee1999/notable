@@ -90,6 +90,7 @@ import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Settings
+import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.Upload
 import compose.icons.feathericons.Zap
 import io.shipbook.shipbooksdk.ShipBook
@@ -173,6 +174,7 @@ fun Library(
         uiState = uiState,
         onNavigateToFolder = { id -> navController.navigate(LibraryDestination.createRoute(id)) },
         onNavigateToSettings = { navController.navigate("settings") },
+        onNavigateToTrash = { navController.navigate(TrashDestination.route) },
         onSyncNow = {
             scope.launch {
                 val outcome = requestFullSync(kvProxy, viewModel.syncScheduler)
@@ -221,6 +223,7 @@ fun LibraryContent(
     uiState: LibraryUiState,
     onNavigateToFolder: (String?) -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToTrash: () -> Unit,
     onSyncNow: () -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     goToPage: (String) -> Unit,
@@ -292,6 +295,33 @@ fun LibraryContent(
                             }
                         }
                     )
+                }
+
+                // Only once something is in it. A permanently visible Trash row is a permanent
+                // reminder of a screen almost nobody needs; a row that appears the moment
+                // something is deleted is how the user finds out deletion was recoverable at all.
+                if (uiState.trashedCount > 0) {
+                    item(key = "trash-row") {
+                        ListRow(
+                            hit = metrics.hit,
+                            label = stringResource(R.string.home_trash),
+                            trailing = uiState.trashedCount.toString(),
+                            onClick = onNavigateToTrash,
+                            leading = {
+                                Box(
+                                    Modifier
+                                        .size(22.dp)
+                                        .border(1.dp, Kaleido.Edge),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        FeatherIcons.Trash2, null,
+                                        tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        )
+                    }
                 }
 
                 item(key = "pages-header") {
@@ -509,7 +539,8 @@ private fun FolderRow(
 ) {
     var isFolderSettingsOpen by remember { mutableStateOf(false) }
     if (isFolderSettingsOpen) FolderConfigDialog(
-        appRepository,
+        appRepository.folderRepository,
+        appRepository.trashRepository,
         folderId = folder.id,
         onClose = {
             log.i("Closing Directory Dialog")
