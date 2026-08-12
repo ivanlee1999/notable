@@ -35,14 +35,16 @@ import java.util.UUID
  *
  * Two things are worth knowing before reading further.
  *
- * **A locally recorded deletion outranks what is still in the database.** Deleting a Room row is
- * not by itself a syncable fact — an absent notebook is also what a device that never saw it looks
- * like — so deletions are recorded in `couch_deletion` and [load] consults that table first. That
- * is what makes deleting a notebook while offline work: the intent survives a restart.
+ * **A recorded deletion outranks what is still in the database.** Deleting a Room row is not by
+ * itself a syncable fact — an absent notebook is also what a device that never saw it looks like —
+ * so deletions are recorded in `couch_deletion` and [load] consults that table first. That is what
+ * makes deleting a notebook while offline work: the intent survives a restart. The record also
+ * outlives the push, because a deleted notebook's pages do not go anywhere on the server and this
+ * device has to keep recognizing them as leftovers.
  *
- * **Writing a document clears its pending deletion.** Delete-vs-edit resurrection (protocol §6.4)
- * reaches this class as a plain notebook write; without clearing, the next flush would delete the
- * notebook all over again.
+ * **Writing a document drops its deletion.** Delete-vs-edit resurrection (protocol §6.4) reaches
+ * this class as a plain notebook write; without dropping the record, the next flush would delete
+ * the notebook all over again.
  *
  * **Everything this class writes is marked [RemoteApply].** Landing a remote change means calling
  * the very same repository methods a user edit does, and those now queue what they write. Without
@@ -81,11 +83,16 @@ class RoomCouchStore(
     override fun load(documentId: String): CouchDocBody? = runBlocking {
         val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking null
 
-        // A local deletion outranks whatever rows are still present: the cascade may not have run
+        // A recorded deletion outranks whatever rows are still present: the cascade may not have run
         // yet, and the engine needs to push the tombstone regardless.
-        appRepository.couchDeletionRepository.get(documentId)?.let { pending ->
+        //
+        // Settled deletions answer here too, not just the ones still owed to the server. "Deleted"
+        // is the honest answer to what this device holds, and it is the one the merge needs: a peer
+        // that re-offers a stale copy of a notebook we deleted meets §6.4 and is corrected, where a
+        // device that had forgotten the deletion would take the copy and quietly resurrect it.
+        appRepository.couchDeletionRepository.get(documentId)?.let { deletion ->
             return@runBlocking CouchDocBody.Deleted(
-                CouchDeletedDoc(type = type, deletedAt = pending.deletedAt, updatedBy = deviceId)
+                CouchDeletedDoc(type = type, deletedAt = deletion.deletedAt, updatedBy = deviceId)
             )
         }
 
@@ -153,12 +160,45 @@ class RoomCouchStore(
                     // own tombstone document; nothing to do here.
                     else -> Unit
                 }
-                // The tombstone is dropped, not kept: it came *from* the server, so there is
-                // nothing left to push. Locally-initiated deletions go through [recordDeletion].
-                appRepository.couchDeletionRepository.clear(documentId)
+                // Recorded as settled rather than forgotten. There is nothing left to push — the
+                // deletion came *from* the server — but this device has to go on knowing the
+                // document is deleted, because the pages it orphaned stay live on the server for
+                // good and every replay of the feed brings them back past [applyPage]'s guard.
+                //
+                // Dropping the row here made that guard depend on the tombstone being applied
+                // *after* those pages, and the change feed does not promise any such order: CouchDB
+                // shards the two documents and merges the per-shard streams as they answer, so the
+                // notebook's tombstone leads its own orphans often enough to matter. See
+                // [com.ethran.notable.data.db.CouchDeletion.pending].
+                if (type == CouchDocType.NOTEBOOK || type == CouchDocType.FOLDER) {
+                    appRepository.couchDeletionRepository
+                        .recordPublished(documentId, deletedAtToKeep(documentId, body.tombstone))
+                } else {
+                    appRepository.couchDeletionRepository.clear(documentId)
+                }
             }
         }
         if (rewrittenPages.isNotEmpty()) onPagesApplied?.invoke(rewrittenPages)
+    }
+
+    /**
+     * Which instant to keep for a deletion the server has taken — the rule `mergeTombstones` uses
+     * for two documents, applied to the stored row.
+     *
+     * A tombstone can arrive without one: a plain HTTP `DELETE`, or a client that kept no body,
+     * leaves `deletedAt` empty, meaning *unknown* (see [CouchDeletedDoc.deletedAt]). Unknown loses
+     * every §6.4 comparison, so letting one overwrite an instant this device already recorded would
+     * turn a deletion that stands into one that yields — and the orphan pages it left behind would
+     * start rebuilding their notebook again. When both are known the earlier wins, because a
+     * deletion cannot un-happen.
+     */
+    private suspend fun deletedAtToKeep(documentId: String, tombstone: CouchDeletedDoc): String {
+        val known = appRepository.couchDeletionRepository.get(documentId)?.deletedAt
+        return when {
+            tombstone.deletedAt.isEmpty() -> known.orEmpty()
+            known.isNullOrEmpty() -> tombstone.deletedAt
+            else -> CouchMerge.earlier(known, tombstone.deletedAt)
+        }
     }
 
     /**
@@ -475,13 +515,17 @@ class RoomCouchStore(
         // moment the real notebook lands (which the engine pushes *after* its pages, so this is the
         // ordering the protocol expects).
         if (notebookId != null && appRepository.bookRepository.getById(notebookId) == null) {
-            // Unless we deleted that notebook. Its pages keep no tombstones of their own — protocol
+            // Unless that notebook is deleted. Its pages keep no tombstones of their own — protocol
             // §6.4, they live and die with the notebook's `pageIds` — so deleting a notebook leaves
             // its `page:<id>` documents live on the server forever. A device replaying the feed
             // from zero meets those orphans with no memory of having sent them, and a placeholder
             // built from one resurrects the notebook as an untitled "New notebook". Worse, the
             // placeholder then outranks the incoming tombstone under §6.4 and is *pushed back*,
             // republishing a notebook the user deleted.
+            //
+            // The record this reads is kept once the tombstone has been published, precisely so
+            // that this question can be answered at any point in any feed: the orphans outlive the
+            // deletion on the server, so the answer has to outlive it here.
             //
             // §6.4 is the same rule either way: only an edit strictly newer than the deletion
             // resurrects. A page that is not newer is a leftover, and is dropped along with it.

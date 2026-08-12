@@ -469,14 +469,92 @@ class CouchEndToEndTest {
             "the deleted notebook came back on a pull",
             repository.bookRepository.getById(notebookId),
         )
-        // The local tombstone is *spent*, not kept: the server has taken the deletion, so there is
-        // nothing left to push and `RoomCouchStore.apply` clears it. What has to survive is that the
-        // notebook is gone — which the assertion above is the real statement of.
-        assertNull(
+        // The local tombstone is settled, not forgotten: the server has taken the deletion, so
+        // there is nothing left to push — but the notebook's pages are still live documents on the
+        // server, and this device has to keep recognizing them as leftovers on every later feed.
+        assertEquals(
             "nothing should still be queued for a deletion the server has taken",
+            emptyList<String>(),
+            repository.couchDeletionRepository.pendingIds(),
+        )
+        assertNotNull(
+            "the device forgot that the notebook was deleted",
             repository.couchDeletionRepository.get(CouchDocId.notebook(notebookId)),
         )
         assertEquals(emptySet<String>(), queued())
+    }
+
+    /**
+     * The same promise on a device that only ever *heard* about the deletion, and in the order that
+     * does not heal itself.
+     *
+     * Deleting a notebook leaves its `page:<id>` documents live on the server for good (protocol
+     * §6.4: pages keep no tombstone of their own), so the orphans outlive the tombstone and can be
+     * re-announced long after it. Here the peer applies the deletion in one pull, and only in a
+     * later one meets the page — re-uploaded verbatim by a third device that lost its checkpoint,
+     * which [losing_the_checkpoint_replays_without_changing_anything] pins as a real thing this
+     * stack does. Nothing will ever mention `notebook:<id>` again.
+     *
+     * This is the case that persists. Within a single batch a placeholder built from the page is
+     * deleted again by the tombstone that follows it, so the damage is invisible; across two pulls
+     * there is no tombstone left to follow, and the placeholder stays in that library for good —
+     * and republishes the deleted notebook the next time the device uploads what it holds.
+     */
+    @Test
+    fun a_peer_does_not_rebuild_a_deleted_notebook_around_a_page_announced_later() {
+        val (notebookId, pageId) = seedNotebook("Doomed elsewhere")
+        flush(engine())
+
+        val (otherDb, otherRepository, otherImages) = secondDevice()
+        try {
+            val store = storeFor(otherRepository, otherDb, "ipad", otherImages)
+            val peer = engine(store = store, deviceId = "ipad")
+            runBlocking { peer.pull() }
+            assertEquals(
+                "Doomed elsewhere",
+                runBlocking { otherRepository.bookRepository.getById(notebookId) }?.title,
+            )
+
+            runBlocking { repository.deleteNotebookLocally(notebookId, deletedAt = Instantish.now()) }
+            flush(engine())
+            // The peer takes the deletion. Its page went with the notebook, and from here on the
+            // server will never mention `notebook:<id>` again.
+            runBlocking { peer.pull() }
+            assertNull(runBlocking { otherRepository.bookRepository.getById(notebookId) })
+
+            // A third device that lost its checkpoint re-uploads the page exactly as it holds it:
+            // a new revision, a sequence above the peer's checkpoint, and — because nothing was
+            // edited — the same `updatedAt` it always had. It is a leftover, not an edit, so §6.4
+            // leaves the deletion standing.
+            val stored = runBlocking { client.get(CouchDocId.page(pageId), CouchPage.serializer()) }
+            assertNotNull("the deletion should have left the page document behind", stored)
+            runBlocking {
+                client.put(
+                    CouchDocId.page(pageId), stored!!.rev, stored.body, CouchPage.serializer()
+                )
+            }
+
+            runBlocking { peer.pull() }
+
+            assertNull(
+                "the deleted notebook was rebuilt around a page announced after its tombstone",
+                runBlocking { otherRepository.bookRepository.getById(notebookId) },
+            )
+            assertNull(
+                "the leftover page was applied even though its notebook is deleted",
+                runBlocking { otherRepository.pageRepository.getById(pageId) },
+            )
+            // The real cost of the placeholder was never the row: it is queued like any other local
+            // change, so the next flush would publish the notebook the user deleted.
+            assertEquals(
+                "the peer queued a deleted notebook for re-upload",
+                emptySet<String>(),
+                runBlocking { otherDb.couchOutboxDao().allIds().toSet() },
+            )
+        } finally {
+            otherDb.close()
+            otherImages.deleteRecursively()
+        }
     }
 
     // endregion

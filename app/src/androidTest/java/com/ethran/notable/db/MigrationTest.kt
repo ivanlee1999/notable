@@ -418,4 +418,58 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 42 -> 43 adds `couch_deletion.pending`, which splits "this notebook is deleted" from "the
+     * server has still to be told". A deletion recorded before the upgrade is one this device made
+     * and may not have pushed yet, so every existing row has to come through as pending — if the
+     * default landed the other way, an offline deletion made before the upgrade would silently
+     * never be published, which is the exact failure `couch_deletion` exists to prevent.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate42To43_addsPendingAndLeavesExistingDeletionsOwed() {
+        val dbName = "migration-test-43"
+
+        val oldDb = helper.createDatabase(dbName, 42)
+        oldDb.execSQL(
+            """
+            INSERT INTO couch_deletion (docId, deletedAt)
+            VALUES ('notebook:notebook1', '2026-02-01T00:00:00Z')
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        migratedDb.query(
+            "SELECT deletedAt, pending FROM couch_deletion WHERE docId = 'notebook:notebook1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(
+                "2026-02-01T00:00:00Z", it.getString(it.getColumnIndexOrThrow("deletedAt"))
+            )
+            assertEquals(
+                "a deletion made before the upgrade must still be pushed",
+                1, it.getInt(it.getColumnIndexOrThrow("pending")),
+            )
+        }
+
+        // And a settled deletion — one the server already holds — is storable and does not read
+        // back as owed.
+        migratedDb.execSQL(
+            """
+            INSERT INTO couch_deletion (docId, deletedAt, pending)
+            VALUES ('notebook:notebook2', '2026-02-01T00:00:01Z', 0)
+            """.trimIndent()
+        )
+        migratedDb.query("SELECT docId FROM couch_deletion WHERE pending != 0").use {
+            assertEquals(1, it.count)
+        }
+
+        roomDb.close()
+    }
 }

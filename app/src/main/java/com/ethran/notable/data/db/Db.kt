@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 42,
+    version = 43,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -83,8 +83,11 @@ class Converters {
         AutoMigration(39, 40),
         // Page.pageWidth/pageHeight and Notebook.defaultPageWidth/defaultPageHeight: nullable
         // columns, so Room adds them itself and every existing row reads as "declares no size".
-        AutoMigration(40, 41)
+        AutoMigration(40, 41),
         // 41 -> 42 is hand-written: see MIGRATION_41_42 in Migrations.kt.
+        // Adds `couch_deletion.pending`. Every existing row is a deletion this device recorded and
+        // has not been told is settled, so the column defaults to 1 and nothing changes for them.
+        AutoMigration(42, 43),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
