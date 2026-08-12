@@ -144,3 +144,26 @@ val MIGRATION_37_38 = object : Migration(37, 38) {
         )
     }
 }
+
+// Migration 41 -> 42: `couch_outbox`, the third thing CouchDB sync needs Room to remember.
+//
+// `couch_deletion` (above) says a document is *gone*; this one says a document *changed* and has
+// not been accepted yet. Both facts are invisible in the data itself once the write has landed,
+// which is why they need tables of their own rather than being inferred.
+//
+// Hand-written for the same reason MIGRATION_37_38 is: the table is new and purely additive, a
+// spelled-out CREATE is what a reviewer can compare against `schemas/42.json`, and the databases
+// reaching this path are full of users' notebooks.
+val MIGRATION_41_42 = object : Migration(41, 42) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `couch_outbox` (
+                `docId` TEXT NOT NULL,
+                `queuedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`docId`)
+            )
+            """.trimIndent()
+        )
+    }
+}
