@@ -109,6 +109,11 @@ jobs:
         with:
           files: ${{ github.workspace }}/app/build/outputs/apk/release/notable-${{ env.VERSION_NAME }}.apk
           tag_name: v${{ env.VERSION_NAME }}
+          # Pin the new tag to the commit that was actually built. Without this the API defaults
+          # target_commitish to the default branch, so a dispatch from a release/* branch tags
+          # main's tip instead -- the APK is right, only the tag is wrong, and nothing fails.
+          # v0.8.1 shipped that way and had to be retagged by hand.
+          target_commitish: ${{ github.sha }}
           # Fall back to the automatic GITHUB_TOKEN, which `permissions: contents: write` above
           # already scopes for creating releases -- a fork has no inherited TOKEN secret.
           token: ${{ secrets.TOKEN || github.token }}
