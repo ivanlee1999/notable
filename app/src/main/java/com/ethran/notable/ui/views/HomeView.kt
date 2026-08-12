@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -58,6 +59,9 @@ import com.ethran.notable.navigation.NavigationDestination
 import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.SnackConf
+import com.ethran.notable.ui.messageRes
+import com.ethran.notable.ui.rememberKvProxy
+import com.ethran.notable.ui.requestFullSync
 import com.ethran.notable.ui.components.CoverActionTile
 import com.ethran.notable.ui.components.Kicker
 import com.ethran.notable.ui.components.ListRow
@@ -83,10 +87,12 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.Plus
+import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Upload
 import compose.icons.feathericons.Zap
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.launch
 
 
 object LibraryDestination : NavigationDestination {
@@ -147,6 +153,14 @@ fun Library(
         )
     }
 
+    // Sync is asked for from the composable rather than the view model for the same reason the
+    // per-notebook "Sync now" is: the answer worth showing is a string about a backend, not screen
+    // state — see [requestFullSync].
+    val kvProxy = rememberKvProxy()
+    val snackState = LocalSnackContext.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     LibraryContent(
         appRepository = viewModel.appRepository,
         exportEngine = viewModel.exportEngine,
@@ -154,6 +168,14 @@ fun Library(
         uiState = uiState,
         onNavigateToFolder = { id -> navController.navigate(LibraryDestination.createRoute(id)) },
         onNavigateToSettings = { navController.navigate("settings") },
+        onSyncNow = {
+            scope.launch {
+                val outcome = requestFullSync(kvProxy, viewModel.syncScheduler)
+                snackState.showOrUpdateSnack(
+                    SnackConf(text = context.getString(outcome.messageRes()), duration = 3000)
+                )
+            }
+        },
         onNavigateToEditor = { pageId, bookId ->
             navController.navigate(EditorDestination.createRoute(pageId, bookId))
         },
@@ -194,6 +216,7 @@ fun LibraryContent(
     uiState: LibraryUiState,
     onNavigateToFolder: (String?) -> Unit,
     onNavigateToSettings: () -> Unit,
+    onSyncNow: () -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     goToPage: (String) -> Unit,
     onCreateNewQuickPage: () -> Unit,
@@ -218,6 +241,7 @@ fun LibraryContent(
                 uiState = uiState,
                 onNavigateToFolder = onNavigateToFolder,
                 onNavigateToSettings = onNavigateToSettings,
+                onSyncNow = onSyncNow,
                 onCreateNewNotebook = onCreateNewNotebook,
             )
 
@@ -372,8 +396,8 @@ fun LibraryContent(
 }
 
 /**
- * Kicker path over the screen's title, then the two square actions: settings outlined,
- * new notebook filled. Closed by the 2px rule that every section repeats.
+ * Kicker path over the screen's title, then the three square actions: sync and settings
+ * outlined, new notebook filled. Closed by the 2px rule that every section repeats.
  */
 @Composable
 private fun LibraryHeader(
@@ -381,6 +405,7 @@ private fun LibraryHeader(
     uiState: LibraryUiState,
     onNavigateToFolder: (String?) -> Unit,
     onNavigateToSettings: () -> Unit,
+    onSyncNow: () -> Unit,
     onCreateNewNotebook: () -> Unit,
 ) {
     val root = stringResource(R.string.home_view_name)
@@ -417,6 +442,22 @@ private fun LibraryHeader(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            // Sync fills while a run is in flight — the header is where you look to ask "is my
+            // writing on the server yet?", and the per-notebook badges only answer it one book at
+            // a time. It stays tappable while filled: the scheduler replaces an in-flight run
+            // rather than dropping the tap, so asking again always carries the latest edit.
+            SquareButton(
+                hit = metrics.hit,
+                onClick = onSyncNow,
+                filled = uiState.isSyncing,
+            ) {
+                Icon(
+                    FeatherIcons.RefreshCw, stringResource(R.string.sync_now),
+                    tint = if (uiState.isSyncing) Kaleido.Paper else Kaleido.Ink,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             Box {
                 SquareButton(hit = metrics.hit, onClick = onNavigateToSettings) {
                     Icon(
@@ -785,6 +826,7 @@ private fun LibraryPreview(uiState: LibraryUiState) {
                 uiState = uiState,
                 onNavigateToFolder = {},
                 onNavigateToSettings = {},
+                onSyncNow = {},
                 onCreateNewNotebook = {},
             )
             Column(Modifier.padding(metrics.pad)) {

@@ -58,7 +58,7 @@ import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.SyncRequest
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
-import com.ethran.notable.ui.ManualSyncOutcome
+import com.ethran.notable.ui.messageRes
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
 import com.ethran.notable.ui.rememberKvProxy
@@ -400,21 +400,6 @@ fun NotebookConfigDialog(
 
     }
 
-}
-
-/**
- * The snack text for a manual sync request. A request no backend will act on says which switch to
- * change — "nothing happened" with no reason is the complaint this whole action exists to answer.
- */
-private fun ManualSyncOutcome.messageRes(): Int = when (this) {
-    ManualSyncOutcome.QueuedForNotebook -> R.string.sync_manual_queued
-    ManualSyncOutcome.QueuedForEverything -> R.string.sync_manual_queued_all
-    is ManualSyncOutcome.NotConfigured -> when (reason) {
-        ManualSyncOutcome.NotConfigured.Reason.BACKEND_OFF -> R.string.sync_manual_backend_off
-        ManualSyncOutcome.NotConfigured.Reason.WEBDAV_DISABLED -> R.string.sync_manual_webdav_disabled
-        ManualSyncOutcome.NotConfigured.Reason.COUCH_UNCONFIGURED ->
-            R.string.sync_manual_couch_unconfigured
-    }
 }
 
 @Composable

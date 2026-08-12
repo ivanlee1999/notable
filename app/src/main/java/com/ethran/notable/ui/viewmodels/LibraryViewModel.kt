@@ -24,7 +24,9 @@ import com.ethran.notable.utils.isLatestVersion
 import com.ethran.notable.data.events.AppEventBus
 import com.ethran.notable.sync.NotebookSyncStatusStore
 import com.ethran.notable.sync.SyncBadge
+import com.ethran.notable.sync.SyncProgressReporter
 import com.ethran.notable.sync.SyncScheduler
+import com.ethran.notable.sync.SyncState
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.sync.couch.CouchSyncController
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,6 +52,8 @@ data class LibraryUiState(
     val books: List<Notebook> = emptyList(),
     val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
+    /** A sync is running right now, whichever backend is driving it. */
+    val isSyncing: Boolean = false,
     /** Notebooks directly inside each folder, keyed by folder id — the count on its row. */
     val folderBookCounts: Map<String, Int> = emptyMap()
 )
@@ -60,6 +64,7 @@ private data class LibraryDatabaseState(
     val books: List<Notebook> = emptyList(),
     val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
+    val isSyncing: Boolean = false,
     val folderBookCounts: Map<String, Int> = emptyMap()
 )
 
@@ -75,6 +80,7 @@ class LibraryViewModel @Inject constructor(
     private val snackDispatcher: SnackDispatcher,
     val syncScheduler: SyncScheduler,
     private val syncStatusStore: NotebookSyncStatusStore,
+    private val syncProgressReporter: SyncProgressReporter,
     private val couchSync: CouchSyncController,
     @param:ApplicationContext private val context: Context // Kept strictly for ImportEngine
 ) : ViewModel() {
@@ -102,11 +108,19 @@ class LibraryViewModel @Inject constructor(
         books.mapNotNull { it.parentFolderId }.groupingBy { it }.eachCount()
     }
 
+    // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
+    // through different channels, and the header's Sync now button is about the run as a whole.
+    private val _syncStatusFlow = combine(
+        syncStatusStore.badges, syncProgressReporter.state, couchSync.state
+    ) { badges, webdav, couch ->
+        badges to (webdav is SyncState.Syncing || couch.status is CouchSyncController.Status.Syncing)
+    }
+
     // 2. Group the database flows (plus per-notebook sync badges) semantically
     private val _dbDataFlow = combine(
-        _foldersFlow, _booksFlow, _singlePagesFlow, syncStatusStore.badges, _folderBookCountsFlow
-    ) { folders, books, pages, badges, folderCounts ->
-        LibraryDatabaseState(folders, books, pages, badges, folderCounts)
+        _foldersFlow, _booksFlow, _singlePagesFlow, _syncStatusFlow, _folderBookCountsFlow
+    ) { folders, books, pages, (badges, syncing), folderCounts ->
+        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts)
     }
 
     // 3. Expose the final UI State
@@ -122,6 +136,7 @@ class LibraryViewModel @Inject constructor(
             books = dbData.books,
             singlePages = dbData.singlePages,
             syncBadges = dbData.syncBadges,
+            isSyncing = dbData.isSyncing,
             folderBookCounts = dbData.folderBookCounts
         )
     }.stateIn(
