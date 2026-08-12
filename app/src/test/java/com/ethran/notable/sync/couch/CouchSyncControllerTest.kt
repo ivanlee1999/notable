@@ -232,12 +232,18 @@ class CouchSyncControllerTest {
         assertTrue(controller.lastSyncedAt != null)
     }
 
+    /**
+     * The message has to describe what the guard does, and it counts the deletions it held back
+     * rather than the whole queue — those are different numbers, because the queue also carries the
+     * ordinary edits the guard deliberately lets through.
+     */
     @Test
     fun `the mass deletion guard surfaces as an actionable message`() {
         val backend = BackendSpy()
         backend.flushReport = CouchSyncEngine.FlushReport(
-            stillDirty = (0 until 12).map { "notebook:n$it" },
+            stillDirty = (0 until 12).map { "notebook:n$it" } + listOf("page:p1"),
             blockedByDeletionGuard = true,
+            deletionsHeldBack = 12,
         )
         val controller = controller(backend, FakeSleeper(allowedTicks = 10))
 
@@ -247,7 +253,11 @@ class CouchSyncControllerTest {
         assertTrue("the guard should surface as a failure, got $status",
             status is CouchSyncController.Status.Failed)
         val message = (status as CouchSyncController.Status.Failed).message
-        assertTrue("the message should name the count: $message", message.contains("12"))
+        assertTrue("the message should name the deletions held back: $message",
+            message.contains("12"))
+        // No such setting exists in either app; the message used to send the user looking for one.
+        assertFalse("the message must not promise a confirmation that does not exist: $message",
+            message.contains("Sync settings"))
     }
 
     // endregion
@@ -290,6 +300,45 @@ class CouchSyncControllerTest {
             "a pull that found local-only content should push it without waiting",
             backend.flushCount >= 1
         )
+    }
+
+    /**
+     * Reconnecting has to drain the outbox, not merely deliver whatever the feed happened to carry.
+     * After a flush that failed offline the documents are still queued; a pull that succeeds is the
+     * first proof the network came back, and pushing only on `pushBack` left them waiting for the
+     * user to write something else or tap Sync now.
+     */
+    @Test
+    fun `a successful empty pull still drains an outbox left over from being offline`() {
+        val backend = BackendSpy()
+        // Nothing came down — the peer has not written anything since we lost the connection.
+        backend.pullReport = CouchSyncEngine.PullReport()
+        backend.pending = 3
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        controller.start()
+        settle(300)
+        controller.stop()
+
+        assertTrue(
+            "an empty pull with work still queued should push it, got ${backend.flushCount} pushes",
+            backend.flushCount >= 1
+        )
+    }
+
+    /** ...and stays quiet when there is genuinely nothing to send, rather than pushing on a timer. */
+    @Test
+    fun `a successful empty pull with an empty outbox pushes nothing`() {
+        val backend = BackendSpy()
+        backend.pending = 0
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        controller.start()
+        settle(300)
+        controller.stop()
+
+        assertTrue("the outbox should have been consulted", backend.pendingReads.get() >= 1)
+        assertEquals("nothing is waiting, so nothing should be sent", 0, backend.flushCount)
     }
 
     @Test

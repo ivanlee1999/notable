@@ -313,6 +313,40 @@ class CouchSyncEngineTest {
     }
 
     /**
+     * The loop stops at the first transport failure, because one dead connection applies to every
+     * remaining document too. What it reports has to be the whole queue regardless: the controller
+     * uses `stillDirty.size` as the pending count, and the reconnect drain decides whether to push
+     * at all by asking how much is waiting. Reporting only the document that happened to be first
+     * made both of those answers too small.
+     */
+    @Test
+    fun a_flush_that_stops_early_reports_everything_still_waiting() = runBlocking {
+        val secondPageId = CouchDocId.page("p2")
+        ipadStore.set(pageId, CouchDocBody.Page(page(updatedAt = 5, by = "ipad")))
+        ipadStore.set(secondPageId, CouchDocBody.Page(page(updatedAt = 6, by = "ipad")))
+        ipadStore.set(
+            notebookId,
+            CouchDocBody.Notebook(notebook("Notes", listOf("p1", "p2"), updatedAt = 6, by = "ipad"))
+        )
+        ipad.markDirty(listOf(pageId, secondPageId, notebookId))
+
+        server.isOffline = true
+        val report = ipad.flush()
+
+        assertEquals("the loop should stop after the first failure", 1, report.failures.size)
+        assertEquals(
+            "everything still in the outbox has to be reported, not only the attempt that failed",
+            setOf(pageId, secondPageId, notebookId),
+            report.stillDirty.toSet(),
+        )
+        assertEquals(
+            "and the count has to agree with the outbox itself",
+            report.stillDirty.size,
+            ipad.pendingCount,
+        )
+    }
+
+    /**
      * A lost checkpoint replays the whole feed. Because merges are idempotent that has to be a
      * slow no-op, not a source of duplicates or spurious conflicts.
      */

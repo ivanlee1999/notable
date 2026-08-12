@@ -46,6 +46,9 @@ interface CouchOutboxDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun add(row: CouchOutbox)
 
+    @Query("SELECT * FROM couch_outbox WHERE docId = :docId")
+    suspend fun get(docId: String): CouchOutbox?
+
     @Query("SELECT docId FROM couch_outbox ORDER BY queuedAt, docId")
     suspend fun allIds(): List<String>
 
@@ -73,7 +76,9 @@ class RemoteApply : AbstractCoroutineContextElement(RemoteApply) {
 class CouchOutboxRepository @Inject constructor(
     private val db: CouchOutboxDao
 ) {
-    suspend fun queue(documentId: String) = queue(listOf(documentId))
+    suspend fun queue(documentId: String) {
+        queue(listOf(documentId))
+    }
 
     /**
      * Records that [documentIds] have to be sent, unless this is the sync engine landing a remote
