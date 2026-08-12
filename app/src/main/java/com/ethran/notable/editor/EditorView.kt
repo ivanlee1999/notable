@@ -22,6 +22,7 @@ import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.ui.EditorSurface
 import com.ethran.notable.editor.ui.HorizontalScrollIndicator
+import com.ethran.notable.editor.ui.SaveStateBadge
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.toolbar.PositionedToolbar
@@ -270,6 +271,9 @@ fun EditorView(
             Box(Modifier.padding(railInset)) {
                 HorizontalScrollIndicator(viewModel = viewModel, page = page)
             }
+            // Last, so it is over the toolbar rather than under it: the one thing on this screen
+            // the user cannot find out any other way.
+            SaveStateBadge(saveState = page.pageDataManager.saveState)
         }
     }
 }
