@@ -93,9 +93,20 @@ enum class PageSizePreset(
     LETTER("letter", "Letter", 215.9, 279.4, PageSize(1439, 1863)),
     LEGAL("legal", "Legal", 215.9, 355.6, PageSize(1439, 2371));
 
+    /**
+     * e.g. "216×279 mm" — the sheet's dimensions on their own, for a picker that shows the name
+     * separately.
+     *
+     * Rounded rather than truncated, which is the difference between calling Letter 216 mm wide
+     * and calling it 215: it is 215.9. [label] uses the same rule for a size that names no
+     * preset, and the two would otherwise disagree about the same sheet.
+     */
+    val millimetreLabel: String
+        get() = "${Math.round(millimetresWidth)}×${Math.round(millimetresHeight)} mm"
+
     /** e.g. "A4 · 210×297 mm", for the settings picker. */
     val label: String
-        get() = "$displayName · ${millimetresWidth.toInt()}×${millimetresHeight.toInt()} mm"
+        get() = "$displayName · $millimetreLabel"
 
     companion object {
         /**
