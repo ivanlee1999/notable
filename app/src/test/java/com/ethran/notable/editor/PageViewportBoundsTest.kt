@@ -96,5 +96,41 @@ class PageViewportBoundsTest {
         }
     }
 
+    // The other half of "nothing on the page is out of reach": how far the canvas scrolls.
+
+    @Test
+    fun `a page with nothing on it scrolls exactly one sheet`() {
+        assertEquals(a4.height, PageViewportBounds.contentExtent(a4.height, emptyList()))
+    }
+
+    @Test
+    fun `content inside the sheet does not stretch the canvas`() {
+        assertEquals(
+            a4.height,
+            PageViewportBounds.contentExtent(a4.height, listOf(10f, a4.height / 2f))
+        )
+    }
+
+    // An image dropped three sheets down has to be scrollable to; sizing this from the strokes
+    // alone is what left it stored, drawn, and impossible to reach.
+    @Test
+    fun `the canvas reaches the furthest thing on the page`() {
+        val imageBottom = a4.height * 3f
+        assertEquals(
+            (imageBottom + PageViewportBounds.CONTENT_SLACK).toInt(),
+            PageViewportBounds.contentExtent(a4.height, listOf(50f, imageBottom, 120f))
+        )
+    }
+
+    @Test
+    fun `a non-finite edge cannot stretch the canvas to infinity`() {
+        assertEquals(
+            a4.height,
+            PageViewportBounds.contentExtent(
+                a4.height, listOf(Float.NaN, Float.POSITIVE_INFINITY)
+            )
+        )
+    }
+
     private fun fit(viewWidth: Int) = PageViewportBounds.fitToWidthZoom(a4.width, viewWidth)
 }

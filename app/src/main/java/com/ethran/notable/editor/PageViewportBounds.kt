@@ -55,4 +55,26 @@ object PageViewportBounds {
         scroll.x.coerceIn(0f, maxHorizontalScroll(pageWidth, viewWidth, zoom)),
         scroll.y.coerceAtLeast(0f)
     )
+
+    /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */
+    const val CONTENT_SLACK = 50
+
+    /**
+     * How far the canvas scrolls along one axis: the sheet, or as far as the page's content runs
+     * past it.
+     *
+     * [contentEdges] are the far edges of everything the page holds on that axis — the bottom of
+     * every stroke and image for the vertical extent, their right edges for the horizontal one.
+     * *Everything*, not only the ink: sizing this from strokes alone is what made an image placed
+     * below the sheet or past its right edge unreachable. It was still stored and still drawn, but
+     * there was no scroll position that brought it into view, so it was gone as far as the user
+     * was concerned.
+     *
+     * Null and non-finite edges are dropped rather than propagated: a half-loaded image or an
+     * empty bounds must not be able to stretch the canvas to infinity.
+     */
+    fun contentExtent(sheet: Int, contentEdges: List<Float>): Int {
+        val furthest = contentEdges.filter { it.isFinite() }.maxOrNull() ?: return sheet
+        return maxOf(sheet, (furthest + CONTENT_SLACK).toInt())
+    }
 }

@@ -27,6 +27,7 @@ import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.declaredPageSize
 import com.ethran.notable.data.model.legacyScreenSheet
 import com.ethran.notable.data.model.sheet
+import com.ethran.notable.editor.PageViewportBounds
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
@@ -51,7 +52,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.max
 
 
 // Save bitmap, to avoid loading from disk every time.
@@ -925,33 +925,45 @@ class PageDataManager @Inject constructor(
         pageFromDb?.takeIf { it.id == pageId }?.declaredPageSize() != null
 
     /**
-     * The scrollable height: the sheet, or further if ink runs past the bottom of it.
+     * The scrollable height: the sheet, or further if the page's content runs past the bottom of
+     * it.
      *
-     * Covering ink beyond the sheet is not cosmetic. Ink lands outside the sheet whenever it was
-     * written on a device bigger than the page, and a canvas that stops at the sheet's edge makes
-     * that ink unreachable rather than merely off-page.
+     * Covering content beyond the sheet is not cosmetic. Ink lands outside the sheet whenever it
+     * was written on a device bigger than the page, an image can simply be dropped there, and a
+     * canvas that stops at the sheet's edge makes that content unreachable rather than merely
+     * off-page.
+     *
+     * Images count, and used not to: the height came from the strokes alone, so an image below the
+     * sheet was stored, drawn, and impossible to scroll to.
      */
     fun recomputeHeight(pageId: String): Int {
         val sheetHeight = getSheet(pageId).height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
         val newHeight = synchronized(lock) {
-            val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return sheetHeight
-            max(list.maxOf { it.bottom }.plus(50).toInt(), sheetHeight)
+            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
         }
         viewport.setHeight(pageId, newHeight)
         return newHeight
     }
 
     /** The scrollable width, by the same rule as [recomputeHeight]. */
-    fun computeWidth(pageId: String): Int {
-        val sheetWidth = getSheet(pageId).width
-        synchronized(lock) {
-            val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return sheetWidth
-            return max(list.maxOf { it.right }.plus(50).toInt(), sheetWidth)
-        }
+    fun computeWidth(pageId: String): Int = synchronized(lock) {
+        PageViewportBounds.contentExtent(getSheet(pageId).width, rightEdgesLocked(pageId))
+    }
+
+    /** Bottom of every stroke and image on the page. Call with [lock] held. */
+    private fun bottomEdgesLocked(pageId: String): List<Float> {
+        val entry = entries[pageId] ?: return emptyList()
+        return (entry.strokes?.map { it.bottom } ?: emptyList()) +
+            (entry.images?.map { (it.y + it.height).toFloat() } ?: emptyList())
+    }
+
+    /** Right edge of every stroke and image on the page. Call with [lock] held. */
+    private fun rightEdgesLocked(pageId: String): List<Float> {
+        val entry = entries[pageId] ?: return emptyList()
+        return (entry.strokes?.map { it.right } ?: emptyList()) +
+            (entry.images?.map { (it.x + it.width).toFloat() } ?: emptyList())
     }
 
     /** Stored scroll for [pageId], falling back to the page's persisted scroll position. */

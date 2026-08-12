@@ -444,23 +444,21 @@ class PageView(
     private fun saveImagesToPersistLayer(image: List<Image>) = pageDataManager.saveImagesToDb(image)
 
 
-    fun addImage(imageToAdd: Image) {
-        images += listOf(imageToAdd)
-        val bottomPlusPadding = imageToAdd.x + imageToAdd.height + 50
-        if (bottomPlusPadding > height) height = bottomPlusPadding
+    fun addImage(imageToAdd: Image) = addImage(listOf(imageToAdd))
 
-        saveImagesToPersistLayer(listOf(imageToAdd))
-
-//        persistBitmapDebounced()
-    }
-
+    /**
+     * The canvas has to reach the image, so the extent is recomputed rather than nudged.
+     *
+     * It used to be nudged, and with the wrong coordinate: `image.x + image.height`. On a page
+     * where the image sat further down than across — the ordinary case for anything pasted below
+     * what is already written — that computed a bottom edge above the image's own, so the canvas
+     * stopped short of it and there was no scroll position that brought it into view. Nothing grew
+     * horizontally at all, so an image past the right edge was unreachable outright.
+     */
     fun addImage(imageToAdd: List<Image>) {
         images += imageToAdd
-        imageToAdd.forEach {
-            val bottomPlusPadding = it.x + it.height + 50
-            if (bottomPlusPadding > height) height = bottomPlusPadding
-        }
         saveImagesToPersistLayer(imageToAdd)
+        pageDataManager.recomputeHeight(currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -477,11 +475,11 @@ class PageView(
     fun updateImages(imagesToUpdate: List<Image>) {
         val imageUpdateById = imagesToUpdate.associateBy { it.id }
         images = images.map { image -> imageUpdateById[image.id] ?: image }
-        imagesToUpdate.forEach {
-            val bottomPlusPadding = it.x + it.height + 50
-            if (bottomPlusPadding > height) height = bottomPlusPadding
-        }
+        // Recomputed, not nudged, and for the same reason as in [addImage]: a move is exactly the
+        // action that puts an image below the sheet or past its right edge, and the nudge here
+        // added `x` to `height` — so dragging an image down left the canvas unable to reach it.
         pageDataManager.updateImagesInDb(imagesToUpdate)
+        pageDataManager.recomputeHeight(currentPageId)
     }
 
     fun getImages(imageIds: List<String>): List<Image?> =
