@@ -57,7 +57,28 @@ data class LibraryUiState(
     /** A sync is running right now, whichever backend is driving it. */
     val isSyncing: Boolean = false,
     /** Notebooks directly inside each folder, keyed by folder id — the count on its row. */
-    val folderBookCounts: Map<String, Int> = emptyMap()
+    val folderBookCounts: Map<String, Int> = emptyMap(),
+    /** How much is waiting in the Trash; 0 hides the row entirely. */
+    val trashedCount: Int = 0,
+    /** What the user is looking for. Empty means "show me where I am" rather than "show nothing". */
+    val query: String = "",
+) {
+    val isSearching: Boolean get() = query.isNotBlank()
+}
+
+/** What a search turned up. Null rather than an instance of this means no search is running. */
+private data class SearchResults(
+    val folders: List<Folder>,
+    val books: List<Notebook>,
+)
+
+/** The screen's own state, grouped so `combine` stays inside its typed overloads. */
+private data class LibraryScreenState(
+    val folderId: String? = null,
+    val isLatestVersion: Boolean = true,
+    val isImporting: Boolean = false,
+    val breadcrumbFolders: List<Folder> = emptyList(),
+    val query: String = "",
 )
 
 // Private data class for clean Flow combining
@@ -67,7 +88,8 @@ private data class LibraryDatabaseState(
     val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
     val isSyncing: Boolean = false,
-    val folderBookCounts: Map<String, Int> = emptyMap()
+    val folderBookCounts: Map<String, Int> = emptyMap(),
+    val trashedCount: Int = 0,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -110,6 +132,35 @@ class LibraryViewModel @Inject constructor(
         books.mapNotNull { it.parentFolderId }.groupingBy { it }.eachCount()
     }
 
+    private val _query = MutableStateFlow("")
+
+    /**
+     * What a search finds, anywhere in the library.
+     *
+     * Deliberately not scoped to the folder the user is standing in: the reason to search is not
+     * knowing where the thing is, so a search that only looked here would answer a question nobody
+     * asked. Empty while the query is blank, so the ordinary listing costs nothing.
+     */
+    private val _searchResultsFlow = combine(
+        _query, folderRepository.getAllVisibleFlow(), bookRepository.getAllFlow()
+    ) { query, folders, books ->
+        if (query.isBlank()) null
+        else SearchResults(
+            folders = folders.filter { LibrarySort.matches(it.title, query) },
+            books = books.filter { LibrarySort.matches(it.title, query) },
+        )
+    }
+
+    private val _trashedCountFlow = combine(
+        folderRepository.getTrashed().asFlow(), bookRepository.getTrashed().asFlow()
+    ) { folders, books -> folders.size + books.size }.distinctUntilChanged()
+
+    // Paired rather than combined as a sixth flow: `combine` has typed overloads up to five, and
+    // one more argument would drop the whole group into the untyped array form.
+    private val _countsFlow = combine(
+        _folderBookCountsFlow, _trashedCountFlow
+    ) { folderCounts, trashed -> folderCounts to trashed }
+
     // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
     // through different channels, and the header's Sync now button is about the run as a whole.
     //
@@ -128,27 +179,49 @@ class LibraryViewModel @Inject constructor(
     ) { badges, syncing -> badges to syncing }
 
     // 2. Group the database flows (plus per-notebook sync badges) semantically
+    /**
+     * The folder the user is standing in, or — while a search is running — what the search found
+     * anywhere in the library. Quick pages drop out of a search: they are searched by nothing,
+     * having no title of their own to match.
+     */
+    private val _listingFlow = combine(
+        _foldersFlow, _booksFlow, _singlePagesFlow, _searchResultsFlow
+    ) { folders, books, pages, found ->
+        // Null, not empty: a search that found nothing has to show nothing, and falling back to
+        // the folder's contents would look like the search had simply been ignored.
+        if (found == null) Triple(folders, books, pages)
+        else Triple(found.folders, found.books, emptyList<Page>())
+    }
+
     private val _dbDataFlow = combine(
-        _foldersFlow, _booksFlow, _singlePagesFlow, _syncStatusFlow, _folderBookCountsFlow
-    ) { folders, books, pages, (badges, syncing), folderCounts ->
-        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts)
+        _listingFlow, _syncStatusFlow, _countsFlow
+    ) { (folders, books, pages), (badges, syncing), (folderCounts, trashed) ->
+        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts, trashed)
     }
 
     // 3. Expose the final UI State
+    private val _screenFlow = combine(
+        _folderId, _isLatestVersion, _isImporting, _breadcrumbFolders, _query
+    ) { folderId, isLatest, isImporting, breadcrumbs, query ->
+        LibraryScreenState(folderId, isLatest, isImporting, breadcrumbs, query)
+    }
+
     val uiState: StateFlow<LibraryUiState> = combine(
-        _folderId, _isLatestVersion, _isImporting, _breadcrumbFolders, _dbDataFlow
-    ) { folderId, isLatestVersion, isImporting, breadcrumbs, dbData ->
+        _screenFlow, _dbDataFlow
+    ) { screen, dbData ->
         LibraryUiState(
-            folderId = folderId,
-            isLatestVersion = isLatestVersion,
-            isImporting = isImporting,
-            breadcrumbFolders = breadcrumbs,
+            folderId = screen.folderId,
+            isLatestVersion = screen.isLatestVersion,
+            isImporting = screen.isImporting,
+            breadcrumbFolders = screen.breadcrumbFolders,
             folders = dbData.folders,
             books = dbData.books,
             singlePages = dbData.singlePages,
             syncBadges = dbData.syncBadges,
             isSyncing = dbData.isSyncing,
-            folderBookCounts = dbData.folderBookCounts
+            folderBookCounts = dbData.folderBookCounts,
+            trashedCount = dbData.trashedCount,
+            query = screen.query
         )
     }.stateIn(
         scope = viewModelScope,
@@ -194,6 +267,27 @@ class LibraryViewModel @Inject constructor(
             }
         }
         return list.reversed()
+    }
+
+    fun onQueryChanged(query: String) {
+        _query.value = query
+    }
+
+    /**
+     * Rearranges the library and remembers the choice.
+     *
+     * Through `setAppSettings` rather than a write of its own: that is the one call that both
+     * persists and republishes the snapshot state the whole UI reads, and doing half of it here
+     * would leave the shelf sorted until the next launch.
+     */
+    fun onSortChanged(order: LibrarySortOrder, descending: Boolean) {
+        val updated = GlobalAppSettings.current.copy(
+            librarySortOrder = order.name,
+            librarySortDescending = descending,
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.kvProxy.setAppSettings(updated)
+        }
     }
 
     fun createNewFolder(title: String) {

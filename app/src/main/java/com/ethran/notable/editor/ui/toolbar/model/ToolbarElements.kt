@@ -34,7 +34,7 @@ object ToolbarElements {
             id = ToolbarElementId.SHAPE,
             icon = IconRef.Drawable(R.drawable.line),
             contentDescription = "shape",
-            shapes = listOf(Shape.LINE),
+            shapes = Shape.entries,
         ),
         ModeElement(
             id = ToolbarElementId.ERASER,

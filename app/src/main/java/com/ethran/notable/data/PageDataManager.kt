@@ -27,6 +27,7 @@ import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.declaredPageSize
 import com.ethran.notable.data.model.legacyScreenSheet
 import com.ethran.notable.data.model.sheet
+import com.ethran.notable.editor.PageViewportBounds
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
@@ -39,7 +40,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
@@ -48,10 +53,10 @@ import java.io.File
 import java.lang.ref.SoftReference
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.max
 
 
 // Save bitmap, to avoid loading from disk every time.
@@ -112,6 +117,31 @@ internal class PageCacheEntry(val pageId: String) {
     val loaded: Boolean get() = strokes != null && images != null && sizeComputed
 }
 
+/**
+ * Whether what is on the canvas is also on disk.
+ *
+ * Exists because it was previously unanswerable. A stroke was appended to the in-memory list, the
+ * insert was fired off, and a failure was logged — so ink that could not be written looked exactly
+ * like ink that had been, until the app was restarted and it was gone. A log line is not a recovery
+ * strategy and it is not a message to the user either.
+ */
+sealed interface SaveState {
+    /** Everything drawn is on disk. */
+    data object Saved : SaveState
+
+    /** [pending] writes are in flight. The ordinary state while someone is writing. */
+    data class Saving(val pending: Int) : SaveState
+
+    /**
+     * Writes that did not land. The page is not safe: what is on screen may not survive a restart.
+     *
+     * [retrying] separates the two kinds, because they need different words. A disk error is
+     * being retried and may well fix itself; a constraint violation is a statement about the data
+     * and will fail identically on the tenth attempt, so promising a retry would be a lie.
+     */
+    data class Failed(val failing: Int, val message: String?, val retrying: Boolean) : SaveState
+}
+
 // Cache manager companion object
 @Singleton
 class PageDataManager @Inject constructor(
@@ -123,6 +153,27 @@ class PageDataManager @Inject constructor(
 ) {
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val _saveState = MutableStateFlow<SaveState>(SaveState.Saved)
+
+    /** Whether what is on the canvas is also on disk. Read by the editor's save indicator. */
+    val saveState: StateFlow<SaveState> = _saveState.asStateFlow()
+
+    /** Content writes queued or in flight, and how many of those are currently failing. */
+    private val pendingWrites = AtomicInteger(0)
+    private val failingWrites = AtomicInteger(0)
+
+    /**
+     * Writes given up on: a constraint violation cannot succeed however often it is tried.
+     *
+     * Counted separately and never decremented by a retry, because there is no retry. It survives
+     * until the process does, which is the honest lifetime — the change it represents is not on
+     * disk and nothing here is going to put it there.
+     */
+    private val abandonedWrites = AtomicInteger(0)
+
+    @Volatile
+    private var lastSaveError: String? = null
 
     // Read from every thread, written by the suspend setPage; @Volatile so a stale read can't
     // unpin the real current page mid-evict.
@@ -925,33 +976,45 @@ class PageDataManager @Inject constructor(
         pageFromDb?.takeIf { it.id == pageId }?.declaredPageSize() != null
 
     /**
-     * The scrollable height: the sheet, or further if ink runs past the bottom of it.
+     * The scrollable height: the sheet, or further if the page's content runs past the bottom of
+     * it.
      *
-     * Covering ink beyond the sheet is not cosmetic. Ink lands outside the sheet whenever it was
-     * written on a device bigger than the page, and a canvas that stops at the sheet's edge makes
-     * that ink unreachable rather than merely off-page.
+     * Covering content beyond the sheet is not cosmetic. Ink lands outside the sheet whenever it
+     * was written on a device bigger than the page, an image can simply be dropped there, and a
+     * canvas that stops at the sheet's edge makes that content unreachable rather than merely
+     * off-page.
+     *
+     * Images count, and used not to: the height came from the strokes alone, so an image below the
+     * sheet was stored, drawn, and impossible to scroll to.
      */
     fun recomputeHeight(pageId: String): Int {
         val sheetHeight = getSheet(pageId).height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
         val newHeight = synchronized(lock) {
-            val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return sheetHeight
-            max(list.maxOf { it.bottom }.plus(50).toInt(), sheetHeight)
+            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
         }
         viewport.setHeight(pageId, newHeight)
         return newHeight
     }
 
     /** The scrollable width, by the same rule as [recomputeHeight]. */
-    fun computeWidth(pageId: String): Int {
-        val sheetWidth = getSheet(pageId).width
-        synchronized(lock) {
-            val list = entries[pageId]?.strokes
-            if (list.isNullOrEmpty()) return sheetWidth
-            return max(list.maxOf { it.right }.plus(50).toInt(), sheetWidth)
-        }
+    fun computeWidth(pageId: String): Int = synchronized(lock) {
+        PageViewportBounds.contentExtent(getSheet(pageId).width, rightEdgesLocked(pageId))
+    }
+
+    /** Bottom of every stroke and image on the page. Call with [lock] held. */
+    private fun bottomEdgesLocked(pageId: String): List<Float> {
+        val entry = entries[pageId] ?: return emptyList()
+        return (entry.strokes?.map { it.bottom } ?: emptyList()) +
+            (entry.images?.map { (it.y + it.height).toFloat() } ?: emptyList())
+    }
+
+    /** Right edge of every stroke and image on the page. Call with [lock] held. */
+    private fun rightEdgesLocked(pageId: String): List<Float> {
+        val entry = entries[pageId] ?: return emptyList()
+        return (entry.strokes?.map { it.right } ?: emptyList()) +
+            (entry.images?.map { (it.x + it.width).toFloat() } ?: emptyList())
     }
 
     /** Stored scroll for [pageId], falling back to the page's persisted scroll position. */
@@ -1053,12 +1116,6 @@ class PageDataManager @Inject constructor(
     }
 
     /**
-     * Runs a DB content-write on [dataScope], catching SQL errors so a storage/device failure
-     * (e.g. SQLiteDiskIOException on endTransaction) is logged with context instead of
-     * escaping the coroutine and killing the process. For now this only logs and no-ops: the
-     * in-memory state is untouched, so the next successful write re-persists it.
-     */
-    /**
      * Waits for the fire-and-forget database writes above to finish.
      *
      * Only tests need this. They close an in-memory database when they finish, and a write still
@@ -1073,22 +1130,111 @@ class PageDataManager @Inject constructor(
         dataScope.coroutineContext.job.children.toList().joinAll()
     }
 
+    /**
+     * Runs a DB content-write on [dataScope], and keeps trying until it lands.
+     *
+     * A failure used to be logged and dropped. The stroke was already in the in-memory list by the
+     * time the insert ran, so on a full disk or an I/O error the ink stayed on screen for the rest
+     * of the session and was gone after a restart — with nothing anywhere telling the user the page
+     * was not safe. "The next successful write re-persists it" was not true either: a stroke is
+     * inserted once, and nothing writes it again.
+     *
+     * So: retry with backoff, and say so. The retry queue is in memory — it has to be, because the
+     * database *is* the durable store and a journal beside it would be written to the same failing
+     * disk — which means a process death still loses unsaved ink. What it cannot do is lose it
+     * quietly: [saveState] reports Saving / Save failed for as long as anything is outstanding, and
+     * a disk that comes back (space freed, storage remounted) is picked up without the user having
+     * to do anything.
+     *
+     * Constraint violations are not retried: they are a statement about the data, and the tenth
+     * attempt will fail exactly like the first.
+     */
     private fun launchDbWrite(op: String, pageIds: Collection<String>, block: suspend () -> Unit) {
         dataScope.launch {
+            pendingWrites.incrementAndGet()
+            publishSaveState()
+            var failing = false
+            var backoff = SAVE_RETRY_FLOOR_MS
             try {
-                block()
-            } catch (e: SQLException) {
-                log.e(
-                    "DB write '$op' failed on page $currentPage " +
-                            "(notebook ${pageFromDb?.notebookId}): ${e.message}", e
-                )
-                return@launch
+                while (true) {
+                    try {
+                        block()
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: SQLiteConstraintException) {
+                        // Never going to succeed; retrying is a spin, not a recovery. Counted as
+                        // abandoned rather than failing, so the state does not fall back to Saved
+                        // the moment the queue drains — the write did not land, and saying it did
+                        // is the failure mode this whole mechanism exists to remove.
+                        log.e("DB write '$op' rejected on page $currentPage: ${e.message}", e)
+                        abandonedWrites.incrementAndGet()
+                        recordSaveFailure(op, e, retrying = false)
+                        return@launch
+                    } catch (e: SQLException) {
+                        if (!failing) {
+                            failing = true
+                            failingWrites.incrementAndGet()
+                            recordSaveFailure(op, e, retrying = true)
+                        }
+                        log.e(
+                            "DB write '$op' failed on page $currentPage " +
+                                "(notebook ${pageFromDb?.notebookId}), retrying in ${backoff}ms: " +
+                                "${e.message}", e
+                        )
+                        delay(backoff)
+                        backoff = (backoff * 2).coerceAtMost(SAVE_RETRY_CEILING_MS)
+                    }
+                }
+                if (failing) {
+                    failing = false
+                    failingWrites.decrementAndGet()
+                    log.i("DB write '$op' finally landed")
+                }
+                // The write landed, so the pages it touched are now out of step with the server.
+                // Queueing them and starting the debounce here is what makes a stroke leave the
+                // device without anyone pressing anything; the call is fire-and-forget so no
+                // drawing path ever waits on the database, let alone on the network.
+                for (pageId in pageIds.distinct()) couchSync.notePageEdited(pageId)
+            } finally {
+                if (failing) failingWrites.decrementAndGet()
+                pendingWrites.decrementAndGet()
+                publishSaveState()
             }
-            // The write landed, so the pages it touched are now out of step with the server.
-            // Queueing them and starting the debounce here is what makes a stroke leave the device
-            // without anyone pressing anything; the call is fire-and-forget so no drawing path ever
-            // waits on the database, let alone on the network.
-            for (pageId in pageIds.distinct()) couchSync.notePageEdited(pageId)
+        }
+    }
+
+    /**
+     * Says it out loud the first time a write fails.
+     *
+     * A hint rather than a log line: the ink is still on the screen and looks saved, so the only
+     * way the user finds out otherwise is if something says so. [saveState] then keeps saying it
+     * for as long as the write is outstanding.
+     */
+    private fun recordSaveFailure(op: String, error: Throwable, retrying: Boolean) {
+        lastSaveError = error.message ?: error.toString()
+        appEventBus.tryEmit(
+            AppEvent.ActionHint(
+                if (retrying) "Could not save this page — retrying"
+                else "Could not save this page",
+                duration = 4000
+            )
+        )
+        appEventBus.tryEmit(
+            AppEvent.LogMessage(reason = "save", message = "Could not save ($op): $lastSaveError")
+        )
+        publishSaveState()
+    }
+
+    private fun publishSaveState() {
+        val pending = pendingWrites.get()
+        val failing = failingWrites.get()
+        val abandoned = abandonedWrites.get()
+        _saveState.value = when {
+            failing > 0 -> SaveState.Failed(failing, lastSaveError, retrying = true)
+            abandoned > 0 -> SaveState.Failed(abandoned, lastSaveError, retrying = false)
+            pending > 0 -> SaveState.Saving(pending)
+            else -> SaveState.Saved
         }
     }
 
@@ -1591,5 +1737,16 @@ class PageDataManager @Inject constructor(
                 dropAllUnpinned()
             }
         })
+    }
+
+    private companion object {
+        /**
+         * Retry pacing for a content write that failed. The ceiling matters more than the floor:
+         * a disk that is full stays full for minutes or hours, and hammering it every second
+         * would be a battery cost with no chance of succeeding — while one attempt a minute
+         * recovers on its own the moment space is freed.
+         */
+        const val SAVE_RETRY_FLOOR_MS = 500L
+        const val SAVE_RETRY_CEILING_MS = 60_000L
     }
 }

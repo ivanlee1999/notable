@@ -3,6 +3,7 @@ package com.ethran.notable.editor
 import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.gestures.MAX_ZOOM
 import com.ethran.notable.gestures.MIN_ZOOM
+import kotlin.math.ceil
 
 /**
  * Where the view is allowed to sit over a page: how far out it may zoom, and how far it may pan.
@@ -55,4 +56,29 @@ object PageViewportBounds {
         scroll.x.coerceIn(0f, maxHorizontalScroll(pageWidth, viewWidth, zoom)),
         scroll.y.coerceAtLeast(0f)
     )
+
+    /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */
+    const val CONTENT_SLACK = 50
+
+    /**
+     * How far the canvas scrolls along one axis: the sheet, or as far as the page's content runs
+     * past it.
+     *
+     * [contentEdges] are the far edges of everything the page holds on that axis — the bottom of
+     * every stroke and image for the vertical extent, their right edges for the horizontal one.
+     * *Everything*, not only the ink: sizing this from strokes alone is what made an image placed
+     * below the sheet or past its right edge unreachable. It was still stored and still drawn, but
+     * there was no scroll position that brought it into view, so it was gone as far as the user
+     * was concerned.
+     *
+     * Null and non-finite edges are dropped rather than propagated: a half-loaded image or an
+     * empty bounds must not be able to stretch the canvas to infinity.
+     */
+    fun contentExtent(sheet: Int, contentEdges: List<Float>): Int {
+        val furthest = contentEdges.filter { it.isFinite() }.maxOrNull() ?: return sheet
+        // Rounded up, not truncated: a content edge at 100.1 truncates to 100, which puts the last
+        // fraction of a pixel back outside the canvas — the very thing this function exists to
+        // prevent, in miniature.
+        return maxOf(sheet, ceil(furthest + CONTENT_SLACK).toInt())
+    }
 }

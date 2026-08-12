@@ -420,6 +420,59 @@ class MigrationTest {
     }
 
     /**
+     * 43 -> 44 adds `folder.deletedAt` and `notebook.deletedAt`: the Trash.
+     *
+     * Nullable, so Room adds the columns itself and every row that existed before the upgrade
+     * reads as "not in the Trash" — which is the only safe default, since the alternative would
+     * hide someone's whole library behind a screen they have never seen.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate43To44_addsTheTrashColumnsAndLeavesEverythingVisible() {
+        val dbName = "migration-test-44"
+
+        val oldDb = helper.createDatabase(dbName, 43)
+        oldDb.execSQL(
+            """
+            INSERT INTO folder (id, title, parentFolderId, createdAt, updatedAt)
+            VALUES ('folder1', 'Research', NULL, 1000, 1000)
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                linkedExternalUri, createdAt, updatedAt)
+            VALUES ('notebook1', 'Field Notes', NULL, '[]', NULL, 'blank', 'native', NULL, NULL,
+                NULL, 1000, 1000)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        migratedDb.query("SELECT deletedAt FROM folder WHERE id = 'folder1'").use {
+            assertTrue(it.moveToFirst())
+            assertTrue(
+                "a folder that existed before the Trash did is not in it",
+                it.isNull(it.getColumnIndexOrThrow("deletedAt")),
+            )
+        }
+        migratedDb.query("SELECT deletedAt FROM notebook WHERE id = 'notebook1'").use {
+            assertTrue(it.moveToFirst())
+            assertTrue(
+                "a notebook that existed before the Trash did is not in it",
+                it.isNull(it.getColumnIndexOrThrow("deletedAt")),
+            )
+        }
+
+        roomDb.close()
+    }
+
+    /**
      * 42 -> 43 adds `couch_deletion.pending`, which splits "this notebook is deleted" from "the
      * server has still to be told". A deletion recorded before the upgrade is one this device made
      * and may not have pushed yet, so every existing row has to come through as pending — if the

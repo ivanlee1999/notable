@@ -55,6 +55,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import com.ethran.notable.testing.trashRepositoryFor
 
 /**
  * Thread-safety tests for SelectionState.
@@ -183,6 +184,7 @@ class EditorSelectionThreadSafetyTests {
             deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
             couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
             couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+            trashRepository = trashRepositoryFor(db),
             kvProxy = kvProxy,
             db = db,
         )

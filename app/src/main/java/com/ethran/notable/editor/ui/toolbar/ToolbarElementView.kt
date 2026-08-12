@@ -48,6 +48,11 @@ import com.ethran.notable.editor.ui.toolbar.model.ShapeElement
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElement
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.ui.noRippleClickable
+import com.ethran.notable.editor.state.Shape
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.ArrowUpRight
+import compose.icons.feathericons.Circle
+import compose.icons.feathericons.Square
 
 /**
  * The single generic renderer for toolbar elements: draws the button (via [ToolbarButton]),
@@ -69,23 +74,7 @@ fun ToolbarElementView(
 
         is PenElement -> PenElementView(element, uiState, onAction)
 
-        is ShapeElement ->
-            // One shape (LINE) for now: the picker submenu is stubbed to a plain toggle,
-            // matching the old LineToolbarButton (click again deselects back to Draw).
-            ToolbarButton(
-                isSelected = element.isSelected(uiState),
-                onSelect = {
-                    onAction(
-                        ToolbarAction.ChangeMode(
-                            if (element.isSelected(uiState)) Mode.Draw else Mode.Line
-                        )
-                    )
-                },
-                penColor = Color.LightGray,
-                iconId = (element.icon as? IconRef.Drawable)?.resId,
-                vectorIcon = (element.icon as? IconRef.Vector)?.imageVector,
-                contentDescription = element.contentDescription,
-            )
+        is ShapeElement -> ShapeElementView(element, uiState, onAction)
 
         is ModeElement -> ModeElementView(element, uiState, onAction)
 
@@ -179,6 +168,95 @@ private fun PenElementView(
             )
         }
     }
+}
+
+/**
+ * The shape button, and the picker behind it.
+ *
+ * Tapping toggles the tool the way it always did — pick it, tap again to go back to drawing —
+ * and tapping it while it is already selected opens the picker instead, exactly as the eraser
+ * button does. That is the whole reason the button shows the *current* shape rather than a
+ * generic one: with four shapes behind it, a fixed icon would leave no way to tell what the next
+ * drag is going to draw.
+ */
+@Composable
+private fun ShapeElementView(
+    element: ShapeElement,
+    uiState: ToolbarUiState,
+    onAction: (ToolbarAction) -> Unit,
+) {
+    val isSelected = element.isSelected(uiState)
+    var isPickerOpen by remember { mutableStateOf(false) }
+
+    Box {
+        ToolbarButton(
+            isSelected = isSelected,
+            onSelect = {
+                if (isSelected) isPickerOpen = !isPickerOpen
+                else onAction(ToolbarAction.ChangeMode(Mode.Line))
+            },
+            penColor = Color.LightGray,
+            iconId = shapeIcon(uiState.shape).let { (it as? IconRef.Drawable)?.resId },
+            vectorIcon = shapeIcon(uiState.shape).let { (it as? IconRef.Vector)?.imageVector },
+            contentDescription = uiState.shape.label,
+        )
+
+        if (isPickerOpen) {
+            ShapeSubmenu(
+                shapes = element.shapes,
+                selected = uiState.shape,
+                onPick = {
+                    isPickerOpen = false
+                    onAction(ToolbarAction.ChangeShape(it))
+                },
+                onDismiss = { isPickerOpen = false },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShapeSubmenu(
+    shapes: List<Shape>,
+    selected: Shape,
+    onPick: (Shape) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val placement = toolbarPopupPlacement()
+
+    Popup(
+        offset = placement.offset,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+        alignment = placement.alignment
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(placement.padding) // keeps the menu on screen against the docked edge
+                .background(Color.White)
+                .border(1.dp, Color.Black)
+                .height(IntrinsicSize.Max)
+        ) {
+            shapes.forEach { shape ->
+                val icon = shapeIcon(shape)
+                ToolbarButton(
+                    iconId = (icon as? IconRef.Drawable)?.resId,
+                    vectorIcon = (icon as? IconRef.Vector)?.imageVector,
+                    isSelected = shape == selected,
+                    onSelect = { onPick(shape) },
+                    contentDescription = shape.label,
+                    modifier = Modifier.height(BUTTON_SIZE.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun shapeIcon(shape: Shape): IconRef = when (shape) {
+    Shape.LINE -> IconRef.Drawable(R.drawable.line)
+    Shape.RECT -> IconRef.Vector(FeatherIcons.Square)
+    Shape.ELLIPSE -> IconRef.Vector(FeatherIcons.Circle)
+    Shape.ARROW -> IconRef.Vector(FeatherIcons.ArrowUpRight)
 }
 
 @Composable

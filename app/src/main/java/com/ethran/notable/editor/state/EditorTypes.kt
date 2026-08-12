@@ -8,11 +8,19 @@ enum class Mode {
 }
 
 /**
- * Shapes the SHAPE tool can draw. Only LINE exists today (backed by [Mode.Line]);
- * RECT/ELLIPSE/ARROW are future entries — the shape-picker submenu grows automatically.
+ * Shapes the SHAPE tool can draw, all backed by [Mode.Line] — the mode is "drawing a shape", and
+ * which shape is a separate choice.
+ *
+ * Each comes out as one ordinary stroke of interpolated points (see
+ * [com.ethran.notable.editor.utils.ShapeGeometry]), which is why nothing downstream needs to know
+ * a shape tool was involved: a rectangle drawn here is ink on the BOOX and ink on the iPad, and it
+ * erases, moves, exports and syncs like any other.
  */
-enum class Shape {
-    LINE
+enum class Shape(val label: String) {
+    LINE("Line"),
+    RECT("Rectangle"),
+    ELLIPSE("Ellipse"),
+    ARROW("Arrow"),
 }
 
 /**

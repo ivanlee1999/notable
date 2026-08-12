@@ -71,6 +71,7 @@ internal fun createEditorViewModelForTest(context: Context, db: AppDatabase): Ed
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+        trashRepository = trashRepositoryFor(db),
         kvProxy = kvProxy,
         db = db,
     )

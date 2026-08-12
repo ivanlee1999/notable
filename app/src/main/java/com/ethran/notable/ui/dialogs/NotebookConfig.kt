@@ -55,7 +55,6 @@ import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.getLinkedFilesDir
 import com.ethran.notable.sync.SyncScheduler
-import com.ethran.notable.sync.SyncRequest
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.messageRes
@@ -147,40 +146,26 @@ fun NotebookConfigDialog(
     // Confirmation Dialog for Deletion
     if (showDeleteDialog) {
         ShowSimpleConfirmationDialog(
-            title = "Confirm Deletion",
-            message = "Are you sure you want to delete \"${book!!.title}\"?",
+            title = "Move to Trash?",
+            message = "\"${book!!.title}\" (${book!!.pageIds.size} page" +
+                "${if (book!!.pageIds.size == 1) "" else "s"}) stays recoverable from the " +
+                "Trash in your library until you empty it.",
             onConfirm = {
+                // Nothing is tombstoned or uploaded here. Deletion is now two steps — stage
+                // locally, publish on purge — so that a notebook can come back. The transaction
+                // main wrote for this, `AppRepository.deleteNotebookLocally`, is what the purge
+                // calls when the Trash is emptied; peers keep their copy until then, which is what
+                // makes the restore mean anything.
                 scope.launch {
-                    // The row and its tombstone in one transaction. An absent notebook is also what
-                    // a device that never saw it looks like, so the tombstone is what makes the
-                    // deletion travel — and it survives a restart, which is what makes deleting
-                    // while offline reach the server days later.
-                    //
-                    // Recorded *with* the delete rather than before it: `RoomCouchStore.load`
-                    // consults the tombstone table ahead of the live rows, so a tombstone written
-                    // beside a delete that then failed would have this device tell the server to
-                    // remove a notebook it is still showing the user.
-                    appRepository.deleteNotebookLocally(bookId)
-                    // Only for promptness now — the intent is already durable above.
-                    couchSync.noteDeleted(CouchDocId.notebook(bookId))
+                    appRepository.trashRepository.trashNotebook(bookId)
                 }
                 showDeleteDialog = false
                 onClose()
-
-                // Queue remote deletion in background so it is independent from this view lifecycle.
-                scope.launch {
-                    snackManager.runWithSnack("Deleting notebook...", 3000) {
-                        syncScheduler.triggerImmediateSync(
-                            SyncRequest.UploadDeletion(notebookId = bookId)
-                        )
-                        log.i("Queued notebook deletion upload for $bookId")
-                        "Notebook deleted. Sync queued."
-                    }
-                }
             },
             onCancel = {
                 showDeleteDialog = false
-            })
+            },
+            confirmButtonText = "Move to Trash")
         return
     }
     // Confirmation Dialog for Deletion
@@ -382,10 +367,18 @@ fun NotebookConfigDialog(
                     showExportDialog = true
                 }
                 ActionButton(stringResource(R.string.details_notebook_buttons_copy)) {
+                    onClose()
                     scope.launch {
-                        snackManager.displaySnack(
-                            SnackConf(text = "Not implemented!", duration = 2000)
-                        )
+                        snackManager.runWithSnack("Copying notebook…", 3000) {
+                            val copyId = appRepository.duplicateNotebook(bookId)
+                            if (copyId == null) "Could not copy this notebook"
+                            else {
+                                // Queued explicitly: the outbox is fed by ink edits, and a copy
+                                // nobody has drawn in yet is not one of those.
+                                couchSync.noteDocumentChanged(CouchDocId.notebook(copyId))
+                                "Notebook copied"
+                            }
+                        }
                     }
                 }
                 // Sync this one notebook on demand. Until now the only ways to get a notebook to

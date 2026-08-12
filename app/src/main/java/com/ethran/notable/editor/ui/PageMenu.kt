@@ -27,6 +27,7 @@ import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.deletePage
 import com.ethran.notable.ui.dialogs.NamePromptDialog
+import com.ethran.notable.ui.dialogs.ShowSimpleConfirmationDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
 import kotlinx.coroutines.launch
@@ -48,6 +49,29 @@ fun PageMenu(
     // The existing name is fetched before the prompt opens, not alongside it: the dialog captures
     // its initial value on first composition, so a title arriving a frame later would be missed.
     var renameInitialValue by remember { mutableStateOf<String?>(null) }
+    var isConfirmingDelete by remember { mutableStateOf(false) }
+
+    // The same confirmation the page overview asks for. Deleting a page was safe in one surface
+    // and a one-tap permanent delete in the other, which makes the safety a property of where you
+    // happened to be standing rather than of the action.
+    if (isConfirmingDelete) {
+        ShowSimpleConfirmationDialog(
+            title = "Delete this page?",
+            message = "The page and everything on it are deleted here and on every device you "
+                + "sync with. It cannot be undone.",
+            onConfirm = {
+                // Closed from inside the coroutine for the same reason the rename is: `onClose`
+                // unmounts this composable and `scope` dies with it.
+                scope.launch {
+                    deletePage(appRepository, pageId, context.filesDir, couchSync)
+                    onClose()
+                }
+            },
+            onCancel = { onClose() },
+            confirmButtonText = "Delete"
+        )
+        return
+    }
 
     if (renameInitialValue != null) {
         NamePromptDialog(
@@ -148,11 +172,7 @@ fun PageMenu(
                 Box(
                     Modifier
                         .padding(10.dp)
-                        .noRippleClickable {
-                            scope.launch {
-                                deletePage(appRepository, pageId, context.filesDir, couchSync)
-                            }
-                        }) {
+                        .noRippleClickable { isConfirmingDelete = true }) {
                     Text("Delete")
                 }
             }

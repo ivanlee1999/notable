@@ -1,6 +1,7 @@
 package com.ethran.notable.editor.state
 
 import android.graphics.Rect
+import com.ethran.notable.data.PageMemoryModel
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.events.AppEvent
@@ -50,6 +51,16 @@ class History @AssistedInject constructor(
 ) {
     private var undoList: OperationList = mutableListOf()
     private var redoList: OperationList = mutableListOf()
+
+    /**
+     * Running total of [undoList]'s estimated bytes.
+     *
+     * Kept rather than recomputed: history is committed once per stroke, and re-summing every
+     * block would walk every point of every block on the drawing path — O(blocks × points) per
+     * stroke, which is exactly the work an e-ink device cannot spare. Each block is measured once,
+     * when it arrives.
+     */
+    private var undoBytes: Long = 0
     private val pageModel = pageView
 
     suspend fun handleHistoryBusActions(actions: HistoryBusActions) {
@@ -94,6 +105,7 @@ class History @AssistedInject constructor(
     fun cleanHistory() {
         undoList.clear()
         redoList.clear()
+        undoBytes = 0
     }
 
     private fun treatOperation(operation: Operation): Pair<Operation, Rect> {
@@ -150,6 +162,7 @@ class History @AssistedInject constructor(
         if (originList.isEmpty()) return null
 
         val operationBlock = originList.removeAt(originList.lastIndex)
+        if (type == UndoRedoType.Undo) undoBytes -= estimateBytes(operationBlock)
         val revertOperations = mutableListOf<Operation>()
         val zoneAffected = Rect()
         for (operation in operationBlock) {
@@ -157,7 +170,14 @@ class History @AssistedInject constructor(
             revertOperations.add(cancelOperation)
             zoneAffected.union(thisZoneAffected)
         }
-        targetList.add(revertOperations.reversed())
+        val reverted = revertOperations.reversed()
+        targetList.add(reverted)
+        // A redo puts a block back on the undo stack, so it is charged again — and it is a
+        // *different* block (the inverse), so it is measured rather than remembered.
+        if (type == UndoRedoType.Redo) {
+            undoBytes += estimateBytes(reverted)
+            trimUndoList()
+        }
 
         // update the affected zone
         return zoneAffected
@@ -169,12 +189,74 @@ class History @AssistedInject constructor(
             return
         }
         undoList.add(operations)
-        if (undoList.size > 5) undoList.removeAt(0)
+        undoBytes += estimateBytes(operations)
+        trimUndoList()
         redoList.clear()
     }
+
+    /**
+     * Drops the oldest history until it fits the budget.
+     *
+     * The cap used to be five operation blocks, full stop. Five is not a handwriting session: a
+     * lasso move, a resize and a colour change spend three of them without a word being written,
+     * and erasing spends one per gesture — so "undo my last few minutes" was routinely impossible,
+     * and a mistaken clear could not be taken back at all once anything followed it.
+     *
+     * Bounded by bytes rather than by count, because what a block costs varies by four orders of
+     * magnitude: a block holding one short stroke is a few kilobytes, and one holding a
+     * select-all move of a dense page is tens of megabytes. A count cannot be set to a number that
+     * is both deep enough for the first and safe for the second. [MAX_BLOCKS] is only a backstop
+     * against pathological churn of blocks too small for the byte budget to notice.
+     */
+    private fun trimUndoList() {
+        while (undoList.size > MAX_BLOCKS) undoBytes -= estimateBytes(undoList.removeAt(0))
+
+        // Never below one block: the most recent operation stays undoable whatever it cost, since
+        // a history that drops the thing you just did is worse than no history at all.
+        while (undoList.size > 1 && undoBytes > MAX_BYTES) {
+            undoBytes -= estimateBytes(undoList.removeAt(0))
+        }
+    }
+
+    /**
+     * What a block holds, by the same counting constants the page cache is budgeted with — an
+     * over-estimate on purpose, so history errs toward forgetting rather than toward an OOM.
+     *
+     * Delete operations carry ids, not content, so they are charged the per-object cost alone.
+     */
+    private fun estimateBytes(block: OperationBlock): Long = block.sumOf { operation ->
+        when (operation) {
+            is Operation.AddStroke -> strokeBytes(operation.strokes)
+            is Operation.UpdateStroke -> strokeBytes(operation.strokes)
+            is Operation.DeleteStroke ->
+                operation.strokeIds.size * PageMemoryModel.BYTES_PER_STROKE
+            is Operation.AddImage -> operation.images.size * PageMemoryModel.BYTES_PER_IMAGE
+            is Operation.UpdateImage -> operation.images.size * PageMemoryModel.BYTES_PER_IMAGE
+            is Operation.DeleteImage -> operation.imageIds.size * PageMemoryModel.BYTES_PER_IMAGE
+        }
+    }
+
+    private fun strokeBytes(strokes: List<Stroke>): Long = PageMemoryModel.entryBytes(
+        strokeCount = strokes.size,
+        totalPointCount = strokes.sumOf { it.points.size.toLong() },
+        imageCount = 0,
+    )
 
     @AssistedFactory
     interface Factory {
         fun create(pageView: PageView): History
+    }
+
+    private companion object {
+        /**
+         * How much of the heap the undo stack may hold. Deliberately small next to the page cache:
+         * history is a convenience and the page is the work, so under pressure this is what should
+         * be given up. Large enough all the same that an ordinary session of writing and erasing
+         * never reaches it.
+         */
+        const val MAX_BYTES = 24L * 1024 * 1024
+
+        /** Backstop for blocks too small for [MAX_BYTES] to notice — a long run of tiny edits. */
+        const val MAX_BLOCKS = 500
     }
 }

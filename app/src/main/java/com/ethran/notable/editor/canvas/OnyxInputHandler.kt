@@ -29,7 +29,7 @@ import com.ethran.notable.editor.utils.handleSelect
 import com.ethran.notable.editor.utils.onSurfaceInit
 import com.ethran.notable.editor.utils.penToStroke
 import com.ethran.notable.editor.utils.setupSurface
-import com.ethran.notable.editor.utils.transformToLine
+import com.ethran.notable.editor.utils.ShapeGeometry
 import com.ethran.notable.ui.convertDpToPixel
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.device.Device
@@ -272,7 +272,8 @@ class OnyxInputHandler(
                             page.scroll,
                             page.zoomLevel.value
                         )
-                        val linePoints = transformToLine(startPoint, endPoint)
+                        val linePoints =
+                            ShapeGeometry.points(toolbarState.shape, startPoint, endPoint)
 
                         handleDraw(
                             drawCanvas.page,
@@ -284,11 +285,16 @@ class OnyxInputHandler(
                         )
 
                         coroutineScope.launch(Dispatchers.Default) {
+                            // Measured from the drawn points, not from the two endpoints: an
+                            // arrow's barbs and an ellipse's waist reach outside the drag's
+                            // rectangle, and refreshing only that rectangle would leave parts of
+                            // the shape unpainted until something else redrew them.
+                            val padding = 10
                             val dirtyRect = Rect(
-                                min(startPoint.x, endPoint.x).toInt(),
-                                min(startPoint.y, endPoint.y).toInt(),
-                                max(startPoint.x, endPoint.x).toInt(),
-                                max(startPoint.y, endPoint.y).toInt()
+                                linePoints.minOf { it.x }.toInt() - padding,
+                                linePoints.minOf { it.y }.toInt() - padding,
+                                linePoints.maxOf { it.x }.toInt() + padding,
+                                linePoints.maxOf { it.y }.toInt() + padding
                             )
                             drawCanvas.refreshManager.refreshUi(dirtyRect)
                             CanvasEventBus.commitHistorySignal.emit(Unit)

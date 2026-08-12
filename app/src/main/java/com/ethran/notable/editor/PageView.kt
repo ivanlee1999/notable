@@ -51,7 +51,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -90,6 +94,24 @@ class PageView(
     private val logCache = ShipBook.getLogger("PageViewCache")
 
     private var loadingJob: Job? = null
+
+    /**
+     * Serializes page switching. Every step of a switch reads and writes state the page owns
+     * ([currentPageId], [windowedBitmap], [windowedCanvas]), and each switch used to run in its own
+     * coroutine over that state with nothing ordering them — so twenty fast taps on Next, or a drag
+     * of the page scrubber, could let an older switch finish after a newer one.
+     */
+    private val pageSwitchMutex = Mutex()
+
+    /**
+     * Which page switch is the current one, claimed at tap time.
+     *
+     * The mutex alone only makes the switches take turns; it cannot say that four of the five
+     * queued behind it are already pointless. Comparing generations answers the question that
+     * matters — "has the user asked for a different page since?" — and lets a superseded switch
+     * cost nothing.
+     */
+    private val pageSwitchGeneration = AtomicLong(0)
 
     @Volatile
     var windowedBitmap = createBitmap(viewWidth, viewHeight)
@@ -267,36 +289,64 @@ class PageView(
      * @param newPageId The unique identifier of the page to switch to.
      */
     fun changePage(newPageId: String) {
-        val oldId = currentPageId
-        log.d("changePage Entry: $oldId -> $newPageId")
+        // Claimed before the coroutine starts, so "which page was asked for last" is settled at
+        // tap time. A switch that a later tap has already overtaken then costs nothing at all
+        // rather than racing the one that replaced it.
+        val generation = pageSwitchGeneration.incrementAndGet()
+        log.d("changePage Entry: -> $newPageId (request $generation)")
 
         coroutineScope.launch(Dispatchers.IO) {
-            pageDataManager.onExit(oldId, windowedBitmap)
-            pageDataManager.setPage(newPageId)
-            zoomLevel.value = initialZoom()
-            clampScrollToBounds()
-            pageDataManager.getCachedBitmap(newPageId)?.let { cached ->
-                log.i("PageView: using cached bitmap")
-                windowedBitmap = cached
-                windowedCanvas = Canvas(windowedBitmap)
-                // Check if we have correct size of canvas
-                if (windowedCanvas.width != viewWidth || windowedCanvas.height != viewHeight)
-                    updateCanvasDimensions()
-            } ?: run {
-                log.i("PageView.changePage: creating new bitmap")
-                recreateCanvas()
-                pageDataManager.cacheBitmap(newPageId, windowedBitmap)
+            // Serialized, not merely cancellable. Every step below reads and writes state the page
+            // owns — currentPageId, windowedBitmap, windowedCanvas — and two switches interleaving
+            // over it could finish in the wrong order: the toolbar would name page C while the
+            // bitmap and the loaded strokes belonged to page B, which is a blank or stale canvas
+            // that the next stroke is then written onto.
+            pageSwitchMutex.withLock {
+                if (generation != pageSwitchGeneration.get()) {
+                    log.d("changePage $newPageId superseded before it ran")
+                    return@withLock
+                }
+                // Read here rather than at the call site: a superseded request returns above
+                // without touching anything, so the page actually being left is whichever one the
+                // last completed switch arrived at — not whatever was current when this was tapped.
+                val oldId = currentPageId
+
+                // The previous page's loader owns the same page state; let it finish unwinding
+                // before that state is replaced.
+                loadingJob?.cancelAndJoin()
+
+                pageDataManager.onExit(oldId, windowedBitmap)
+                pageDataManager.setPage(newPageId)
+                zoomLevel.value = initialZoom()
+                clampScrollToBounds()
+                pageDataManager.getCachedBitmap(newPageId)?.let { cached ->
+                    log.i("PageView: using cached bitmap")
+                    windowedBitmap = cached
+                    windowedCanvas = Canvas(windowedBitmap)
+                    // Check if we have correct size of canvas
+                    if (windowedCanvas.width != viewWidth || windowedCanvas.height != viewHeight)
+                        updateCanvasDimensions()
+                } ?: run {
+                    log.i("PageView.changePage: creating new bitmap")
+                    recreateCanvas()
+                    pageDataManager.cacheBitmap(newPageId, windowedBitmap)
+                }
+
+                log.d("New bitmap hash: ${windowedBitmap.hashCode()}, ID: $currentPageId")
+
+                // Deliberately no second generation check here. A tap that lands mid-switch costs
+                // one redraw of a page the user has already left — but bailing out at this point
+                // would leave the page half-entered: current, with a bitmap, and with no strokes
+                // ever loaded into it. One wasted refresh is the cheaper of the two.
+
+                // Refresh UI without waiting for drawing.
+                // TODO: Problem: Sometimes refreshUi had a problem with proper refreshing screen,
+                //  using function that does not wait for drawing mostly solved the problem.
+                //  but there might be still bugs with it.
+                CanvasEventBus.refreshUiImmediately.emit(Unit)
+                loadPage()
+                log.d("Page loaded (updatePageID($currentPageId))")
             }
-
-            log.d("New bitmap hash: ${windowedBitmap.hashCode()}, ID: $currentPageId")
-
-            // Refresh UI without waiting for drawing.
-            // TODO: Problem: Sometimes refreshUi had a problem with proper refreshing screen,
-            //  using function that does not wait for drawing mostly solved the problem.
-            //  but there might be still bugs with it.
-            CanvasEventBus.refreshUiImmediately.emit(Unit)
-            loadPage()
-            log.d("Page loaded (updatePageID($currentPageId))")
         }
     }
 
@@ -324,8 +374,15 @@ class PageView(
         }
     }
 
+    /**
+     * Starts loading the current page's content.
+     *
+     * Does not cancel a previous load itself: the only way to get a second one is to switch pages,
+     * and [changePage] already cancels *and joins* the outgoing loader before it replaces any of
+     * the state the loader is reading. Cancelling here without joining — which is what used to be
+     * written here, commented out — would let the old loader keep running against the new page.
+     */
     private fun loadPage() {
-//        loadingJob?.cancel()
         logCache.i("Init from persist layer, pageId: $currentPageId")
         windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
         loadingJob = coroutineScope.launch(Dispatchers.IO) {
@@ -444,23 +501,21 @@ class PageView(
     private fun saveImagesToPersistLayer(image: List<Image>) = pageDataManager.saveImagesToDb(image)
 
 
-    fun addImage(imageToAdd: Image) {
-        images += listOf(imageToAdd)
-        val bottomPlusPadding = imageToAdd.x + imageToAdd.height + 50
-        if (bottomPlusPadding > height) height = bottomPlusPadding
+    fun addImage(imageToAdd: Image) = addImage(listOf(imageToAdd))
 
-        saveImagesToPersistLayer(listOf(imageToAdd))
-
-//        persistBitmapDebounced()
-    }
-
+    /**
+     * The canvas has to reach the image, so the extent is recomputed rather than nudged.
+     *
+     * It used to be nudged, and with the wrong coordinate: `image.x + image.height`. On a page
+     * where the image sat further down than across — the ordinary case for anything pasted below
+     * what is already written — that computed a bottom edge above the image's own, so the canvas
+     * stopped short of it and there was no scroll position that brought it into view. Nothing grew
+     * horizontally at all, so an image past the right edge was unreachable outright.
+     */
     fun addImage(imageToAdd: List<Image>) {
         images += imageToAdd
-        imageToAdd.forEach {
-            val bottomPlusPadding = it.x + it.height + 50
-            if (bottomPlusPadding > height) height = bottomPlusPadding
-        }
         saveImagesToPersistLayer(imageToAdd)
+        pageDataManager.recomputeHeight(currentPageId)
 
 //        persistBitmapDebounced()
     }
@@ -477,11 +532,11 @@ class PageView(
     fun updateImages(imagesToUpdate: List<Image>) {
         val imageUpdateById = imagesToUpdate.associateBy { it.id }
         images = images.map { image -> imageUpdateById[image.id] ?: image }
-        imagesToUpdate.forEach {
-            val bottomPlusPadding = it.x + it.height + 50
-            if (bottomPlusPadding > height) height = bottomPlusPadding
-        }
+        // Recomputed, not nudged, and for the same reason as in [addImage]: a move is exactly the
+        // action that puts an image below the sheet or past its right edge, and the nudge here
+        // added `x` to `height` — so dragging an image down left the canvas unable to reach it.
         pageDataManager.updateImagesInDb(imagesToUpdate)
+        pageDataManager.recomputeHeight(currentPageId)
     }
 
     fun getImages(imageIds: List<String>): List<Image?> =
