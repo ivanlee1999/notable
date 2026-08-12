@@ -19,7 +19,24 @@ object CanvasEventBus {
         replay = 1, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val reinitSignal = MutableSharedFlow<Unit>()
-    val reloadFromDb = MutableSharedFlow<Unit>()
+
+    /**
+     * Pages whose rows were rewritten underneath the app — a sync pull applied them, or the user
+     * asked for a refresh. An empty set means nothing needs re-reading.
+     *
+     * [com.ethran.notable.data.PageDataManager] is the collector, not the canvas: a page cached
+     * in memory is stale whether or not an editor is open on it, and the editor is exactly where
+     * this signal is *not* delivered when the user is somewhere else in the app. It drops the
+     * cached copies and redraws through [forceUpdate] if one of them is the open page.
+     *
+     * Buffered deeply, and emitted into with `emit` rather than `tryEmit`: a dropped notification
+     * is precisely the bug this exists to fix, since the page it named is then the one nobody
+     * re-reads. A catch-up pull can apply hundreds of pages faster than the collector reads them,
+     * so producers have to be willing to wait for a slot rather than give theirs up. (With no
+     * collector at all — before the page cache is built — emission neither waits nor queues, which
+     * is right: nothing is holding a stale page yet.)
+     */
+    val pagesChangedInDb = MutableSharedFlow<Set<String>>(extraBufferCapacity = 256)
 
 
     val isDrawing = MutableSharedFlow<Boolean>()

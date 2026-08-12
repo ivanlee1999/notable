@@ -205,8 +205,15 @@ class CouchSyncHost @Inject constructor(
             appRepository = appRepository,
             kvDao = kvDao,
             deviceId = deviceId,
-            // The engine applies changes off the UI thread; the canvas has to be told to reload.
-            onApplied = { scope.launch { CanvasEventBus.reloadFromDb.emit(Unit) } },
+            // The engine applies changes off the UI thread, straight into Room. Whatever holds
+            // these pages in memory — the open canvas, the page cache behind it — is still showing
+            // what they held before the pull until it is told which ones moved.
+            // Launched rather than offered: the store applies documents from a blocking loop that
+            // cannot suspend, and `tryEmit` would abandon the notification whenever a bulk pull
+            // outran the collector — leaving exactly the stale page this reports.
+            onPagesApplied = { pageIds ->
+                scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
+            },
         )
         val initial = loadState(stateKey)
         val engine = CouchSyncEngine(

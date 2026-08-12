@@ -224,6 +224,7 @@ class PageDataManager @Inject constructor(
 
     init {
         collectBackgroundFileChanges()
+        collectExternalPageChanges()
     }
 
     /* ---------------- entry helpers (must hold [lock]) ---------------- */
@@ -887,7 +888,7 @@ class PageDataManager @Inject constructor(
         synchronized(lock) { entries[pageId]?.let { touchLocked(it) } }
     }
 
-    suspend fun refreshPageFromDb(pageId: String) {
+    private suspend fun refreshPageFromDb(pageId: String) {
         pageFromDb = appRepository.pageRepository.getById(pageId)
         log.i("Refresh current page, background: ${pageFromDb?.background}")
     }
@@ -1304,6 +1305,113 @@ class PageDataManager @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Re-reads pages whose rows were rewritten underneath the app — a sync pull applied them, or
+     * the user asked for a refresh.
+     *
+     * This cache is the editor's only source of strokes ([getStrokes] never reaches Room), and a
+     * page that has finished loading is never read again: [getOrStartLoadingJob] hands back the
+     * completed load job. So a page a pull rewrote goes on showing what it held beforehand for as
+     * long as it stays resident — while the Library thumbnail, rendered straight from Room, shows
+     * the new ink. That gap is what this collector closes.
+     *
+     * It lives here rather than in the canvas because the canvas only exists while an editor is
+     * open, and the pull that matters most is the one that lands while the user is in the Library.
+     */
+    private fun collectExternalPageChanges() {
+        dataLoadingScope.launch {
+            CanvasEventBus.pagesChangedInDb.collect { pageIds ->
+                if (pageIds.isEmpty()) return@collect
+                log.i("Page(s) rewritten in db, re-reading: $pageIds")
+                for (pageId in pageIds) {
+                    try {
+                        if (pageId == currentPage) reloadCurrentPage(pageId)
+                        else dropCachedPage(pageId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // One unreadable page must not end the collector: it would run for the rest
+                        // of the process without one, and every later pull would go unnoticed.
+                        log.e("Could not re-read page $pageId after a change: ${e.message}", e)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Forgets a page nobody is drawing, so its next open reads Room. Cheaper than reloading it
+     * here, and safer: [loadPageFromDb] joins its result with whatever the entry already holds, so
+     * an entry left in place would have to be merged rather than filled.
+     */
+    private fun dropCachedPage(pageId: String) {
+        synchronized(lock) {
+            val entry = entries[pageId]
+            if (entry != null) {
+                entry.loadJob?.cancel()
+                removePageLocked(pageId)
+            }
+        }
+    }
+
+    /**
+     * Replaces the open page's cached strokes and images with Room's copy, and repaints.
+     *
+     * Room wins outright — it is the only account of the page that both the sync engines and the
+     * editor write to. The single exception is ink that turns up *while the read is in flight*,
+     * which is ink drawn just now whose write is still queued on [dataScope]: dropping it would
+     * rub a stroke off the screen the moment the user finished it.
+     *
+     * Deliberately not "keep everything Room no longer has, minus the tombstones". A page arrives
+     * here two ways, and only one of them tombstones what it removes: the couch merge does, and a
+     * WebDAV download replaces the page wholesale without one. Under that rule its download would
+     * put every replaced stroke straight back on screen, where Room has no copy of it.
+     */
+    private suspend fun reloadCurrentPage(pageId: String) {
+        // Taken before any read, so the window it defines is every read this function does. Taken
+        // after one, the ink drawn during that first read would already be here — counted as "was
+        // here before" and dropped, for want of a database write that had not landed yet.
+        val (strokesBefore, imagesBefore) = synchronized(lock) {
+            val entry = entries[pageId]
+            // A page that has not finished loading needs no correction, and must not be given one:
+            // the load in flight reads Room itself, and appends what it finds to whatever is here.
+            if (entry?.loaded != true) return
+            entry.strokes.orEmpty().mapTo(HashSet()) { it.id } to
+                entry.images.orEmpty().mapTo(HashSet()) { it.id }
+        }
+
+        refreshPageFromDb(pageId)
+        val fresh = appRepository.pageRepository.getWithDataById(pageId) ?: return
+
+        synchronized(lock) {
+            val entry = entries[pageId] ?: return@synchronized
+            entry.strokes = withInkDrawnSince(strokesBefore, entry.strokes, fresh.strokes) { it.id }
+            entry.images = withInkDrawnSince(imagesBefore, entry.images, fresh.images) { it.id }
+            recomputeEntrySizeLocked(entry)
+            touchLocked(entry)
+        }
+        recomputeHeight(pageId)
+        CanvasEventBus.forceUpdate.emit(null)
+    }
+
+    /**
+     * Room's [fresh] rows, plus the [cached] ones that were not yet here when [before] was taken.
+     *
+     * A row in [before] that Room no longer has was removed by whatever rewrote the page. One that
+     * is in neither was drawn since, and its write is still on its way to Room.
+     */
+    private fun <T> withInkDrawnSince(
+        before: Set<String>,
+        cached: List<T>?,
+        fresh: List<T>,
+        id: (T) -> String,
+    ): MutableList<T> {
+        val arrived = fresh.mapTo(HashSet()) { id(it) }
+        val justDrawn = cached.orEmpty().filter { id(it) !in arrived && id(it) !in before }
+        // Room's copy first: what is still unwritten is the newest ink, and later means on top.
+        return ArrayList<T>(fresh.size + justDrawn.size).apply { addAll(fresh); addAll(justDrawn) }
     }
 
     private fun invalidateBackground(pageId: String) {
