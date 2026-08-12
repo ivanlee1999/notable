@@ -1,29 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Cleartext HTTP is blocked by default from API 28 on, which is right for anything reaching the
-  public internet: sync sends its password as HTTP Basic auth, so plaintext to a host we cannot
-  vouch for hands over the credentials.
+  Cleartext HTTP is blocked by default from API 28 on, and stays blocked here for every real
+  server: sync authenticates with HTTP Basic, so plaintext to a host we cannot vouch for hands
+  over the password.
 
-  A self-hosted CouchDB on the LAN is the case the default gets wrong. There is no way to say
-  "private address ranges" here — `domain` matches a hostname or an IP literal exactly, and there
-  is no CIDR syntax — so each self-hosted server has to be named. Adding one is the price of
-  keeping the default deny for every other host; the alternative, a blanket
-  `cleartextTrafficPermitted="true"` on base-config, would also permit plaintext to any server on
-  the internet.
+  A self-hosted CouchDB on the LAN is the case that tempts an exception, and it cannot have one.
+  A `domain` matches a hostname or an IP literal exactly — there is no CIDR syntax — so permitting
+  "the local network" is not expressible, and permitting one address only helps whoever happens to
+  use it. The alternative, cleartextTrafficPermitted on base-config, would also cover every host on
+  the internet. So the answer for a LAN server is an https:// endpoint: a reverse proxy or a tunnel
+  in front of CouchDB.
 
-  Pointing sync at a LAN server not listed below fails with UnknownServiceException, which the
-  client reports as CouchError.Blocked ("Android blocked…"), not as being offline.
+  A rejected address fails with UnknownServiceException, which the client reports as
+  CouchError.Blocked — naming the scheme as the problem, rather than claiming the device is offline.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
 
+    <!-- Development only: loopback, and the host machine as seen from the emulator. Neither can
+         leave the device or the developer's own machine, so neither exposes a password to a
+         network. No `includeSubdomains` — these are exact hosts, and on an IP literal it means
+         nothing anyway. -->
     <domain-config cleartextTrafficPermitted="true">
-        <!-- Loopback, and the host machine as seen from the emulator. -->
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-
-        <!-- Self-hosted CouchDB. Add your server's address here. -->
-        <domain includeSubdomains="true">192.168.0.100</domain>
+        <domain>localhost</domain>
+        <domain>127.0.0.1</domain>
+        <domain>10.0.2.2</domain>
     </domain-config>
 </network-security-config>

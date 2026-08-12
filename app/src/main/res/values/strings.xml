@@ -144,7 +144,7 @@
     <string name="sync_off_title">Sync Off</string>
     <string name="sync_couch_title">CouchDB Synchronization</string>
     <string name="sync_couch_url_label">Server URL</string>
-    <string name="sync_couch_url_placeholder">http://192.168.1.10:5984</string>
+    <string name="sync_couch_url_placeholder">https://couchdb.example.com</string>
     <string name="sync_couch_database_label">Database</string>
     <string name="sync_couch_username_label">Username</string>
     <string name="sync_couch_password_label">Password</string>
