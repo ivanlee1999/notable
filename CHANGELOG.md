@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.8.1
+
+A point release about the pictures on notebook covers. Nothing to do with sync, and the schema
+stays at 40.
+
+### A notebook you had just made never showed what was in it
+
+- **The cover of a new notebook stayed blank however much you drew in it.** A notebook appears in
+  the Library the moment it is created, holding one empty page — and that is when its cover picture
+  was taken. Nothing was allowed to replace it afterwards, because a cover only asked for a new
+  picture when it had none at all, and it had one: of an empty page. Covers now ask every time the
+  Library is shown, and any picture older than the last edit to the page it stands for is retaken.
+- **Older notebooks had only been lucky** about when their picture happened to be taken. A cover
+  showing a page as it looked several edits ago puts itself right the next time you open the
+  Library.
+
+### The picture taken as you close a note was thrown away
+
+- **notable copies the page as you leave the editor**, to put on the cover and to show while
+  flipping pages, and that copy was discarded as the editor closed — every time, for every page.
+  Your drawing was never at risk; only the picture of it. That copy is now kept, as is a second one
+  taken while you draw, which had never been kept either.
+
+### Smaller things
+
+- Opening the Library no longer announces "Generating previews" when it has nothing to generate.
+- Keeping those pictures up to date no longer holds a processor core busy a second at a time while
+  you draw.
+
+### Upgrading
+
+No database change: the schema stays at 40. Covers correct themselves as the Library loads — there
+is nothing to do by hand.
+
 ## 0.8.0
 
 CouchDB only. If you sync over WebDAV, nothing here changes for you.
