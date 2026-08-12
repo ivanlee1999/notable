@@ -156,14 +156,7 @@ object DatabaseModule {
             AppDatabase::class.java,
             dbFile.absolutePath
         )
-            .addMigrations(
-                MIGRATION_16_17,
-                MIGRATION_17_18,
-                MIGRATION_22_23,
-                MIGRATION_32_33,
-                MIGRATION_37_38,
-                MIGRATION_41_42
-            )
+            .addMigrations(*APP_MIGRATIONS)
             .build()
     }
 
