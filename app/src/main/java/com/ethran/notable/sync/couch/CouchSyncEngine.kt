@@ -211,6 +211,26 @@ interface CouchLocalStore {
      * A store that holds no images has none to fetch, which is why this has a default.
      */
     fun missingAssetIds(): List<String> = emptyList()
+
+    /**
+     * The durable outbox: documents the app changed and the server has not accepted yet.
+     *
+     * The engine keeps the same set in memory, but the table is what survives being killed. The app
+     * writes its rows inside the same transaction as the data they describe, which is the whole
+     * point — "the notebook moved" is not something Room remembers once the write has landed, and
+     * the outbox is the only place that fact exists. The engine therefore treats the table as the
+     * source and its own set as a cache of it.
+     *
+     * A store with nowhere to persist an outbox answers nothing and keeps the in-memory behaviour,
+     * which is what the JVM engine tests and the scenario fixtures rely on.
+     */
+    fun pendingOutboxIds(): List<String> = emptyList()
+
+    /** Records that these documents have to be sent. Idempotent. */
+    fun enqueueOutbox(documentIds: List<String>) {}
+
+    /** Forgets a document the server has now accepted. */
+    fun dequeueOutbox(documentId: String) {}
 }
 
 // endregion
@@ -273,6 +293,13 @@ class CouchSyncEngine(
     private val revs: MutableMap<String, String> = LinkedHashMap(state.revs)
     private val dirty: MutableSet<String> = LinkedHashSet(state.dirty)
 
+    init {
+        // The checkpoint blob's copy of the outbox is written asynchronously (see
+        // `CouchSyncHost.stateWrites`), so it can be a moment behind at the point the process died.
+        // The table is written inside the transaction that made the change, so it cannot be.
+        adoptOutbox()
+    }
+
     val currentState: CouchSyncState
         get() = CouchSyncState(lastSeq = lastSeq, revs = revs.toMap(), dirty = dirty.toSet())
 
@@ -284,7 +311,27 @@ class CouchSyncEngine(
      */
     suspend fun markDirty(documentIds: List<String>) = mutex.withLock {
         dirty.addAll(documentIds)
+        // Written through rather than left for the next checkpoint save: this is the one moment the
+        // intent exists and has not been recorded anywhere that survives a restart.
+        runCatching { store.enqueueOutbox(documentIds) }
         persist()
+    }
+
+    /** Folds the durable outbox into the in-memory set. Callers hold [mutex], or hold nothing yet. */
+    private fun adoptOutbox() {
+        dirty += runCatching { store.pendingOutboxIds() }.getOrNull().orEmpty()
+    }
+
+    /**
+     * Drops a document the server has taken, from the in-memory set and the table together.
+     *
+     * A failure to delete the row is swallowed: the document has genuinely been sent, and the worst
+     * a stale row can do is offer it again on the next flush, where it merges to something
+     * identical and is dropped. Failing the push over it would be the worse trade.
+     */
+    private fun clearDirty(documentId: String) {
+        dirty.remove(documentId)
+        runCatching { store.dequeueOutbox(documentId) }
     }
 
     /**
@@ -312,6 +359,11 @@ class CouchSyncEngine(
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
         val failures = LinkedHashMap<String, String>()
+        // The table, not only what `markDirty` was told. A repository queues a document by writing
+        // its outbox row inside the transaction that changed the data, without going anywhere near
+        // this engine — which is precisely what stops a new mutation site from being one forgotten
+        // call away from a change that never leaves the device.
+        adoptOutbox()
         var queue = orderedDirty()
 
         // Only the deletions are held back. Blocking the whole queue meant a guard meant to
@@ -365,14 +417,14 @@ class CouchSyncEngine(
             if (local == null) {
                 // Nothing locally: the document was never created, or was cleaned up after being
                 // queued. Dropping it from the outbox is right — there is nothing to send.
-                dirty.remove(documentId)
+                clearDirty(documentId)
                 return PushOutcome.NOTHING_TO_PUSH
             }
 
             try {
                 val rev = putBody(documentId, local)
                 revs[documentId] = rev
-                dirty.remove(documentId)
+                clearDirty(documentId)
                 return if (didMerge) PushOutcome.MERGED_THEN_PUSHED else PushOutcome.PUSHED
             } catch (_: CouchError.Conflict) {
                 if (CouchDocId.split(documentId)?.first == CouchDocType.ASSET) {
@@ -385,7 +437,7 @@ class CouchSyncEngine(
                     // re-offer the whole image just to be told again that it is there.
                     runCatching { client.getRaw(documentId)?.rev }.getOrNull()
                         ?.let { revs[documentId] = it }
-                    dirty.remove(documentId)
+                    clearDirty(documentId)
                     return PushOutcome.PUSHED
                 }
                 didMerge = true
@@ -400,7 +452,7 @@ class CouchSyncEngine(
                 if (merged == null) {
                     // Shapes disagree — do not overwrite either side.
                     client.getRaw(documentId)?.let { store.applyConflictCopy(documentId, it.json) }
-                    dirty.remove(documentId)
+                    clearDirty(documentId)
                     return PushOutcome.NOTHING_TO_PUSH
                 }
                 if (merged != local) store.apply(documentId, merged, basedOn = local)
@@ -415,7 +467,7 @@ class CouchSyncEngine(
                 // and `updatedBy` differ from the stored one — equal deletions, unequal documents.
                 // There is nothing to send either way; the deletion is already recorded.
                 if (merged == remote.second || (merged.isDeleted && remote.second.isDeleted)) {
-                    dirty.remove(documentId)
+                    clearDirty(documentId)
                     return PushOutcome.NOTHING_TO_PUSH
                 }
             }
@@ -622,8 +674,11 @@ class CouchSyncEngine(
             // Record the server's revision either way: it is the base the next push must use.
             revs[row.id] = row.rev
             if (merged != incoming) {
-                // The local copy carried content the server has not seen — push it back.
+                // The local copy carried content the server has not seen — push it back. Recorded
+                // durably as well, because the content that made it a push-back is content only
+                // this device holds: losing the intent here loses it for good.
                 dirty.add(row.id)
+                runCatching { store.enqueueOutbox(listOf(row.id)) }
                 pushBack += row.id
             }
         }

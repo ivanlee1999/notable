@@ -75,8 +75,8 @@ fun FolderConfigDialog(folderRepository: FolderRepository,
                     folder = current.copy(title = name)
                     scope.launch {
                         folderRepository.update(current.copy(title = name))
-                        // CouchDB learns about a change only when it is queued, and nothing else
-                        // here queues a rename — so without this the new name stayed on this device.
+                        // The outbox entry went in with the row; this only starts the debounce so
+                        // the new name leaves now rather than at the next flush.
                         couchSync.noteDocumentChanged(CouchDocId.folder(folderId))
                     }
                 }

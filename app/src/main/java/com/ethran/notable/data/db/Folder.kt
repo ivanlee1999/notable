@@ -12,6 +12,8 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.withTransaction
+import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
 import java.util.Date
 import java.util.UUID
@@ -62,14 +64,23 @@ interface FolderDao {
     suspend fun delete(id: String)
 }
 
+/**
+ * Like [BookRepository], every mutating method writes its row and its [CouchOutbox] entry in one
+ * transaction, so a folder cannot exist on disk without the record that it has to be sent.
+ */
 class FolderRepository @Inject constructor(
-    private val db: FolderDao
+    private val db: FolderDao,
+    private val outbox: CouchOutboxRepository,
+    private val database: AppDatabase,
 ) {
     private val log = ShipBook.getLogger("FolderRepository")
     private val nullLiveData = MutableLiveData<String?>(null)
 
     suspend fun create(folder: Folder) {
-        db.create(folder)
+        database.withTransaction {
+            db.create(folder)
+            outbox.queue(CouchDocId.folder(folder.id))
+        }
     }
 
     /**
@@ -78,7 +89,10 @@ class FolderRepository @Inject constructor(
      * that comparison against any peer copy and silently reverts.
      */
     suspend fun update(folder: Folder) {
-        db.update(folder.copy(updatedAt = Date()))
+        database.withTransaction {
+            db.update(folder.copy(updatedAt = Date()))
+            outbox.queue(CouchDocId.folder(folder.id))
+        }
     }
 
     /**
@@ -86,9 +100,15 @@ class FolderRepository @Inject constructor(
      * Used during sync when downloading from the server, to keep the remote timestamp — stamping
      * it locally would make every received folder look newer than its source and push straight
      * back out again.
+     *
+     * It queues anyway: [RemoteApply] suppresses that on the download path, so the call is inert
+     * where it is actually used and safe wherever it is used next.
      */
     suspend fun updateVerbatim(folder: Folder) {
-        db.update(folder)
+        database.withTransaction {
+            db.update(folder)
+            outbox.queue(CouchDocId.folder(folder.id))
+        }
     }
 
     fun getAll(): List<Folder> {
@@ -127,6 +147,11 @@ class FolderRepository @Inject constructor(
     }
 
 
+    /**
+     * Removes the row only — see [BookRepository.delete] for why a deletion queues nothing on its
+     * own. A folder the user deleted goes through
+     * [com.ethran.notable.data.AppRepository.deleteFolderLocally].
+     */
     suspend fun delete(id: String) {
         db.delete(id)
     }

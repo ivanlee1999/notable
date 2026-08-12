@@ -11,6 +11,7 @@ import com.ethran.notable.data.db.Kv
 import com.ethran.notable.data.db.KvDao
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
+import com.ethran.notable.data.db.RemoteApply
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.decodeStrokePoints
 import com.ethran.notable.data.db.encodeStrokePoints
@@ -42,6 +43,13 @@ import java.util.UUID
  * **Writing a document clears its pending deletion.** Delete-vs-edit resurrection (protocol §6.4)
  * reaches this class as a plain notebook write; without clearing, the next flush would delete the
  * notebook all over again.
+ *
+ * **Everything this class writes is marked [RemoteApply].** Landing a remote change means calling
+ * the very same repository methods a user edit does, and those now queue what they write. Without
+ * the marker every pull would queue a push, the peer would receive the echo and queue one back, and
+ * two devices would ping-pong for as long as they were both switched on. Suppression lives here,
+ * on the one path that receives rather than originates, so that "queue it" stays the default
+ * everywhere else — the bugs this outbox exists to remove are all of the form "someone forgot".
  *
  * The interface is synchronous while every repository is `suspend`, so each entry point wraps its
  * work in [runBlocking]. The engine already calls this off the main thread, and the alternative —
@@ -90,11 +98,15 @@ class RoomCouchStore(
         }
     }
 
+    // `RemoteApply` covers everything below it, including the placeholder notebook `applyPage`
+    // creates for a page whose notebook has not landed yet and the page rows `applyNotebook`
+    // removes for tombstoned pages — all of those go through repositories that would otherwise
+    // queue a push for content that came from the server in the first place.
     override fun apply(
         documentId: String,
         body: CouchDocBody,
         basedOn: CouchDocBody?,
-    ) = runBlocking<Unit> {
+    ) = runBlocking<Unit>(RemoteApply()) {
         val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking
 
         // Which pages this change rewrites, collected as it goes. A page still on screen or held in
@@ -154,7 +166,7 @@ class RoomCouchStore(
      * alongside it under a fresh identity, so a document this build cannot understand costs the
      * user a duplicate rather than their work.
      */
-    override fun applyConflictCopy(documentId: String, json: JsonObject) = runBlocking<Unit> {
+    override fun applyConflictCopy(documentId: String, json: JsonObject) = runBlocking<Unit>(RemoteApply()) {
         // Every shape gets a copy, folders included. §6.5's promise is that nothing is discarded,
         // and a folder quietly dropped here is a folder the user never learns went missing.
         CouchDocId.split(documentId) ?: return@runBlocking
@@ -232,6 +244,27 @@ class RoomCouchStore(
 
     fun pendingDeletionIds(): List<String> =
         runBlocking { appRepository.couchDeletionRepository.pendingIds() }
+
+    // endregion
+
+    // region The outbox
+
+    /**
+     * The `couch_outbox` table, which the repositories write inside the same transaction as the
+     * data. It is the durable half of the engine's dirty set: the checkpoint blob that also holds
+     * it is persisted asynchronously, so between a repository writing a row and that blob landing
+     * the table is the only record that anything needs sending.
+     */
+    override fun pendingOutboxIds(): List<String> =
+        runBlocking { appRepository.couchOutboxRepository.pendingIds() }
+
+    override fun enqueueOutbox(documentIds: List<String>) {
+        runBlocking { appRepository.couchOutboxRepository.queue(documentIds) }
+    }
+
+    override fun dequeueOutbox(documentId: String) {
+        runBlocking { appRepository.couchOutboxRepository.clear(documentId) }
+    }
 
     // endregion
 

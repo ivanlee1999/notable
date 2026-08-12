@@ -200,6 +200,8 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val folder = Folder(title = title, parentFolderId = _folderId.value)
             folderRepository.create(folder)
+            // The outbox entry went in with the row; this only starts the debounce. See
+            // [onCreateNewNotebook].
             couchSync.noteDocumentChanged(CouchDocId.folder(folder.id))
         }
     }
@@ -230,10 +232,12 @@ class LibraryViewModel @Inject constructor(
                 defaultPageWidth = pageSize.width,
                 defaultPageHeight = pageSize.height
             )
+            // `create` writes the notebook, its first page and both outbox entries in one
+            // transaction, so the change is already durable and complete by the time this returns.
             bookRepository.create(notebook)
-            // Queue it now rather than waiting for someone to draw in it. Nothing else here ever
-            // did, so a notebook made and left alone was invisible to the server: the outbox is fed
-            // by ink edits, and creating a notebook is not one.
+            // Kept for promptness only: this starts the debounce and updates the badge, rather than
+            // waiting for the next flush to notice the rows. Forgetting it would cost a delay, not
+            // the notebook — which is the whole point of moving the queueing into the repository.
             couchSync.noteDocumentChanged(CouchDocId.notebook(notebook.id))
         }
     }
