@@ -497,7 +497,15 @@ class CouchSyncEngine(
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
                 // ...and so do rejected credentials, which no amount of retrying will fix.
-                if (error.isRetriable || error is CouchError.Unauthorized) {
+                // A blocked scheme is the same shape of failure: the platform refuses the address
+                // itself, before a socket is opened, so every document behind this one would fail
+                // identically. Carrying on would fill `failures` with the same sentence once per
+                // queued document and bury the single message that tells the user to change the
+                // URL — the very outcome CouchError.Blocked was introduced to avoid.
+                if (error.isRetriable ||
+                    error is CouchError.Unauthorized ||
+                    error is CouchError.Blocked
+                ) {
                     // Everything behind this one is still in the outbox and was never attempted.
                     // Reporting only the document that happened to fail made `stillDirty` mean
                     // "the last thing we tried" rather than "what is still waiting" — which
