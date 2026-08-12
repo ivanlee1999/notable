@@ -206,9 +206,23 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The user accepted the prompt offering to remove a notebook with no pages.
+     *
+     * It goes through [AppRepository.deleteNotebookLocally] like every other deletion the user
+     * makes, and for the reason that keeps coming back: absence is not a syncable fact. A bare
+     * `bookRepository.delete` leaves this device holding nothing and telling the server nothing, so
+     * the peer's copy is still there and comes straight back on the next merge — the notebook
+     * resurrects itself, and the prompt appears again.
+     *
+     * A notebook with no pages is a notebook the peer may well have pages for, which is the case
+     * that makes this more than tidiness: the empty copy here is often the *incomplete* one.
+     */
     fun deleteEmptyBook(bookId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            bookRepository.delete(bookId)
+            appRepository.deleteNotebookLocally(bookId)
+            // Only for promptness — the tombstone and the outbox row went in with the delete.
+            couchSync.noteDeleted(CouchDocId.notebook(bookId))
         }
     }
 
