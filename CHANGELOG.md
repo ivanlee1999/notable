@@ -1,5 +1,122 @@
 # Changelog
 
+## 0.11.0
+
+Deleting a folder no longer takes everything inside it away for good, and an edit made on the BOOX
+now reaches the server whatever kind of edit it was. Both were ways of losing work quietly, which is
+what most of this release is about.
+
+### Deleting a folder was one tap away from losing everything in it
+
+- **A folder deletion was unconfirmed, immediate and permanent.** Every descendant folder, notebook
+  and page went with it, only the folder itself was recorded as deleted, and there was no way back.
+  The subtree was gone here while the server still held the notebooks, so the next sync either
+  brought them back under a folder that no longer existed or left the two devices disagreeing
+  forever.
+- Deleting a folder or a notebook now moves it to a **Trash**, which appears in the Library as soon
+  as anything is in it. Nothing is published while an item sits there: the other devices keep their
+  copy, and restoring is one tap. Emptying the Trash is what actually deletes, everywhere, and it
+  says so before it does it.
+- The folder dialog now asks first and counts what is inside. Restoring an item whose folder was
+  trashed too puts it somewhere you can actually see it, rather than back into the dark.
+- **Deleting the last page of a notebook offered to delete the notebook, then deleted only the local
+  copy.** The server was never told, so the notebook came back on the next sync and offered itself
+  for deletion all over again.
+
+### Edits that never left the device
+
+- **Reordering pages, renaming a page, or changing only a background could sit on the BOOX
+  indefinitely.** Six mutations wrote to the database without recording that the document had
+  changed, and sync's "never sent" scan cannot see a new edit to a document the server already
+  holds — so those edits were invisible to it.
+- There is now a durable outbox, written in the same transaction as the change itself. An edit
+  survives a restart the way a deletion always has, and the app can no longer be killed in the gap
+  between saving your work and remembering to send it.
+- Anything queued while offline now goes out as soon as a sync succeeds, instead of waiting for you
+  to write something else or tap Sync now. A flush that stops early reports everything still
+  waiting, rather than only the one document it tried.
+- "Upload everything" queues the library in one write instead of one per notebook — a moment rather
+  than a stall.
+
+### A deleted notebook could reappear as an untitled copy of itself
+
+- **A notebook you deleted came back as an empty "New notebook" holding its old pages** — and then
+  republished itself to the server, undoing the deletion for every device. Pages carry no deletion
+  record of their own, so a device replaying sync history from the beginning met the leftover pages
+  and invented a notebook to hang them on.
+- The record of a deletion is now kept after the server has been told, rather than dropped at that
+  moment, so the leftovers are recognized as leftovers whichever order they arrive in. A device that
+  only heard about a deletion, rather than making it, now has that memory too.
+
+### The mass-deletion warning had no answer
+
+- **Sync holds a large batch of notebook deletions back**, because a wiped database looks exactly
+  like a deliberate clear-out, and the warning told you to confirm in a setting that did not exist.
+  The only way through was to make the same deletions on your other device.
+- Sync settings now offers both answers with the consequences spelled out: delete them on the server
+  too, behind a confirmation, or keep them there — which stops this device claiming the deletion and
+  brings the notebooks back here on the next sync. Keeping them replays the change history once,
+  which is slower than usual exactly once.
+- An approval is spent when the deletions it covers are sent, so one tap cannot wave through the
+  batch that follows an accident.
+
+### Ink that looked saved and wasn't
+
+- **A failed write was logged and forgotten.** The stroke stayed on screen for the rest of the
+  session and was gone after a restart, with nothing to say the page was unsafe. Writes now retry
+  with backoff for up to a minute, so a disk that recovers is picked up on its own, and the editor
+  says "Not saved — retrying" while it holds. Process death can still lose unsaved ink; what it can
+  no longer do is lose it silently.
+- **Fast page switching could leave the canvas showing one page while the toolbar named another**,
+  and the next stroke was written onto whichever one the loader finished with. Switches now take
+  turns, and a switch you have already moved past costs nothing.
+- Undo held five operations. A lasso move, a resize and a colour change spend three without a word
+  being written, so recovering from a mistaken clear was routinely impossible. It is now budgeted by
+  memory instead — deep for ordinary strokes, still safe after a select-all move.
+- Deleting a page from the editor's page menu now asks, the way the page overview always did.
+
+### Finding a notebook in a library of eighty
+
+- **The Library had no search and no order but database insertion, backwards.** You can now search
+  the whole library by name — not just the folder you are standing in, since not knowing where
+  something is is the reason to search — and sort by last edited, date created or title, in either
+  direction. The choice is remembered.
+- A notebook's **Copy** button said "Not implemented!". It now makes a real copy, with new
+  identities throughout so sync does not confuse it with the original.
+- **Folders could not be moved at all**, so a tree built in the wrong shape had to be rebuilt by
+  hand. A folder now moves, and refuses to move inside itself.
+
+### Rectangles, ellipses and arrows
+
+- The shape tool drew straight lines and nothing else. It now draws a rectangle, an ellipse and an
+  arrow as well, each as ordinary ink carrying the pressure and tilt of the drag — so a shape erases,
+  moves, exports and syncs like anything else you draw, on the BOOX and on the iPad alike.
+- The shape button shows the shape it will draw, and tapping it while selected opens the picker, the
+  way the eraser already worked.
+
+### Smaller things
+
+- **PDF page breaks are now drawn by default.** Export has always split the canvas at sheet
+  boundaries; the editor simply never showed where. The lines only appear when pagination is
+  actually on.
+- **An image placed below or to the right of the sheet could not be scrolled to.** The scrollable
+  area was measured from strokes alone, so an image moved out there was stored, drawn and
+  unreachable. One rule now measures the page's whole contents.
+- Sync now notices when this device's clock disagrees with the server's by two minutes or more, and
+  says which way it is wrong. Every merge decision runs on those timestamps, so a fast clock lets
+  stale work win. It is a warning beside the sync status, not a refusal to sync.
+- A server address Android blocks outright now stops the whole upload with one message telling you
+  to fix the URL, instead of failing once per queued document with the same sentence.
+- Saving a stroke read the entire page row to pick one column out of it — a cost paid per stroke on
+  a BOOX, not per session.
+
+### Upgrading
+
+The database moves from 41 to 44, to hold the outbox, the Trash and the fuller record of a deletion.
+That happens by itself when you open the app; nothing is rewritten and nothing moves. Everything
+already on the device reads as "not in the Trash", and any deletion you had made but not yet synced
+is still waiting to go out.
+
 ## 0.10.0
 
 A page pulled in from another device now shows up without leaving the editor. Paper has edges you
