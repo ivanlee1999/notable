@@ -59,7 +59,12 @@ data class AppSettings(
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
     val paginatePdf: Boolean = true,
-    val visualizePdfPagination: Boolean = false,
+    // On by default, because [paginatePdf] is. Export splits the infinite canvas at fixed
+    // sheet-height intervals, and with nothing drawn there the user writes straight across a page
+    // break without knowing one exists — the export is still complete, but a diagram or a line of
+    // handwriting comes out cut in half. Showing where the breaks fall costs one hairline per
+    // sheet; not showing them costs the user a reprint.
+    val visualizePdfPagination: Boolean = true,
     // null → ToolbarLayout.DEFAULT. Sanitize with ToolbarLayout.validated() when reading:
     // persisted layouts may predate elements or omit the mandatory MENU entry.
     val toolbarLayout: ToolbarLayout? = null,

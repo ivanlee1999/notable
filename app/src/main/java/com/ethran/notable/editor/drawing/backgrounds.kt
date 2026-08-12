@@ -332,7 +332,10 @@ fun drawBg(
     }
     drawMargin(canvas, scroll, scale, sheet)
 
-    if (GlobalAppSettings.current.visualizePdfPagination) {
+    // Only where a break will actually fall: with pagination off the export is one continuous
+    // page, and a line promising a break that never comes is worse than no line.
+    val settings = GlobalAppSettings.current
+    if (settings.paginatePdf && settings.visualizePdfPagination) {
         drawPaginationLine(canvas, scroll, scale, sheet)
     }
     if (clipRect != null) {
