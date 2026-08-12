@@ -12,6 +12,7 @@ import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.ImportEngine
 import com.ethran.notable.io.ImportOptions
@@ -199,17 +200,25 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    fun onCreateNewNotebook(title: String) {
+    /**
+     * The sheet and template are the notebook's, not the app's: they are asked for when it is
+     * created (see `NewNotebookDialog`) and only fall back to the global defaults for the paths
+     * that create a notebook without asking. The first page inherits both from the notebook, so
+     * what is chosen here is what the user writes on.
+     */
+    fun onCreateNewNotebook(
+        title: String,
+        pageSize: PageSize = GlobalAppSettings.current.defaultPageSize,
+        template: String = GlobalAppSettings.current.defaultNativeTemplate
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val settings = GlobalAppSettings.current
-            val sheet = settings.defaultPageSize
             val notebook = Notebook(
                 title = title,
                 parentFolderId = _folderId.value,
-                defaultBackground = settings.defaultNativeTemplate,
+                defaultBackground = template,
                 defaultBackgroundType = BackgroundType.Native.key,
-                defaultPageWidth = sheet.width,
-                defaultPageHeight = sheet.height
+                defaultPageWidth = pageSize.width,
+                defaultPageHeight = pageSize.height
             )
             bookRepository.create(notebook)
             // Queue it now rather than waiting for someone to draw in it. Nothing else here ever

@@ -35,6 +35,10 @@
     <string name="name_prompt_folder_title">Folder name</string>
     <string name="name_prompt_notebook_title">Notebook name</string>
     <string name="name_prompt_page_title">Page name</string>
+    <string name="new_notebook_title">New notebook</string>
+    <string name="new_notebook_page_size">Page size</string>
+    <string name="new_notebook_template">Template</string>
+    <string name="new_notebook_create">Create</string>
     <string name="rename">Rename</string>
     <string name="page_untitled">Untitled</string>
     <string name="paginate_pdf">Paginate PDF</string>
