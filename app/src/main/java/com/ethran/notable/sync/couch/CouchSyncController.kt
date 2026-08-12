@@ -54,6 +54,15 @@ interface CouchSyncBackend {
     suspend fun recordDeletion(documentId: String)
 
     /**
+     * How many documents are still waiting to be sent — the durable outbox, not the last flush's
+     * report.
+     *
+     * The controller talks to the backend rather than to the engine, so this is how the reconnect
+     * path can ask "is there anything left over from when we were offline?".
+     */
+    suspend fun pendingCount(): Int
+
+    /**
      * Which documents the server has seen and which are still queued, or null when CouchDB is not
      * the live backend. The library badge reads this: without it a notebook synced perfectly over
      * CouchDB still showed "local only", because the only other record of sync state is a table
@@ -219,7 +228,14 @@ class CouchSyncController @Inject constructor(
                 apply(report)
                 // Anything the server lacked is now queued; send it without waiting for the edit
                 // timer, which will not fire because the user is not writing.
-                if (report.pushBack.isNotEmpty()) pushNow()
+                //
+                // The outbox is asked too, not just what this pull brought back. A pull that
+                // succeeded is the first proof the network returned, and edits made while it was
+                // gone are still sitting dirty from a flush that failed offline. Pushing only on
+                // `pushBack` left them there until the user wrote something else or tapped Sync
+                // now — reconnecting has to drain the outbox, not merely deliver what the feed
+                // happened to carry. bopa's controller does the same, for the same reason.
+                if (report.pushBack.isNotEmpty() || backend.pendingCount() > 0) pushNow()
 
                 // A long poll is supposed to block until something happens, so an empty result
                 // should be rare and slow. When it is neither — a proxy that answers immediately, a
