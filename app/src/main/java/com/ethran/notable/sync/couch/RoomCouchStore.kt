@@ -475,6 +475,23 @@ class RoomCouchStore(
         // moment the real notebook lands (which the engine pushes *after* its pages, so this is the
         // ordering the protocol expects).
         if (notebookId != null && appRepository.bookRepository.getById(notebookId) == null) {
+            // Unless we deleted that notebook. Its pages keep no tombstones of their own — protocol
+            // §6.4, they live and die with the notebook's `pageIds` — so deleting a notebook leaves
+            // its `page:<id>` documents live on the server forever. A device replaying the feed
+            // from zero meets those orphans with no memory of having sent them, and a placeholder
+            // built from one resurrects the notebook as an untitled "New notebook". Worse, the
+            // placeholder then outranks the incoming tombstone under §6.4 and is *pushed back*,
+            // republishing a notebook the user deleted.
+            //
+            // §6.4 is the same rule either way: only an edit strictly newer than the deletion
+            // resurrects. A page that is not newer is a leftover, and is dropped along with it.
+            val deletedAt = appRepository.couchDeletionRepository
+                .get(CouchDocId.notebook(notebookId))?.deletedAt
+            if (CouchMerge.resolveDeletion(page.updatedAt, deletedAt) ==
+                CouchMerge.DeletionOutcome.APPLY_DELETION
+            ) {
+                return
+            }
             appRepository.bookRepository.createEmpty(
                 Notebook(
                     id = notebookId,
