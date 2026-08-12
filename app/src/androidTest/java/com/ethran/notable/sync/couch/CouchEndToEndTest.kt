@@ -1,0 +1,535 @@
+package com.ethran.notable.sync.couch
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.db.AppDatabase
+import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
+import com.ethran.notable.data.db.CryptoHelper
+import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.DeletedPageRepository
+import com.ethran.notable.data.db.DeletedStrokeRepository
+import com.ethran.notable.data.db.FolderRepository
+import com.ethran.notable.data.db.ImageRepository
+import com.ethran.notable.data.db.KvProxy
+import com.ethran.notable.data.db.KvRepository
+import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.NotebookSyncStateRepository
+import com.ethran.notable.data.db.PageRepository
+import com.ethran.notable.data.db.PageSyncStateRepository
+import com.ethran.notable.data.db.StrokeRepository
+import com.ethran.notable.testing.TestDatabaseFactory
+import kotlinx.coroutines.runBlocking
+import okhttp3.OkHttpClient
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Base64
+import java.util.Date
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+/**
+ * The whole BOOX stack — repositories, Room, [RoomCouchStore], [CouchSyncEngine] — against a **real**
+ * CouchDB. The last open item of the sync review.
+ *
+ * The 22 shared scenarios are good engine tests, but their scenario stores call `markDirty`
+ * themselves, so they converge happily while every one of the app's real mutation paths fails to
+ * queue anything. [com.ethran.notable.data.db.CouchOutboxTest] closed half of that gap: it drives
+ * the real repositories and asks what landed in `couch_outbox`. This closes the other half — it
+ * drives the same repositories and asks **what landed on the server**, which is the question a user
+ * asks. A document can be queued correctly and still never arrive.
+ *
+ * Every defect this branch fixed lived in exactly this gap, which is also why the recovery paths
+ * are here: an outbox that survives being offline is only worth having if it drains afterwards.
+ *
+ * Skipped unless `NOTABLE_COUCH_URL` is set, so a machine with no CouchDB still gets a green suite:
+ *
+ *     NOTABLE_COUCH_URL=http://10.0.2.2:5984 NOTABLE_COUCH_USER=sync \
+ *       NOTABLE_COUCH_PASSWORD=… NOTABLE_COUCH_ADMIN_USER=admin NOTABLE_COUCH_ADMIN_PASSWORD=… \
+ *       ./gradlew :app:connectedDebugAndroidTest
+ *
+ * `app/build.gradle` forwards those as instrumentation runner arguments — the test runs in an app
+ * process on a device, which inherits no environment from the shell.
+ */
+@RunWith(AndroidJUnit4::class)
+class CouchEndToEndTest {
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    private lateinit var db: AppDatabase
+    private lateinit var repository: AppRepository
+    private lateinit var images: File
+    private lateinit var client: CouchDbClient
+    private lateinit var database: String
+
+    @Before
+    fun setUp() {
+        assumeTrue("set NOTABLE_COUCH_URL to run the end-to-end tests", url != null)
+        // A database per *test*, not per class. Every engine here replays the feed from zero, so a
+        // shared one would have each test read every other test's documents — and assertions like
+        // "this peer had nothing to push back" would be answering for the whole class.
+        database = "notable-e2e-${UUID.randomUUID().toString().take(12)}"
+        admin("PUT", "$url/$database")
+        // The sync account has to be able to read and write it, or every request is a 401.
+        admin(
+            "PUT", "$url/$database/_security",
+            """{"members":{"names":["$user"]},"admins":{"names":[]}}""",
+        )
+        db = TestDatabaseFactory.createInMemory(context)
+        repository = repositoryFor(db)
+        images = File(context.cacheDir, "e2e-images-${UUID.randomUUID()}").apply { mkdirs() }
+        client = clientFor()
+    }
+
+    @After
+    fun tearDown() {
+        if (url == null) return
+        db.close()
+        images.deleteRecursively()
+        admin("DELETE", "$url/$database")
+    }
+
+    // region Fixtures
+
+    private fun repositoryFor(db: AppDatabase) = AppRepository(
+        bookRepository = BookRepository(
+            db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db
+        ),
+        pageRepository = PageRepository(
+            db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db
+        ),
+        strokeRepository = StrokeRepository(db.strokeDao()),
+        imageRepository = ImageRepository(db.ImageDao()),
+        folderRepository = FolderRepository(
+            db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db
+        ),
+        notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao()),
+        pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao()),
+        deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
+        deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
+        deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
+        couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
+        couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+        kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
+        db = db,
+    )
+
+    private fun clientFor(baseUrl: String = url!!) = CouchDbClient(
+        OkHttpCouchTransport(
+            baseUrl = baseUrl,
+            username = user,
+            password = password,
+            client = OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .build(),
+        ),
+        database = database,
+    )
+
+    /** This device. A second one gets its own Room database, its own store and its own engine. */
+    private fun storeFor(
+        repository: AppRepository,
+        db: AppDatabase,
+        deviceId: String,
+        imagesFolder: File,
+    ) = RoomCouchStore(repository, db.kvDao(), deviceId = deviceId, imagesFolder = { imagesFolder })
+
+    private fun store(deviceId: String = "boox") = storeFor(repository, db, deviceId, images)
+
+    private fun engine(
+        store: CouchLocalStore = store(),
+        deviceId: String = "boox",
+        client: CouchDbClient = this.client,
+        state: CouchSyncState = CouchSyncState(),
+    ) = CouchSyncEngine(client, store, deviceId = deviceId, state = state)
+
+    /**
+     * A second device: its own Room database and its own store, sharing only the server. Returned
+     * as a triple rather than fields because the tests that need one close it themselves — an
+     * in-memory Room database left open outlives the test that made it.
+     */
+    private fun secondDevice(): Triple<AppDatabase, AppRepository, File> {
+        val otherDb = TestDatabaseFactory.createInMemory(context)
+        val otherImages = File(context.cacheDir, "e2e-images-${UUID.randomUUID()}")
+            .apply { mkdirs() }
+        return Triple(otherDb, repositoryFor(otherDb), otherImages)
+    }
+
+    /** A notebook with one page, made the way `BookRepository.create` makes it. */
+    private fun seedNotebook(title: String = "Notes"): Pair<String, String> = runBlocking {
+        val notebook = Notebook(title = title)
+        repository.bookRepository.create(notebook)
+        notebook.id to repository.bookRepository.getById(notebook.id)!!.pageIds.single()
+    }
+
+    private fun queued(): Set<String> = runBlocking { db.couchOutboxDao().allIds().toSet() }
+
+    private fun flush(engine: CouchSyncEngine): CouchSyncEngine.FlushReport = runBlocking {
+        val report = engine.flush()
+        assertTrue("pushing failed: ${report.failures}", report.failures.isEmpty())
+        report
+    }
+
+    private fun notebookOnServer(notebookId: String) = runBlocking {
+        client.get(CouchDocId.notebook(notebookId), CouchNotebook.serializer())?.body
+    }
+
+    private fun pageOnServer(pageId: String) = runBlocking {
+        client.get(CouchDocId.page(pageId), CouchPage.serializer())?.body
+    }
+
+    // endregion
+
+    // region Every mutation hook reaches the server
+
+    /**
+     * The defect the review opened with. Creating a notebook queued the manifest and left behind the
+     * page it names, so the peer received a notebook pointing at a document the server had never
+     * been offered — a notebook that opens on nothing.
+     */
+    @Test
+    fun creating_a_notebook_sends_the_notebook_and_its_first_page() {
+        val (notebookId, pageId) = seedNotebook("From the BOOX")
+        flush(engine())
+
+        assertEquals("From the BOOX", notebookOnServer(notebookId)?.title)
+        assertEquals(listOf(pageId), notebookOnServer(notebookId)?.pageIds)
+        assertNotNull("the page the notebook names never arrived", pageOnServer(pageId))
+    }
+
+    @Test
+    fun adding_a_blank_page_sends_the_page_and_the_new_page_list() = runBlocking {
+        val (notebookId, firstPageId) = seedNotebook()
+        flush(engine())
+
+        val added = repository.newPageInBook(notebookId, index = 1)!!
+        flush(engine())
+
+        assertNotNull("the new page never arrived", pageOnServer(added))
+        assertEquals(listOf(firstPageId, added), notebookOnServer(notebookId)?.pageIds)
+    }
+
+    @Test
+    fun duplicating_a_page_sends_the_duplicate_and_the_new_page_list() = runBlocking {
+        val (notebookId, pageId) = seedNotebook()
+        flush(engine())
+
+        repository.duplicatePage(pageId)
+        flush(engine())
+
+        val duplicate = repository.bookRepository.getById(notebookId)!!.pageIds
+            .single { it != pageId }
+        assertNotNull("the duplicate never arrived", pageOnServer(duplicate))
+        assertTrue(
+            "the server still lists only the original",
+            notebookOnServer(notebookId)?.pageIds?.contains(duplicate) == true,
+        )
+    }
+
+    /**
+     * Reorder is the case the "never sent" scan can never rescue: the notebook is one the server
+     * already holds, so nothing about it looks unsent, and only the order of `pageIds` moved.
+     */
+    @Test
+    fun reordering_pages_sends_the_new_order() = runBlocking {
+        val (notebookId, firstPageId) = seedNotebook()
+        val second = repository.newPageInBook(notebookId, index = 1)!!
+        flush(engine())
+        assertEquals(listOf(firstPageId, second), notebookOnServer(notebookId)?.pageIds)
+
+        repository.bookRepository.changePageIndex(notebookId, firstPageId, 1)
+        flush(engine())
+
+        assertEquals(listOf(second, firstPageId), notebookOnServer(notebookId)?.pageIds)
+    }
+
+    @Test
+    fun renaming_a_page_sends_the_title() = runBlocking {
+        val (_, pageId) = seedNotebook()
+        flush(engine())
+
+        repository.pageRepository.rename(pageId, "Chapter one")
+        flush(engine())
+
+        assertEquals("Chapter one", pageOnServer(pageId)?.title)
+    }
+
+    /**
+     * A background change writes the page row and nothing else — no stroke, so none of the drawing
+     * paths that queue anything runs. Before the outbox it stayed on the device it was chosen on.
+     */
+    @Test
+    fun changing_only_a_page_background_sends_the_background() = runBlocking {
+        val (_, pageId) = seedNotebook()
+        flush(engine())
+        assertEquals("blank", pageOnServer(pageId)?.background)
+
+        val page = repository.pageRepository.getById(pageId)!!
+        repository.pageRepository.update(
+            page.copy(background = "grid", backgroundType = "native", updatedAt = Date())
+        )
+        flush(engine())
+
+        assertEquals("grid", pageOnServer(pageId)?.background)
+    }
+
+    // endregion
+
+    // region The mirror image: applying a remote change must queue nothing
+
+    /**
+     * The highest-consequence assumption in the branch, checked the only way that really settles it:
+     * two engines, two Room databases, one real server.
+     *
+     * Landing a change received from the server goes through the same repository methods a user edit
+     * does. If those queued, the peer's pull would queue a push, this device would receive the echo
+     * and queue one back, and two switched-on devices would ping-pong until one was turned off. The
+     * unit test for this asserts on `couch_outbox`; this asserts that the second device, having
+     * pulled real documents off a real server, then has nothing whatsoever to say back to it.
+     */
+    @Test
+    fun a_peer_that_pulls_has_nothing_to_push_back() {
+        val (notebookId, pageId) = seedNotebook("Written here")
+        flush(engine())
+
+        val (otherDb, otherRepository, otherImages) = secondDevice()
+        try {
+            val peer = engine(
+                store = storeFor(otherRepository, otherDb, "ipad", otherImages),
+                deviceId = "ipad",
+            )
+            val pull = runBlocking { peer.pull() }
+
+            // It really did receive them — otherwise "nothing to push back" is trivially true.
+            assertTrue(
+                "the peer never received the notebook, so this proves nothing",
+                CouchDocId.notebook(notebookId) in pull.applied,
+            )
+            assertTrue(
+                "the peer never received the page, so this proves nothing",
+                CouchDocId.page(pageId) in pull.applied,
+            )
+            assertEquals(
+                "Written here",
+                runBlocking { otherRepository.bookRepository.getById(notebookId) }?.title,
+            )
+
+            assertEquals(
+                "applying a remote change queued a push — two devices would ping-pong forever",
+                emptySet<String>(),
+                runBlocking { otherDb.couchOutboxDao().allIds().toSet() },
+            )
+
+            // And a flush right after the pull sends nothing, which is the behaviour the user sees.
+            val echo = flush(peer)
+            assertEquals(emptyList<String>(), echo.pushed)
+            assertEquals(emptyList<String>(), echo.merged)
+        } finally {
+            otherDb.close()
+            otherImages.deleteRecursively()
+        }
+    }
+
+    // endregion
+
+    // region Recovery
+
+    /**
+     * The reconnect fix. An edit made with no server reachable stays in `couch_outbox` — the whole
+     * point of the table — and the next engine that does reach the server drains it without the user
+     * having to touch the document again.
+     *
+     * The offline half uses a port nothing is listening on rather than a fake transport: "the flush
+     * failed" has to mean a real transport failure, because a fake one is a statement about what we
+     * believe failure looks like.
+     */
+    @Test
+    fun an_edit_made_offline_is_sent_once_the_server_comes_back() = runBlocking {
+        val (notebookId, pageId) = seedNotebook("Made offline")
+
+        val offline = engine(client = clientFor("http://127.0.0.1:1"))
+        val failed = offline.flush()
+        assertTrue("the offline flush should have failed", failed.failures.isNotEmpty())
+
+        // Nothing was lost: the durable outbox still names both documents.
+        assertEquals(
+            setOf(CouchDocId.notebook(notebookId), CouchDocId.page(pageId)),
+            queued(),
+        )
+        assertNull("nothing should have reached the server", notebookOnServer(notebookId))
+
+        // A fresh engine, as a restarted app would build — its in-memory dirty set starts empty and
+        // is adopted from the table, which is what makes the outbox durable rather than decorative.
+        flush(engine())
+
+        assertEquals("Made offline", notebookOnServer(notebookId)?.title)
+        assertNotNull(pageOnServer(pageId))
+        assertEquals("the outbox should have drained", emptySet<String>(), queued())
+    }
+
+    /**
+     * Checkpoint loss: a device that forgets `lastSeq` replays the feed from zero. That is slow, and
+     * it must also be *harmless* — the second pass has to reach the same content as the first, and
+     * anything it decides to send must be what the server already holds.
+     *
+     * It is not, however, silent, and this pins the reason rather than pretending otherwise. A
+     * notebook row has no `updatedBy` column, so `RoomCouchStore.loadNotebook` stamps the reading
+     * device's own id. On a replay the local copy therefore claims authorship of a document the peer
+     * wrote, the timestamps tie, and `CouchMerge.wins` breaks the tie on `updatedBy` — so on the
+     * device whose id sorts higher ("ipad" > "boox") the local copy wins and is queued back.
+     *
+     * The content is identical, which is why this is recovery rather than corruption, and it settles
+     * after one exchange rather than ping-ponging. But a device that loses its checkpoint re-uploads
+     * what it holds, and the shared scenario for this (`checkpoint-loss-replays`) cannot see it: its
+     * store keeps `updatedBy` verbatim, where a Room row cannot. Fixing it needs a column and a
+     * migration, so it is recorded here rather than papered over.
+     */
+    @Test
+    fun losing_the_checkpoint_replays_without_changing_anything() {
+        val (notebookId, pageId) = seedNotebook("Replayed")
+        flush(engine())
+
+        val (otherDb, otherRepository, otherImages) = secondDevice()
+        try {
+            val store = storeFor(otherRepository, otherDb, "ipad", otherImages)
+            val first = engine(store = store, deviceId = "ipad")
+            runBlocking { first.pull() }
+            val afterFirst = runBlocking { otherRepository.bookRepository.getById(notebookId) }
+            assertEquals("Replayed", afterFirst?.title)
+
+            // The same store, a new engine that has never heard of a checkpoint: replay from "0".
+            val amnesiac = engine(store = store, deviceId = "ipad", state = CouchSyncState())
+            runBlocking { amnesiac.pull() }
+
+            val afterReplay = runBlocking { otherRepository.bookRepository.getById(notebookId) }
+            assertEquals("Replayed", afterReplay?.title)
+            assertEquals(
+                "the replay must not duplicate the notebook's pages",
+                listOf(pageId),
+                afterReplay?.pageIds,
+            )
+            // Whatever the replay decided to send back must be content the server already has, or
+            // "idempotent recovery" would mean the second device rewriting the first one's work.
+            val requeued = runBlocking { otherDb.couchOutboxDao().allIds().toSet() }
+            assertTrue(
+                "the replay queued a document it had never received: $requeued",
+                requeued.all {
+                    it == CouchDocId.notebook(notebookId) || it == CouchDocId.page(pageId)
+                },
+            )
+            flush(engine(store = store, deviceId = "ipad"))
+            assertEquals("Replayed", notebookOnServer(notebookId)?.title)
+            assertEquals(listOf(pageId), notebookOnServer(notebookId)?.pageIds)
+        } finally {
+            otherDb.close()
+            otherImages.deleteRecursively()
+        }
+    }
+
+    /**
+     * A notebook deleted here has to stay deleted after a pull. The tombstone is the only thing
+     * standing between the user and the notebook they deleted coming back off the server, so this
+     * follows the deletion all the way out and back.
+     */
+    @Test
+    fun a_notebook_deleted_here_stays_deleted_across_a_pull() = runBlocking {
+        val (notebookId, _) = seedNotebook("Doomed")
+        flush(engine())
+        assertNotNull(notebookOnServer(notebookId))
+
+        repository.deleteNotebookLocally(notebookId, deletedAt = Instantish.now())
+        flush(engine())
+
+        // The server holds a tombstone, not the notebook.
+        assertNull(
+            "the notebook is still live on the server",
+            runBlocking { client.getRaw(CouchDocId.notebook(notebookId)) }?.takeIf { !it.deleted },
+        )
+
+        val pulled = engine()
+        runBlocking { pulled.pull() }
+
+        assertNull(
+            "the deleted notebook came back on a pull",
+            repository.bookRepository.getById(notebookId),
+        )
+        // The local tombstone is *spent*, not kept: the server has taken the deletion, so there is
+        // nothing left to push and `RoomCouchStore.apply` clears it. What has to survive is that the
+        // notebook is gone — which the assertion above is the real statement of.
+        assertNull(
+            "nothing should still be queued for a deletion the server has taken",
+            repository.couchDeletionRepository.get(CouchDocId.notebook(notebookId)),
+        )
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    // endregion
+
+    private object Instantish {
+        fun now(): String = java.time.Instant.now().toString()
+    }
+
+    companion object {
+        private val arguments = InstrumentationRegistry.getArguments()
+
+        /**
+         * The emulator's `127.0.0.1` is the emulator, not the machine running the tests, so a URL
+         * copied from the JVM suites reaches nothing. `10.0.2.2` is the host as seen from inside,
+         * and rewriting here means one variable works for both tiers.
+         */
+        private val url: String? = arguments.getString("NOTABLE_COUCH_URL")
+            ?.takeIf { it.isNotBlank() }
+            ?.replace("//127.0.0.1:", "//10.0.2.2:")
+            ?.replace("//localhost:", "//10.0.2.2:")
+
+        private val user: String = arguments.getString("NOTABLE_COUCH_USER") ?: "sync"
+        private val password: String = arguments.getString("NOTABLE_COUCH_PASSWORD") ?: ""
+
+        /**
+         * Creating and dropping a database is the one thing here that is not something the app does,
+         * and a sync account with rights over one database answers 401 to it. Defaults to the sync
+         * account, for a server that does grant it.
+         */
+        private val adminUser: String = arguments.getString("NOTABLE_COUCH_ADMIN_USER") ?: user
+        private val adminPassword: String =
+            arguments.getString("NOTABLE_COUCH_ADMIN_PASSWORD") ?: password
+
+        fun admin(method: String, target: String, body: String? = null) {
+            val connection = (URL(target).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                val credentials = Base64.getEncoder()
+                    .encodeToString("$adminUser:$adminPassword".toByteArray())
+                setRequestProperty("Authorization", "Basic $credentials")
+                if (body != null) {
+                    setRequestProperty("Content-Type", "application/json")
+                    doOutput = true
+                }
+            }
+            try {
+                body?.let { connection.outputStream.use { out -> out.write(it.toByteArray()) } }
+                val status = connection.responseCode
+                check(status in 200..299 || status == 412) {
+                    "$method $target answered $status — set NOTABLE_COUCH_ADMIN_USER/PASSWORD"
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+}

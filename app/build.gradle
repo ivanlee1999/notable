@@ -24,6 +24,25 @@ android {
         }
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // The same CouchDB settings the JVM suites read, forwarded to the *instrumented* ones —
+        // `CouchEndToEndTest` skips itself without them, exactly as `CouchIntegrationTest` does.
+        //
+        // Runner arguments rather than environment: the test code runs in an app process on a
+        // device, which inherits nothing from the shell that started Gradle. `System.getenv` there
+        // is always null, so a suite gated on it would silently never run.
+        ['NOTABLE_COUCH_URL',
+         'NOTABLE_COUCH_USER',
+         'NOTABLE_COUCH_PASSWORD',
+         'NOTABLE_COUCH_DATABASE',
+         'NOTABLE_COUCH_ADMIN_USER',
+         'NOTABLE_COUCH_ADMIN_PASSWORD'].each { name ->
+            def value = project.findProperty(name) ?: System.getenv(name)
+            if (value != null) {
+                testInstrumentationRunnerArguments.put(name, value as String)
+            }
+        }
+
         vectorDrawables {
             useSupportLibrary = true
         }
