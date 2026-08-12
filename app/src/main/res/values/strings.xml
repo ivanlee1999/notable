@@ -157,6 +157,21 @@
     <string name="sync_couch_missing_config_hint">Enter a CouchDB URL to start syncing.</string>
     <string name="sync_couch_idle">Up to date</string>
 
+    <!-- Mass-deletion guard (protocol 6.7). The two answers must read as opposites at a glance. -->
+    <plurals name="sync_couch_held_deletions_title">
+        <item quantity="one">Holding back %1$d notebook deletion</item>
+        <item quantity="other">Holding back %1$d notebook deletions</item>
+    </plurals>
+    <string name="sync_couch_held_deletions_body">That is most of this library, and a device whose database was wiped looks exactly the same. Everything else is still syncing normally.</string>
+    <string name="sync_couch_held_deletions_confirm_button">Delete them on the server too</string>
+    <string name="sync_couch_held_deletions_discard_button">Keep them on the server</string>
+    <string name="sync_couch_held_deletions_discard_hint">This device stops trying to delete them. They are still on the server, so they will come back here on the next sync.</string>
+    <string name="sync_couch_held_deletions_confirm_title">Delete on the server?</string>
+    <plurals name="sync_couch_held_deletions_confirm_message">
+        <item quantity="one">%1$d notebook will be deleted on the server and on every device that syncs with it. This cannot be undone from here.</item>
+        <item quantity="other">%1$d notebooks will be deleted on the server and on every device that syncs with it. This cannot be undone from here.</item>
+    </plurals>
+
     <!-- Sync Field Labels -->
     <string name="sync_server_url_note">Note: \"/notable\" will be appended to your path to keep files organized.</string>
     <string name="sync_server_url_label">Server URL</string>

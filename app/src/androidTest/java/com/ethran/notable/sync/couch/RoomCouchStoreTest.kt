@@ -998,6 +998,8 @@ private fun inertCouchSync(): CouchSyncController = CouchSyncController(
         override suspend fun markUnsentDirty(): Int = 0
         override suspend fun markEverythingDirty() = Unit
         override suspend fun recordDeletion(documentId: String) = Unit
+        override suspend fun approveHeldDeletions(ids: List<String>) = Unit
+        override suspend fun discardHeldDeletions(ids: List<String>) = Unit
         override suspend fun pendingCount(): Int = 0
 
         // Null is what the interface reserves for "CouchDB is not the live backend", which is

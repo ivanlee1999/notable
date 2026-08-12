@@ -106,6 +106,20 @@ class CouchSyncControllerTest {
             synchronized(lock) { deletions += documentId }
         }
 
+        /** Ids waved past the mass-deletion guard, newest last. */
+        val approvedDeletions = mutableListOf<String>()
+
+        /** Ids whose tombstones were dropped instead of published. */
+        val discardedDeletions = mutableListOf<String>()
+
+        override suspend fun approveHeldDeletions(ids: List<String>) {
+            synchronized(lock) { approvedDeletions += ids }
+        }
+
+        override suspend fun discardHeldDeletions(ids: List<String>) {
+            synchronized(lock) { discardedDeletions += ids }
+        }
+
         /** What the durable outbox still holds; the reconnect drain reads it. */
         @Volatile
         var pending = 0
@@ -232,19 +246,22 @@ class CouchSyncControllerTest {
         assertTrue(controller.lastSyncedAt != null)
     }
 
+    private val heldIds = (0 until 12).map { "notebook:n$it" }
+
+    private fun guardedReport() = CouchSyncEngine.FlushReport(
+        stillDirty = heldIds + listOf("page:p1"),
+        heldDeletions = heldIds,
+    )
+
     /**
-     * The message has to describe what the guard does, and it counts the deletions it held back
-     * rather than the whole queue — those are different numbers, because the queue also carries the
-     * ordinary edits the guard deliberately lets through.
+     * The message has to describe what the guard does, count the deletions it held back rather than
+     * the whole queue — those are different numbers, because the queue also carries the ordinary
+     * edits the guard deliberately lets through — and point at the two answers that now exist.
      */
     @Test
     fun `the mass deletion guard surfaces as an actionable message`() {
         val backend = BackendSpy()
-        backend.flushReport = CouchSyncEngine.FlushReport(
-            stillDirty = (0 until 12).map { "notebook:n$it" } + listOf("page:p1"),
-            blockedByDeletionGuard = true,
-            deletionsHeldBack = 12,
-        )
+        backend.flushReport = guardedReport()
         val controller = controller(backend, FakeSleeper(allowedTicks = 10))
 
         runBlocking { controller.pushNow() }
@@ -255,9 +272,89 @@ class CouchSyncControllerTest {
         val message = (status as CouchSyncController.Status.Failed).message
         assertTrue("the message should name the deletions held back: $message",
             message.contains("12"))
-        // No such setting exists in either app; the message used to send the user looking for one.
-        assertFalse("the message must not promise a confirmation that does not exist: $message",
-            message.contains("Sync settings"))
+        // It used to say "delete them on your other device to confirm", because that was the only
+        // way through. Now there are two buttons, and the message has to name both of them and say
+        // where they are — a warning that describes a dead end is worse than one that offers a way
+        // out, and the words here have to be the words on the buttons.
+        assertTrue("the message should say where to answer: $message",
+            message.contains("Settings"))
+        assertTrue("the message should offer the destructive answer: $message",
+            message.contains("Delete them on the server too"))
+        assertTrue("the message should offer the reversible answer: $message",
+            message.contains("Keep them on the server"))
+    }
+
+    /** The set has to reach the UI, not just its size: both answers act on exactly these ids. */
+    @Test
+    fun `the held deletions themselves are exposed to the UI`() {
+        val backend = BackendSpy()
+        backend.flushReport = guardedReport()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        assertEquals(heldIds, controller.state.value.heldDeletions)
+    }
+
+    @Test
+    fun `confirming the held deletions approves exactly them and pushes`() {
+        val backend = BackendSpy()
+        backend.flushReport = guardedReport()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+        runBlocking { controller.pushNow() }
+        val flushesBefore = backend.flushCount
+        // The engine lets an approved batch through, so the flush this triggers reports them sent
+        // rather than held. Without saying so the spy would keep answering "still holding", which
+        // is the one thing the real engine cannot do once it has been told.
+        backend.flushReport = CouchSyncEngine.FlushReport(pushed = heldIds)
+
+        runBlocking { controller.approveHeldDeletions() }
+
+        assertEquals("only the held ids may be approved", heldIds, backend.approvedDeletions)
+        assertTrue("confirming has to actually send them", backend.flushCount > flushesBefore)
+        assertTrue(
+            "the prompt must not linger once it has been answered",
+            controller.state.value.heldDeletions.isEmpty()
+        )
+    }
+
+    /**
+     * Discarding publishes nothing, so there is no flush to report from — and the pending count has
+     * to be re-read rather than carried over, because the rows the last report counted are gone.
+     */
+    @Test
+    fun `discarding the held deletions drops them and sends nothing`() {
+        val backend = BackendSpy()
+        backend.flushReport = guardedReport()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+        runBlocking { controller.pushNow() }
+        val flushesBefore = backend.flushCount
+        backend.pending = 1
+
+        runBlocking { controller.discardHeldDeletions() }
+
+        assertEquals(heldIds, backend.discardedDeletions)
+        assertTrue("nothing is published, so nothing is pushed", backend.approvedDeletions.isEmpty())
+        assertEquals("discarding must not push", flushesBefore, backend.flushCount)
+        assertTrue(controller.state.value.heldDeletions.isEmpty())
+        assertEquals("the outbox is the count, not the stale report", 1, controller.pendingCount)
+        assertEquals(CouchSyncController.Status.Idle, controller.status)
+    }
+
+    /** Nothing held means nothing to answer: neither button may reach the backend on an empty set. */
+    @Test
+    fun `answering with nothing held does nothing at all`() {
+        val backend = BackendSpy()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking {
+            controller.approveHeldDeletions()
+            controller.discardHeldDeletions()
+        }
+
+        assertTrue(backend.approvedDeletions.isEmpty())
+        assertTrue(backend.discardedDeletions.isEmpty())
+        assertEquals(0, backend.flushCount)
     }
 
     // endregion

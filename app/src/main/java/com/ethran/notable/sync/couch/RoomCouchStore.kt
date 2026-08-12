@@ -245,6 +245,19 @@ class RoomCouchStore(
     fun pendingDeletionIds(): List<String> =
         runBlocking { appRepository.couchDeletionRepository.pendingIds() }
 
+    /**
+     * Forgets a recorded deletion the user decided not to publish — the store half of
+     * [CouchSyncEngine.discardHeldDeletions].
+     *
+     * The notebook's rows went with the tombstone, in the same transaction, so there is nothing here
+     * to restore and nothing here to re-create: dropping the row simply stops this device claiming
+     * a deletion it no longer intends. The copy on the server is untouched, which is why the
+     * notebook reappears on the next pull — the outcome the user was told about before choosing.
+     */
+    override fun discardDeletion(documentId: String) {
+        runBlocking { appRepository.couchDeletionRepository.clear(documentId) }
+    }
+
     // endregion
 
     // region The outbox
