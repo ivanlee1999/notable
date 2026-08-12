@@ -327,11 +327,17 @@ class CouchSyncController @Inject constructor(
         _state.update { current ->
             val pending = report.stillDirty.size
             when {
+                // What the guard actually does, rather than pointing at a confirmation screen that
+                // does not exist: it holds the tombstones back and lets everything else through.
+                // The one way to make the deletions stick today is to make them on the other
+                // device as well — its tombstone arrives here, the notebook is already gone, and
+                // the held id drops out of the outbox with nothing left to send.
                 report.blockedByDeletionGuard -> current.copy(
                     pendingCount = pending,
                     status = Status.Failed(
-                        "Refusing to delete $pending notebooks at once. " +
-                            "If that is really what you want, confirm in Sync settings."
+                        "Holding back ${report.deletionsHeldBack} notebook deletions — that is " +
+                            "most of this library, and a wiped device looks the same. Everything " +
+                            "else still syncs; delete them on your other device to confirm."
                     ),
                 )
 
@@ -356,9 +362,12 @@ class CouchSyncController @Inject constructor(
      */
     private fun logFlush(report: CouchSyncEngine.FlushReport) {
         if (report.blockedByDeletionGuard) {
+            // `deletionsHeldBack`, not `stillDirty.size`: the queue also holds whatever else was
+            // waiting, and only the tombstones were refused.
             SyncLogger.w(
                 TAG,
-                "Push refused by the mass-deletion guard: ${report.stillDirty.size} deletions at once"
+                "Push held back by the mass-deletion guard: " +
+                    "${report.deletionsHeldBack} notebook deletions at once"
             )
             return
         }
