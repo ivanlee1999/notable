@@ -176,9 +176,13 @@ class PageView(
     val minZoom: Float
         get() = PageViewportBounds.minZoom(fitToWidthZoom, hasHardBounds)
 
-    /** The zoom to open a page at (and to return to on "reset view"): fitted to the sheet. */
+    /**
+     * The zoom to open a page at: the one it was left at this session, or the fit. Held inside the
+     * same bounds every other zoom goes through, so a page cannot be entered at a zoom a pinch
+     * could never have reached.
+     */
     private fun initialZoom(): Float =
-        pageDataManager.getPageZoom(currentPageId, fitToWidthZoom).coerceAtLeast(minZoom)
+        pageDataManager.getPageZoom(currentPageId, fitToWidthZoom).coerceIn(minZoom, MAX_ZOOM)
 
 
 //    private var dbStrokes = appRepository.strokeRepository
