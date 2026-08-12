@@ -92,4 +92,8 @@ jobs:
             - **Branch:** `${{ github.ref_name }}`
             - **Commit:** `${{ github.sha }}`
             - **Build Date:** $(date +'%Y-%m-%d %H:%M')
-          token: ${{ secrets.TOKEN }}
+          # Fall back to the automatic GITHUB_TOKEN, which `permissions: contents: write` above
+          # already scopes for creating releases. There is no TOKEN secret on this repo, so the
+          # action was handed an empty string and failed the whole job with
+          # "Parameter token or opts.auth is required". release.yml already does this.
+          token: ${{ secrets.TOKEN || github.token }}
