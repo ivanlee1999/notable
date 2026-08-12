@@ -281,6 +281,7 @@
     <string name="details_notebook_buttons_sync">Sync now</string>
     <string name="sync_manual_queued">Syncing this notebook…</string>
     <string name="sync_manual_queued_all">Syncing — CouchDB syncs all notes together</string>
+    <string name="sync_manual_queued_library">Syncing all notes…</string>
     <string name="sync_manual_backend_off">Sync is turned off. Pick a backend in Settings ▸ Sync.</string>
     <string name="sync_manual_webdav_disabled">WebDAV sync is switched off in Settings ▸ Sync.</string>
     <string name="sync_manual_couch_unconfigured">CouchDB needs a server URL and database in Settings ▸ Sync.</string>
