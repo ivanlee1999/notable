@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit
  * Which device this invocation is playing. `boox` — notable's own role in the cross-app run — unless
  * the driver says otherwise, so bopa's `scripts/couch-scenarios.sh` is unaffected.
  *
- * The override exists because every one of the 22 scenarios has an iPad step, so notable's half
+ * The override exists because every one of the shared scenarios has an iPad step, so notable's half
  * cannot be run at all without a peer: with no bopa checkout the whole suite is unrunnable rather
  * than partly runnable. Notable's harness happens to implement a superset of the ops the iPad steps
  * use, so pointing a second invocation at `ipad` lets one checkout drive both sides through a real
@@ -219,6 +219,7 @@ private class ScenarioDevice(
                     ),
                 )
                 markDirty(docId(op))
+                bumpOwningNotebook(page, at)
             }
 
             "erase" -> {
@@ -501,6 +502,27 @@ private class ScenarioDevice(
         if (documentId !in persisted.dirty) {
             persisted = persisted.copy(dirty = persisted.dirty + documentId)
         }
+    }
+
+    /**
+     * What the real save path does on every stroke: `PageDataManager.bumpEditTimestamps` advances
+     * the owning notebook's `updatedAt` alongside the page's, and `BookRepository.update` queues the
+     * manifest in the same transaction. bopa's `NotebookStore.savePage` does the same, and protocol
+     * §5.5 makes it a MUST for the runners because a notebook's `updatedAt` doubles as *liveness*:
+     * §6.4 reads it to decide whether a later edit resurrects a deleted notebook.
+     *
+     * A `draw` that wrote only the page would model the app less faithfully than the app behaves,
+     * and would report `ink-only-edit-resurrects` — a stroke made after a deletion, with no rename
+     * to carry the notebook's timestamp for it — as a failure while the product is correct.
+     */
+    private fun bumpOwningNotebook(page: CouchPage, at: String) {
+        val notebookDocId = CouchDocId.notebook(page.notebookId ?: return)
+        val body = store.load(notebookDocId) as? CouchDocBody.Notebook ?: return
+        store.set(
+            notebookDocId,
+            CouchDocBody.Notebook(body.notebook.copy(updatedAt = at, updatedBy = DEVICE_ID)),
+        )
+        markDirty(notebookDocId)
     }
 
     private fun save() {
