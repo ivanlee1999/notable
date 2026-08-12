@@ -9,8 +9,10 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.withTransaction
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.Flow
 import java.util.Date
@@ -92,9 +94,20 @@ interface NotebookDao {
     suspend fun delete(id: String)
 }
 
+/**
+ * Every mutating method here writes its rows **and** its [CouchOutbox] entries inside one
+ * transaction. Queueing used to be the caller's job, done at the UI call site next to the write,
+ * which meant two things could go wrong and both did: a new call site could simply forget, and even
+ * one that remembered could be killed between persisting the notebook and persisting the intent to
+ * send it. Both failures look identical from the outside — a change that is on the device and never
+ * on the peer — and neither is recoverable, because a document the server has already seen once is
+ * invisible to the "never sent" scan.
+ */
 class BookRepository @Inject constructor(
     private val notebookDao: NotebookDao,
-    private val pageDao: PageDao
+    private val pageDao: PageDao,
+    private val outbox: CouchOutboxRepository,
+    private val database: AppDatabase,
 ) {
     private val log = ShipBook.getLogger("BookRepository")
 
@@ -107,7 +120,6 @@ class BookRepository @Inject constructor(
     }
 
     suspend fun create(notebook: Notebook) {
-        notebookDao.create(notebook)
         val page = Page(
             notebookId = notebook.id,
             background = notebook.defaultBackground,
@@ -115,28 +127,47 @@ class BookRepository @Inject constructor(
             pageWidth = notebook.defaultPageWidth,
             pageHeight = notebook.defaultPageHeight
         )
-        pageDao.create(page)
+        database.withTransaction {
+            notebookDao.create(notebook)
+            pageDao.create(page)
 
-        notebookDao.setPageIds(notebook.id, listOf(page.id), Date())
-        notebookDao.setOpenPageId(notebook.id, page.id)
+            notebookDao.setPageIds(notebook.id, listOf(page.id), Date())
+            notebookDao.setOpenPageId(notebook.id, page.id)
+            // Both documents, not just the notebook. The initial page is created here and nothing
+            // else is ever going to touch it, so queueing the manifest alone shipped a notebook
+            // naming a page the server had never been offered.
+            outbox.queue(listOf(CouchDocId.notebook(notebook.id), CouchDocId.page(page.id)))
+        }
     }
 
     suspend fun createEmpty(notebook: Notebook) {
-        notebookDao.create(notebook)
+        database.withTransaction {
+            notebookDao.create(notebook)
+            outbox.queue(CouchDocId.notebook(notebook.id))
+        }
     }
 
     suspend fun update(notebook: Notebook) {
         log.i("updating DB")
         val updatedNotebook = notebook.copy(updatedAt = Date())
-        notebookDao.update(updatedNotebook)
+        database.withTransaction {
+            notebookDao.update(updatedNotebook)
+            outbox.queue(CouchDocId.notebook(updatedNotebook.id))
+        }
     }
 
     /**
      * Write the notebook exactly as given, unlike [update], which stamps `updatedAt = now()`.
      * Used during sync when downloading from server, to keep the remote timestamp.
+     *
+     * It queues anyway: on the download path [RemoteApply] suppresses that, so the call is inert
+     * where it is actually used, and any future caller gets the safe behaviour rather than silence.
      */
     suspend fun updateVerbatim(notebook: Notebook) {
-        notebookDao.update(notebook)
+        database.withTransaction {
+            notebookDao.update(notebook)
+            outbox.queue(CouchDocId.notebook(notebook.id))
+        }
     }
 
     fun getAllInFolder(folderId: String? = null): LiveData<List<Notebook>> {
@@ -151,42 +182,61 @@ class BookRepository @Inject constructor(
         return notebookDao.getByIdLive(notebookId)
     }
 
+    /**
+     * Which page you had open is a fact about this device, not about the notebook: it is not part
+     * of the synced document — `RoomCouchStore.applyNotebook` carries the local value across every
+     * incoming change — so this queues nothing.
+     */
     suspend fun setOpenPageId(id: String, pageId: String) {
         notebookDao.setOpenPageId(id, pageId)
     }
 
     suspend fun addPage(bookId: String, pageId: String, index: Int? = null) {
-        val notebook = notebookDao.getById(bookId) ?: return
-        val pageIds = notebook.pageIds.toMutableList()
-        if (index != null) pageIds.add(index, pageId)
-        else pageIds.add(pageId)
-        notebookDao.setPageIds(bookId, pageIds, Date())
+        database.withTransaction {
+            val notebook = notebookDao.getById(bookId) ?: return@withTransaction
+            val pageIds = notebook.pageIds.toMutableList()
+            if (index != null) pageIds.add(index, pageId)
+            else pageIds.add(pageId)
+            notebookDao.setPageIds(bookId, pageIds, Date())
+            outbox.queue(listOf(CouchDocId.notebook(bookId), CouchDocId.page(pageId)))
+        }
     }
 
     suspend fun removePage(id: String, pageId: String) {
-        val notebook = notebookDao.getById(id) ?: return
-        val updatedNotebook = notebook.copy(
-            // remove the page
-            pageIds = notebook.pageIds.filterNot { it == pageId },
-            // remove the "open page" if it's the one
-            openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId,
-            // a structural change marks the notebook dirty for sync
-            updatedAt = Date()
-        )
-        notebookDao.update(updatedNotebook)
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val updatedNotebook = notebook.copy(
+                // remove the page
+                pageIds = notebook.pageIds.filterNot { it == pageId },
+                // remove the "open page" if it's the one
+                openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId,
+                // a structural change marks the notebook dirty for sync
+                updatedAt = Date()
+            )
+            notebookDao.update(updatedNotebook)
+            // Only the notebook. The removal travels inside its manifest and `deletedPageIds`
+            // (protocol §6.6); the page document itself is on its way out, so offering it would
+            // push a document the manifest no longer names.
+            outbox.queue(CouchDocId.notebook(id))
+        }
         log.i("Cleaned $id $pageId")
     }
 
     suspend fun changePageIndex(id: String, pageId: String, index: Int) {
-        val notebook = notebookDao.getById(id) ?: return
-        val pageIds = notebook.pageIds.toMutableList()
-        var correctedIndex = index
-        if (correctedIndex < 0) correctedIndex = 0
-        if (correctedIndex > pageIds.size - 1) correctedIndex = pageIds.size - 1
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val pageIds = notebook.pageIds.toMutableList()
+            var correctedIndex = index
+            if (correctedIndex < 0) correctedIndex = 0
+            if (correctedIndex > pageIds.size - 1) correctedIndex = pageIds.size - 1
 
-        pageIds.remove(pageId)
-        pageIds.add(correctedIndex, pageId)
-        notebookDao.setPageIds(id, pageIds, Date())
+            pageIds.remove(pageId)
+            pageIds.add(correctedIndex, pageId)
+            notebookDao.setPageIds(id, pageIds, Date())
+            // A reorder is the case the "never sent" scan can never rescue: the notebook is one the
+            // server already holds, so nothing about it looks unsent, and only the order changed.
+            outbox.queue(CouchDocId.notebook(id))
+        }
     }
 
     suspend fun getPageIndex(id: String, pageId: String): Int? {
@@ -203,6 +253,13 @@ class BookRepository @Inject constructor(
         return pageIds[index]
     }
 
+    /**
+     * Removes the rows only. Deleting queues nothing, because an outbox entry for a notebook with
+     * no tombstone beside it resolves to "nothing to send" — absence is not a fact the peer can
+     * read. A deletion the user made goes through [com.ethran.notable.data.AppRepository
+     * .deleteNotebookLocally], which writes the tombstone and the outbox entry in one transaction
+     * with this delete.
+     */
     suspend fun delete(id: String) {
         notebookDao.delete(id)
     }

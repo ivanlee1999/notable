@@ -88,10 +88,10 @@ fun NotebookConfigDialog(
     val kvProxy = rememberKvProxy()
     val context = LocalContext.current
 
-    // Every write below changes the notebook document, and CouchDB only ever learns about a change
-    // that was queued — its outbox is fed by explicit calls, not by watching the database. Pairing
-    // the two here rather than at each call site is the point: the same discipline applied
-    // per-site is what left renames, moves and template changes unsynced in the first place.
+    // `update` records the outbox entry in the same transaction as the row, so every write below
+    // is durably queued whether or not anything here remembers to say so. The call after it is
+    // what makes the push prompt — it starts the debounce and moves the badge — rather than what
+    // makes it happen at all.
     val saveBook: suspend (Notebook) -> Unit = { updated ->
         bookRepository.update(updated)
         couchSync.noteDocumentChanged(CouchDocId.notebook(updated.id))

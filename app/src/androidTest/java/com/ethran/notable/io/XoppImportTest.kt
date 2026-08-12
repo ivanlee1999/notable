@@ -32,8 +32,8 @@ class XoppImportTest {
         db = TestDatabaseFactory.createInMemory(context)
 
         // Manual DI for a focused integration test
-        val pageRepo = PageRepository(db.pageDao())
-        val bookRepo = BookRepository(db.notebookDao(), db.pageDao())
+        val pageRepo = PageRepository(db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
+        val bookRepo = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
         val strokeRepo = StrokeRepository(db.strokeDao())
         val imageRepo = ImageRepository(db.ImageDao())
         val appEventBus = DefaultAppEventBus()

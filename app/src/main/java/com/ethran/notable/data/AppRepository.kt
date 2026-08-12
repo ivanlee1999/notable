@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.DeletedImageRepository
 import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
@@ -44,6 +45,7 @@ class AppRepository @Inject constructor(
     val deletedPageRepository: DeletedPageRepository,
     val deletedImageRepository: DeletedImageRepository,
     val couchDeletionRepository: CouchDeletionRepository,
+    val couchOutboxRepository: CouchOutboxRepository,
     val kvProxy: KvProxy,
     private val db: AppDatabase
 ) {
@@ -103,12 +105,16 @@ class AppRepository @Inject constructor(
         val index = getNextPageIdFromBookAndPage(notebookId, pageId)
         if (index != null)
             return index
-        val book = bookRepository.getById(notebookId = notebookId)
-        // creating a new page
-        val page = book!!.newPage()
-        pageRepository.create(page)
-        bookRepository.addPage(notebookId, page.id)
-        return page.id
+        // One transaction: turning the last page creates a page *and* moves the notebook's
+        // manifest, and a crash between the two leaves a page nothing points at.
+        return db.withTransaction {
+            val book = bookRepository.getById(notebookId = notebookId)
+            // creating a new page
+            val page = book!!.newPage()
+            pageRepository.create(page)
+            bookRepository.addPage(notebookId, page.id)
+            page.id
+        }
     }
 
     suspend fun getNextPageIdFromBookAndPage(
@@ -146,31 +152,35 @@ class AppRepository @Inject constructor(
             createdAt = Date(),
             updatedAt = Date()
         )
-        pageRepository.create(duplicatedPage)
-        strokeRepository.create(pageWithData.strokes.map {
-            it.copy(
-                id = UUID.randomUUID().toString(),
-                pageId = duplicatedPage.id,
-                updatedAt = Date(),
-                createdAt = Date()
-            )
-        })
-        imageRepository.create(pageWithData.images.map {
-            it.copy(
-                id = UUID.randomUUID().toString(),
-                pageId = duplicatedPage.id,
-                updatedAt = Date(),
-                createdAt = Date()
-            )
-        })
-        val notebookId = pageWithData.page.notebookId
-        if (notebookId != null) {
-            val book = bookRepository.getById(notebookId) ?: return
-            val pageIndex = book.getPageIndex(pageWithData.page.id)
-            if (pageIndex == -1) return
-            val pageIds = book.pageIds.toMutableList()
-            pageIds.add(pageIndex + 1, duplicatedPage.id)
-            bookRepository.update(book.copy(pageIds = pageIds))
+        // One transaction, so the duplicate and the manifest that names it are either both here or
+        // neither is — and so their outbox entries land with them rather than after them.
+        db.withTransaction {
+            pageRepository.create(duplicatedPage)
+            strokeRepository.create(pageWithData.strokes.map {
+                it.copy(
+                    id = UUID.randomUUID().toString(),
+                    pageId = duplicatedPage.id,
+                    updatedAt = Date(),
+                    createdAt = Date()
+                )
+            })
+            imageRepository.create(pageWithData.images.map {
+                it.copy(
+                    id = UUID.randomUUID().toString(),
+                    pageId = duplicatedPage.id,
+                    updatedAt = Date(),
+                    createdAt = Date()
+                )
+            })
+            val notebookId = pageWithData.page.notebookId
+            if (notebookId != null) {
+                val book = bookRepository.getById(notebookId) ?: return@withTransaction
+                val pageIndex = book.getPageIndex(pageWithData.page.id)
+                if (pageIndex == -1) return@withTransaction
+                val pageIds = book.pageIds.toMutableList()
+                pageIds.add(pageIndex + 1, duplicatedPage.id)
+                bookRepository.update(book.copy(pageIds = pageIds))
+            }
         }
     }
 
@@ -218,12 +228,16 @@ class AppRepository @Inject constructor(
 
     suspend fun newPageInBook(notebookId: String, index: Int = 0): String? {
         try {
-            val book = bookRepository.getById(notebookId)
-                ?: return null
-            val page = book.newPage()
-            pageRepository.create(page)
-            bookRepository.addPage(notebookId, page.id, index)
-            return page.id
+            // Both writes and both outbox entries together: adding a blank page changes the page
+            // *and* the notebook's page list, and until now it queued neither.
+            return db.withTransaction {
+                val book = bookRepository.getById(notebookId)
+                    ?: return@withTransaction null
+                val page = book.newPage()
+                pageRepository.create(page)
+                bookRepository.addPage(notebookId, page.id, index)
+                page.id
+            }
         } catch (e: Exception) {
             log.e("Failed to create page in book: ${e.message}")
             return null

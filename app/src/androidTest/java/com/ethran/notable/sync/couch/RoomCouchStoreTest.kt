@@ -10,6 +10,7 @@ import com.ethran.notable.data.BackgroundFileWatcher
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedImageRepository
 import com.ethran.notable.data.db.DeletedPageRepository
@@ -98,17 +99,18 @@ class RoomCouchStoreTest {
     // region Fixtures
 
     private fun repositoryFor(db: AppDatabase) = AppRepository(
-        bookRepository = BookRepository(db.notebookDao(), db.pageDao()),
-        pageRepository = PageRepository(db.pageDao()),
+        bookRepository = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
+        pageRepository = PageRepository(db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
         strokeRepository = StrokeRepository(db.strokeDao()),
         imageRepository = ImageRepository(db.ImageDao()),
-        folderRepository = FolderRepository(db.folderDao()),
+        folderRepository = FolderRepository(db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db),
         notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao()),
         pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao()),
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
         deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
+        couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
     )

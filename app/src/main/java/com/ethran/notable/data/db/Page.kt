@@ -12,7 +12,9 @@ import androidx.room.Query
 import androidx.room.Relation
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.withTransaction
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.Log
 import java.util.Date
@@ -111,13 +113,41 @@ interface PageDao {
     suspend fun delete(pageId: String)
 }
 
+/**
+ * Like [BookRepository], every mutating method writes its row and its [CouchOutbox] entries in one
+ * transaction, so a change cannot exist on disk without the record that it has to be sent.
+ */
 class PageRepository @Inject constructor(
-    private val db: PageDao
+    private val db: PageDao,
+    private val outbox: CouchOutboxRepository,
+    private val database: AppDatabase,
 ) {
-    suspend fun create(page: Page): Long {
-        return db.create(page)
+    /**
+     * Queues the page **and** the notebook that owns it — the rule `CouchSyncHost.markPageDirty`
+     * already applied and the reason it gives: the notebook's `pageIds` manifest and its
+     * `updatedAt` moved with the page, so a page pushed alone lands on the peer as a document no
+     * manifest names.
+     *
+     * A page outside a notebook is still queued on its own, which is what `markPageDirty` does for
+     * a quick page today.
+     */
+    private suspend fun queuePage(pageId: String, notebookId: String?) {
+        val ids = mutableListOf(CouchDocId.page(pageId))
+        if (notebookId != null) ids += CouchDocId.notebook(notebookId)
+        outbox.queue(ids)
     }
 
+    suspend fun create(page: Page): Long = database.withTransaction {
+        val rowId = db.create(page)
+        queuePage(page.id, page.notebookId)
+        rowId
+    }
+
+    /**
+     * Scroll position is device-local and deliberately not part of the synced document (see
+     * `RoomCouchStore.applyPage`, which carries the local value across every incoming change), so
+     * this queues nothing — otherwise reading a notebook would push as often as drawing in one.
+     */
     suspend fun updateScroll(id: String, scroll: Int) {
         return db.updateScroll(id, scroll)
     }
@@ -128,13 +158,21 @@ class PageRepository @Inject constructor(
      */
     suspend fun rename(pageId: String, title: String?) {
         if (pageId.isEmpty()) return
-        db.updateTitle(pageId, title, System.currentTimeMillis())
+        database.withTransaction {
+            db.updateTitle(pageId, title, System.currentTimeMillis())
+            // Read back rather than taken from the caller: the rename menu knows a page id and
+            // nothing else, and the notebook has to travel with it.
+            queuePage(pageId, db.getById(pageId)?.notebookId)
+        }
     }
 
     /** Advance a page's edit timestamp — the per-page dirty signal for incremental sync. */
     suspend fun touchUpdatedAt(pageId: String, updatedAt: Long = System.currentTimeMillis()) {
         if (pageId.isEmpty()) return
-        db.touchUpdatedAt(pageId, updatedAt)
+        database.withTransaction {
+            db.touchUpdatedAt(pageId, updatedAt)
+            queuePage(pageId, db.getById(pageId)?.notebookId)
+        }
     }
 
     suspend fun getById(pageId: String): Page? {
@@ -174,11 +212,22 @@ class PageRepository @Inject constructor(
     }
 
     suspend fun update(page: Page) {
-        return db.update(page)
+        database.withTransaction {
+            db.update(page)
+            // This is also the only write behind a background-only change, which changes no ink and
+            // so was never queued by any drawing path.
+            queuePage(page.id, page.notebookId)
+        }
     }
 
     suspend fun delete(pageId: String) {
-        return db.delete(pageId)
+        database.withTransaction {
+            // Read before the delete: afterwards there is no row left to ask which notebook owned
+            // it, and the notebook is the document that actually carries the removal.
+            val notebookId = db.getById(pageId)?.notebookId
+            db.delete(pageId)
+            if (notebookId != null) outbox.queue(CouchDocId.notebook(notebookId))
+        }
     }
 
 

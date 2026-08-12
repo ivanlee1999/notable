@@ -9,6 +9,7 @@ import com.ethran.notable.data.datastore.EditorSettingCacheManager
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedImageRepository
 import com.ethran.notable.data.db.DeletedPageRepository
@@ -65,11 +66,11 @@ class EditorSimpleStateTests {
     }
 
     private fun createEditorViewModelForTest(context: Context, db: AppDatabase): EditorViewModel {
-        val bookRepository = BookRepository(db.notebookDao(), db.pageDao())
-        val pageRepository = PageRepository(db.pageDao())
+        val bookRepository = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
+        val pageRepository = PageRepository(db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
         val strokeRepository = StrokeRepository(db.strokeDao())
         val imageRepository = ImageRepository(db.ImageDao())
-        val folderRepository = FolderRepository(db.folderDao())
+        val folderRepository = FolderRepository(db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
 
         val kvRepository = KvRepository(db.kvDao(), context)
         val kvProxy = KvProxy(kvRepository, CryptoHelper())
@@ -88,6 +89,7 @@ class EditorSimpleStateTests {
             deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
             deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
             couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
+            couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
             kvProxy = kvProxy,
             db = db,
         )
