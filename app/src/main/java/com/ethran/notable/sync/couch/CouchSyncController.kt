@@ -164,20 +164,49 @@ class CouchSyncController @Inject constructor(
          * outbox happens to hold by the time the user taps.
          */
         val heldDeletions: List<String> = emptyList(),
+        /**
+         * How far this device's clock is from the server's, signed, in seconds — or null when the
+         * difference is too small to matter or the server did not say. See
+         * [CouchDbClient.clockSkewSeconds].
+         */
+        val clockSkewSeconds: Long? = null,
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
 
+        /**
+         * The clock warning, or null. Non-fatal by construction: it is never a [Status], so nothing
+         * can mistake it for a reason a sync did not happen.
+         *
+         * Says which direction and roughly how much, because that is what makes it actionable —
+         * "your clock is wrong" sends someone looking at the wrong device half the time, while
+         * "eight minutes ahead of the server" is something they can go and check.
+         */
+        val clockSkewWarning: String?
+            get() = clockSkewSeconds?.let { skew ->
+                val minutes = (kotlin.math.abs(skew) + 30) / 60
+                val direction = if (skew > 0) "ahead of" else "behind"
+                "This device's clock is about $minutes minute${if (minutes == 1L) "" else "s"} " +
+                    "$direction the sync server's. Edits and deletions are compared by time, so " +
+                    "the wrong one can win until the clocks agree."
+            }
+
         /** One-line status for the settings footer. */
         val detail: String?
-            get() = when (status) {
-                is Status.Syncing -> "Syncing…"
-                is Status.Failed -> {
-                    val message = status.message
-                    if (pendingCount > 0) "$message $pendingCount waiting to sync." else message
-                }
+            get() {
+                val line = when (status) {
+                    is Status.Syncing -> "Syncing…"
+                    is Status.Failed -> {
+                        val message = status.message
+                        if (pendingCount > 0) "$message $pendingCount waiting to sync." else message
+                    }
 
-                is Status.Idle ->
-                    if (pendingCount > 0) "$pendingCount waiting to sync" else null
+                    is Status.Idle ->
+                        if (pendingCount > 0) "$pendingCount waiting to sync" else null
+                }
+                // Appended rather than substituted: sync is working, and the caption still has to
+                // say so. The warning is extra information about *how well*, not a replacement for
+                // what happened.
+                return listOfNotNull(line, clockSkewWarning).joinToString(" ").ifEmpty { null }
             }
     }
 
@@ -345,6 +374,7 @@ class CouchSyncController @Inject constructor(
             return@withLock
         }
         logFlush(report)
+        noteClockSkew(report.clockSkewSeconds)
         _state.update { current ->
             val pending = report.stillDirty.size
             val held = report.heldDeletions
@@ -576,6 +606,7 @@ class CouchSyncController @Inject constructor(
 
     private fun apply(report: CouchSyncEngine.PullReport) {
         logPull(report)
+        noteClockSkew(report.clockSkewSeconds)
         _state.update { current ->
             current.copy(
                 // A pull that returned at all clears any previous failure: the server is
@@ -612,6 +643,33 @@ class CouchSyncController @Inject constructor(
             SyncLogger.d(TAG, "Received: ${report.applied.joinToString(", ")}")
         }
     }
+
+    /**
+     * Records what the server's `Date` header said about this device's clock, and writes it down
+     * once per change rather than once per request.
+     *
+     * The change-feed loop makes a request roughly every minute, forever, so logging every reading
+     * would bury the sync log under the same sentence — and the log is read precisely to find the
+     * *other* lines. A skew that clears itself is worth a line too, since "your clock was wrong"
+     * with no follow-up leaves the reader unsure whether it still is.
+     *
+     * Never a [Status]: significant skew is a warning that rides alongside a sync that worked.
+     */
+    private fun noteClockSkew(skewSeconds: Long?) {
+        val previous = _state.value.clockSkewSeconds
+        _state.update { it.copy(clockSkewSeconds = skewSeconds) }
+        val warning = _state.value.clockSkewWarning
+        when {
+            warning != null && warning != lastLoggedClockSkew -> SyncLogger.w(TAG, warning)
+            warning == null && previous != null ->
+                SyncLogger.i(TAG, "This device's clock now agrees with the sync server's.")
+        }
+        lastLoggedClockSkew = warning
+    }
+
+    /** The last skew sentence written to the log, so an unchanged one is not written again. */
+    @Volatile
+    private var lastLoggedClockSkew: String? = null
 
     /**
      * Runs a fire-and-forget pump body, turning any failure into reported state.

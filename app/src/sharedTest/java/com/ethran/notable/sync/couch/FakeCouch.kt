@@ -43,6 +43,18 @@ class FakeCouchTransport : CouchTransport {
     /** When set, every request throws — the offline case. */
     var isOffline = false
 
+    /**
+     * The `Date` header every response carries, verbatim.
+     *
+     * Null by default, which is a server behind a proxy that strips it — and, more importantly, is
+     * what every test that does not care about clocks should see, since a header saying "now" would
+     * quietly make them all assert the absence of skew as a side effect.
+     *
+     * Set to a raw string rather than an instant so a test can serve a malformed one, which the
+     * client has to treat as no information rather than as an error.
+     */
+    var dateHeader: String? = null
+
     /** Forces a status for documents whose id is listed, for failure injection. */
     val failingDocumentIds = mutableMapOf<String, Int>()
 
@@ -58,7 +70,22 @@ class FakeCouchTransport : CouchTransport {
     private val log = mutableListOf<Pair<String, String>>()
     val requestLog: List<Pair<String, String>> get() = synchronized(lock) { log.toList() }
 
-    override fun send(request: CouchRequest): CouchResponse = synchronized(lock) {
+    /**
+     * Stamps [dateHeader] onto whatever the handler produced, the way a real origin server does:
+     * on every response, whatever its status. A header already set by the handler wins, because
+     * only the attachment path sets one and it is not a `Date`.
+     */
+    override fun send(request: CouchRequest): CouchResponse {
+        val response = handle(request)
+        val date = dateHeader ?: return response
+        return CouchResponse(
+            status = response.status,
+            headers = response.headers + ("Date" to date),
+            body = response.body,
+        )
+    }
+
+    private fun handle(request: CouchRequest): CouchResponse = synchronized(lock) {
         if (isOffline) throw IOException("not connected to the internet")
         log += request.method to request.path
 
