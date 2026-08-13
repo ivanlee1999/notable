@@ -23,6 +23,7 @@ import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.data.db.PageSyncStateRepository
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.testing.TestDatabaseFactory
+import com.ethran.notable.testing.trashRepositoryFor
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.After
@@ -124,6 +125,7 @@ class CouchEndToEndTest {
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+        trashRepository = trashRepositoryFor(db),
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
     )
