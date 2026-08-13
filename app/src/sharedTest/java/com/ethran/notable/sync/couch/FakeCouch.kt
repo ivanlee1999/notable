@@ -317,6 +317,25 @@ class FakeCouchTransport : CouchTransport {
         seedRaw(documentId, couchJson.encodeToJsonElement(serializer, body).jsonObject, deleted)
     }
 
+    /**
+     * Serves different bytes under a content-addressed id than the ones that named it — a
+     * truncating proxy, a mis-served range, a corrupted store on the far side. Nothing a
+     * well-behaved CouchDB does, and exactly what the digest check exists to catch.
+     */
+    fun replaceAttachment(documentId: String, bytes: ByteArray) = synchronized(lock) {
+        val doc = docs[documentId] ?: return@synchronized
+        val existing = doc.attachments[CouchAssetId.BLOB_NAME]
+        docs[documentId] = doc.copy(
+            attachments = doc.attachments + (
+                CouchAssetId.BLOB_NAME to Attachment(
+                    contentType = existing?.contentType ?: "application/octet-stream",
+                    bytes = bytes,
+                )
+                ),
+        )
+        Unit
+    }
+
     /** Writes arbitrary JSON, for documents the engine is meant to fail to understand. */
     fun seedRaw(documentId: String, json: JsonObject, deleted: Boolean = false) =
         synchronized(lock) {
@@ -371,6 +390,15 @@ class FakeLocalStore : CouchLocalStore {
     /** Runs on the next [load], to model the editor writing while a merge is in flight. */
     var onLoad: (() -> Unit)? = null
 
+    /** Ids whose writes throw — a device out of space, a row the database will not open. */
+    private val unwritable = mutableSetOf<String>()
+
+    fun failWrites(documentId: String) {
+        unwritable += documentId
+    }
+
+    class WriteRefused : Exception("the store refused to write")
+
     override fun allDocumentIds(): List<String> = documents.keys.sorted()
 
 
@@ -394,6 +422,7 @@ class FakeLocalStore : CouchLocalStore {
      * silently drop ink drawn during the round trip — and would hide that bug from these tests.
      */
     override fun apply(documentId: String, body: CouchDocBody, basedOn: CouchDocBody?) {
+        if (documentId in unwritable) throw WriteRefused()
         val current = documents[documentId]
         if (body is CouchDocBody.Notebook) {
             // Merged-in tombstones are recorded, not just applied: a store that dropped them would

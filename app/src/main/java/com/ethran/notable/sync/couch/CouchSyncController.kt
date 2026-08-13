@@ -171,8 +171,37 @@ class CouchSyncController @Inject constructor(
          * [CouchDbClient.clockSkewSeconds].
          */
         val clockSkewSeconds: Long? = null,
+        /** Referenced images the last pull could not bring down; see [assetWarning]. */
+        val waitingImages: Int = 0,
+        /** Of those, the ones whose bytes did not match the id that named them. */
+        val unverifiedImages: Int = 0,
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
+
+        /**
+         * Images that have not arrived, or null. Non-fatal by construction, like
+         * [clockSkewWarning]: it is never a [Status], so nothing can mistake it for a reason a sync
+         * did not happen.
+         *
+         * Saying "notes and ink are synced" is the point of the sentence. Without it, a gap where a
+         * picture belongs reads as a broken sync — and the two things people then try, waiting and
+         * re-downloading the library, are the two things that will not help.
+         */
+        val assetWarning: String?
+            get() = when {
+                unverifiedImages > 0 -> {
+                    val plural = if (unverifiedImages == 1) "" else "s"
+                    "$unverifiedImages image$plural could not be verified and will be retried. " +
+                        "Notes and ink are synced."
+                }
+
+                waitingImages > 0 -> {
+                    val plural = if (waitingImages == 1) "" else "s"
+                    "$waitingImages image$plural still downloading. Notes and ink are synced."
+                }
+
+                else -> null
+            }
 
         /**
          * The clock warning, or null. Non-fatal by construction: it is never a [Status], so nothing
@@ -207,7 +236,8 @@ class CouchSyncController @Inject constructor(
                 // Appended rather than substituted: sync is working, and the caption still has to
                 // say so. The warning is extra information about *how well*, not a replacement for
                 // what happened.
-                return listOfNotNull(line, clockSkewWarning).joinToString(" ").ifEmpty { null }
+                return listOfNotNull(line, assetWarning, clockSkewWarning)
+                    .joinToString(" ").ifEmpty { null }
             }
     }
 
@@ -688,6 +718,9 @@ class CouchSyncController @Inject constructor(
     private fun apply(report: CouchSyncEngine.PullReport) {
         logPull(report)
         noteClockSkew(report.clockSkewSeconds)
+        for ((assetId, reason) in report.assetFailures) {
+            SyncLogger.w("CouchSync", "asset $assetId unavailable: $reason")
+        }
         _state.update { current ->
             current.copy(
                 // A pull that returned at all clears any previous failure: the server is
@@ -698,6 +731,16 @@ class CouchSyncController @Inject constructor(
                 conflictCopies =
                     if (report.conflictCopies.isEmpty()) current.conflictCopies
                     else current.conflictCopies + report.conflictCopies,
+                // Assigned from each report, never accumulated: the sets are derived from the
+                // store's own list of what is still owed, so a blob that lands on a later pull
+                // clears the warning without anything having to remember it was set.
+                // A corrupt asset is recorded in both `corruptAssets` and `assetFailures`, so it is
+                // subtracted back out here rather than counted twice. A 404 is only in
+                // `missingAssets` — it is not a failure, it is a peer that has not finished
+                // uploading.
+                waitingImages = report.missingAssets.size +
+                    (report.assetFailures.size - report.corruptAssets.size).coerceAtLeast(0),
+                unverifiedImages = report.corruptAssets.size,
             )
         }
     }

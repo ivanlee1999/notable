@@ -10,6 +10,7 @@ import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -837,6 +838,110 @@ class CouchSyncEngineTest {
 
         server.failingDocumentIds.clear()
         assertEquals(listOf(pictureId), boox.pull().fetchedAssets)
+    }
+
+    // All five of the cases below used to be one bare `continue`, so the pull reported success and
+    // the page simply had a hole in it. They stay non-fatal — the ink is applied, and an image on
+    // its way is a picture that has not appeared yet — but the pull now says which one happened.
+
+    /**
+     * The commonest case, and the one that resolves itself: a peer wrote the page before its bytes
+     * finished uploading.
+     */
+    @Test
+    fun `a picture the server does not hold yet is reported as missing`() = runBlocking {
+        // The page names a picture; the bytes were never uploaded.
+        ipadStore.set(pageId, CouchDocBody.Page(pageWithPicture(updatedAt = 5, by = "ipad")))
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        val pulled = boox.pull()
+
+        assertEquals(listOf(pictureId), pulled.missingAssets)
+        assertTrue(pulled.corruptAssets.isEmpty())
+        assertTrue(pulled.hasAssetProblems)
+        assertTrue("the page and its ink still arrived", pulled.applied.contains(pageId))
+    }
+
+    @Test
+    fun `a download that failed is reported with its reason and stays retriable`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        server.failingDocumentIds["$pictureId/${CouchAssetId.BLOB_NAME}"] = 503
+        val pulled = boox.pull()
+
+        assertTrue(pulled.fetchedAssets.isEmpty())
+        assertNotNull(
+            "the reason should be reported, not lost", pulled.assetFailures[pictureId])
+        assertTrue(pulled.hasAssetProblems)
+        assertEquals(
+            "and it is still owed, so still retried",
+            listOf(pictureId),
+            booxStore.missingAssetIds(),
+        )
+    }
+
+    /**
+     * The id is a promise about the bytes. Bytes that break it must never be stored — writing them
+     * would file content under a name that does not describe it, and the next push would upload it
+     * under that name.
+     */
+    @Test
+    fun `bytes that do not match their digest are reported as corrupt and not stored`() =
+        runBlocking {
+            ipadStore.placePicture(by = "ipad")
+            ipad.markDirty(listOf(pageId))
+            ipad.flush()
+
+            // The server now serves different bytes under the same content-addressed id.
+            server.replaceAttachment(pictureId, "not the picture at all".toByteArray())
+            val pulled = boox.pull()
+
+            assertEquals(listOf(pictureId), pulled.corruptAssets)
+            assertTrue(pulled.fetchedAssets.isEmpty())
+            assertNull("corrupt bytes must not be written", booxStore.body(pictureId))
+            assertNotNull(pulled.assetFailures[pictureId])
+        }
+
+    @Test
+    fun `a store that will not write the blob is reported rather than swallowed`() = runBlocking {
+        ipadStore.placePicture(by = "ipad")
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        booxStore.failWrites(pictureId)
+        val pulled = boox.pull()
+
+        assertTrue(pulled.fetchedAssets.isEmpty())
+        assertNotNull(pulled.assetFailures[pictureId])
+        assertNull(booxStore.body(pictureId))
+    }
+
+    /**
+     * The warning has to be able to go away on its own, or it would outlive the problem: the set is
+     * derived from the store on every pull rather than accumulated.
+     */
+    @Test
+    fun `a later pull that succeeds reports no asset problems`() = runBlocking {
+        ipadStore.set(pageId, CouchDocBody.Page(pageWithPicture(updatedAt = 5, by = "ipad")))
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        assertEquals(listOf(pictureId), boox.pull().missingAssets)
+
+        // The picture finishes uploading from the iPad.
+        ipadStore.set(
+            pictureId,
+            CouchDocBody.Asset(CouchAsset.of(picture, at = stamp(1), updatedBy = "ipad")),
+        )
+        ipad.markDirty(listOf(pageId))
+        ipad.flush()
+
+        val second = boox.pull()
+        assertEquals(listOf(pictureId), second.fetchedAssets)
+        assertFalse("the warning must clear itself", second.hasAssetProblems)
     }
 
     // endregion

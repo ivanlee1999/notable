@@ -1,5 +1,6 @@
 package com.ethran.notable.sync.couch
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
@@ -315,6 +316,19 @@ class CouchSyncEngine(
         val conflictCopies: List<String> = emptyList(),
         /** Image blobs downloaded for pages that reference them (protocol §3.4). */
         val fetchedAssets: List<String> = emptyList(),
+        /**
+         * Referenced images the server does not hold yet — a peer wrote the page before its bytes
+         * finished uploading. Retried on every pull, and the commonest reason a page shows a gap
+         * where a picture belongs.
+         */
+        val missingAssets: List<String> = emptyList(),
+        /**
+         * Blobs whose bytes did not hash to the id that named them. Never stored, never
+         * re-uploaded: the id is a promise about the content, and writing these would break it.
+         */
+        val corruptAssets: List<String> = emptyList(),
+        /** Why each asset above did not arrive, by asset id. Safe to show: no paths, no secrets. */
+        val assetFailures: Map<String, String> = emptyMap(),
         val lastSeq: String = "0",
         /** See [CouchDbClient.clockSkewSeconds]. Null means "nothing worth saying". */
         val clockSkewSeconds: Long? = null,
@@ -325,6 +339,15 @@ class CouchSyncEngine(
          */
         val discardedStaleBatches: Int = 0,
     ) {
+        /**
+         * Whether anything about the images is worth telling the user. The page and its ink are
+         * applied either way — this never means the sync failed.
+         */
+        val hasAssetProblems: Boolean
+            get() = missingAssets.isNotEmpty() ||
+                corruptAssets.isNotEmpty() ||
+                assetFailures.isNotEmpty()
+
         /** Folds a later batch of the same pull into this one. */
         fun merge(next: PullReport) = PullReport(
             applied = applied + next.applied,
@@ -332,6 +355,9 @@ class CouchSyncEngine(
             skippedEchoes = skippedEchoes + next.skippedEchoes,
             conflictCopies = conflictCopies + next.conflictCopies,
             fetchedAssets = fetchedAssets + next.fetchedAssets,
+            missingAssets = missingAssets + next.missingAssets,
+            corruptAssets = corruptAssets + next.corruptAssets,
+            assetFailures = assetFailures + next.assetFailures,
             lastSeq = next.lastSeq,
             clockSkewSeconds = next.clockSkewSeconds,
             discardedStaleBatches = discardedStaleBatches + next.discardedStaleBatches,
@@ -786,8 +812,12 @@ class CouchSyncEngine(
         // Also outside the lock: this is a download queue, and the blobs belong to the store rather
         // than to any state this engine guards. Fetching them under the lock would reintroduce
         // exactly the stall the split above exists to remove, just with images instead of waiting.
+        val assets = fetchMissingAssets()
         return report.copy(
-            fetchedAssets = fetchMissingAssets(),
+            fetchedAssets = assets.fetched,
+            missingAssets = assets.missing,
+            corruptAssets = assets.corrupt,
+            assetFailures = assets.failures,
             clockSkewSeconds = client.clockSkewSeconds,
         )
     }
@@ -928,25 +958,82 @@ class CouchSyncEngine(
      * A failure here never fails the pull: the page and its ink are already applied, and an image
      * that is still on its way is a picture that has not appeared yet, not lost work.
      */
-    private suspend fun fetchMissingAssets(): List<String> {
+    /**
+     * Every branch below used to be a bare `continue`, so five different failures — an unreadable
+     * id, a transport error, a peer that has not uploaded the bytes, a digest mismatch, a store
+     * that would not write — all looked identical from outside: the pull reported success and the
+     * image simply was not there. The badge said idle while the page had a hole in it.
+     *
+     * They are still non-fatal, and for the same reason: the page and its ink are already applied,
+     * and an image on its way is a picture that has not appeared yet, not lost work. What changes is
+     * that the pull now says so.
+     */
+    private suspend fun fetchMissingAssets(): AssetResults {
         val wanted = runCatching { store.missingAssetIds() }.getOrNull().orEmpty()
         val fetched = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        val corrupt = mutableListOf<String>()
+        val failures = LinkedHashMap<String, String>()
+
         for (assetId in wanted) {
-            val sha = CouchAssetId.sha256HexOfAssetId(assetId) ?: continue
-            val blob = runCatching { client.getAttachment(assetId) }.getOrNull() ?: continue
-            // The id is a promise about the bytes. Checking it costs one hash and turns a
-            // truncated or mis-served download into a retry rather than into a corrupt image that
-            // would then be re-uploaded under a name that does not describe it.
-            if (CouchAssetId.sha256Hex(blob.bytes) != sha) continue
+            val sha = CouchAssetId.sha256HexOfAssetId(assetId)
+            if (sha == null) {
+                // Not a content-addressed id at all — nothing to fetch and nothing to verify
+                // against, so this one will never resolve by retrying.
+                failures[assetId] = "not a content-addressed asset id"
+                continue
+            }
+
+            val blob = try {
+                client.getAttachment(assetId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failures[assetId] = (e as? CouchError)?.detail ?: e.toString()
+                continue
+            }
+            if (blob == null) {
+                // A 404: the peer that referenced this image has not uploaded the bytes yet. The
+                // commonest case by far, and the one that resolves itself.
+                missing += assetId
+                continue
+            }
+
+            // The id is a promise about the bytes. Checking it costs one hash and turns a truncated
+            // or mis-served download into a retry rather than into a corrupt image that would then
+            // be re-uploaded under a name that does not describe it.
+            if (CouchAssetId.sha256Hex(blob.bytes) != sha) {
+                // Logged apart from the rest and never stored: writing it would put bytes under an
+                // id that does not describe them, and the next push would upload them.
+                corrupt += assetId
+                failures[assetId] = "downloaded bytes did not match the asset digest"
+                continue
+            }
+
             val now = Instant.now().toString()
             val asset = CouchAsset.of(
                 blob.bytes, at = now, updatedBy = deviceId, contentType = blob.contentType
             )
-            runCatching { store.apply(assetId, CouchDocBody.Asset(asset), basedOn = null) }
-                .onSuccess { fetched += assetId }
+            try {
+                store.apply(assetId, CouchDocBody.Asset(asset), basedOn = null)
+                fetched += assetId
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Out of space, a row locked: local, usually transient, and retried on the next
+                // pull because the store still lists the asset as missing.
+                failures[assetId] = e.toString()
+            }
         }
-        return fetched
+        return AssetResults(fetched, missing, corrupt, failures)
     }
+
+    private class AssetResults(
+        val fetched: List<String>,
+        val missing: List<String>,
+        val corrupt: List<String>,
+        val failures: Map<String, String>,
+    )
 
     // endregion
 
