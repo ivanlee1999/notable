@@ -246,6 +246,23 @@ class CouchSyncController @Inject constructor(
 
     val status: Status get() = _state.value.status
     val pendingCount: Int get() = _state.value.pendingCount
+
+    /**
+     * Whether anything is still owed to the server — documents in the outbox, or an edit whose
+     * debounce timer has not fired yet.
+     *
+     * Read at `onStop` to decide whether the last push needs a durable continuation. The pending
+     * count alone would miss the commonest case by far: someone draws a stroke and immediately
+     * leaves the app, so the edit is queued in the engine but the three-second timer that would
+     * have sent it never fires. That is exactly the work most at risk of being lost, because it is
+     * the most recent.
+     *
+     * Cheap and synchronous, because the caller is a lifecycle callback that cannot suspend. A
+     * pending push also implies the CouchDB backend is the selected one: every path that starts one
+     * checks [CouchSyncBackend.isEnabled] first.
+     */
+    val hasUnfinishedWork: Boolean
+        get() = pendingCount > 0 || synchronized(jobs) { pushJob != null }
     val lastSyncedAt: Long? get() = _state.value.lastSyncedAt
     val lastError: String? get() = _state.value.lastError
 

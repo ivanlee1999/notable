@@ -463,6 +463,60 @@ class CouchSyncControllerTest {
             )
     }
 
+    // region Backgrounding
+
+    /**
+     * `onStop` asks this to decide whether the last push needs a durable continuation, and the
+     * commonest case is not a full outbox: someone draws a stroke and immediately leaves the app,
+     * so the edit is queued in the engine but the debounce timer that would have sent it never
+     * fires. That is exactly the work most at risk of being lost, because it is the most recent —
+     * and the pending count alone does not see it.
+     */
+    @Test
+    fun `an edit still waiting on the debounce counts as unfinished work`() {
+        val backend = BackendSpy()
+        // Paced, so the timer is genuinely still pending when the question is asked.
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10, pacingMs = 200))
+
+        assertFalse("nothing has happened yet", controller.hasUnfinishedWork)
+        controller.noteEdited()
+
+        assertTrue(
+            "an edit whose push has not fired is still owed to the server",
+            controller.hasUnfinishedWork,
+        )
+        controller.stop()
+    }
+
+    @Test
+    fun `a full outbox counts as unfinished work even with no timer pending`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(stillDirty = listOf("page:p1"))
+        val controller = controller(backend, FakeSleeper(allowedTicks = 4), quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+
+        assertTrue(controller.hasUnfinishedWork)
+        controller.stop()
+    }
+
+    @Test
+    fun `a drained outbox with nothing pending needs no durable follow-up`() {
+        val backend = BackendSpy()
+        val controller = controller(backend, FakeSleeper(allowedTicks = 4), quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+        settle(50)
+
+        assertFalse(
+            "scheduling a worker with nothing to do is a wakeup the device did not need",
+            controller.hasUnfinishedWork,
+        )
+        controller.stop()
+    }
+
+    // endregion
+
     // region Push backoff
 
     private fun failingFlush(retriable: Boolean, retryAfterMs: Long? = null) =
