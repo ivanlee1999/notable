@@ -991,6 +991,44 @@ class CouchSyncEngineTest {
     }
 
     /**
+     * The same bound applies to a longpoll, which used to be sent with no limit at all.
+     *
+     * The reasoning was that a longpoll is one wait for one notification — but what it returns is
+     * everything that changed *while* it waited, which after a reconnection is the whole backlog,
+     * inlined base64 ink and all. And once a full batch comes back there is nothing left to wait
+     * for, so the loop drops to normal requests and drains at full speed: parking a fresh longpoll
+     * would sit waiting for a *new* change while the ones already queued went uncollected.
+     */
+    @Test
+    fun a_longpoll_backlog_arrives_in_bounded_batches_and_is_drained() = runBlocking {
+        val total = 225
+        val ids = (0 until total).map { index ->
+            val id = CouchDocId.page("p$index")
+            booxStore.set(
+                id,
+                CouchDocBody.Page(
+                    page(listOf(stroke("s$index", index, "boox")), updatedAt = 5, by = "boox")
+                )
+            )
+            id
+        }
+        boox.markDirty(ids)
+        boox.flush()
+
+        val report = ipad.pull(longpoll = true)
+
+        assertEquals("the backlog should be drained, not sampled", total, report.applied.size)
+        assertTrue(
+            "no single longpoll response should have carried the whole backlog",
+            server.largestChangeBatch <= 100,
+        )
+        assertTrue(
+            "and the checkpoint moved past all of it",
+            ipad.pull(longpoll = true).applied.isEmpty(),
+        )
+    }
+
+    /**
      * Losing the checkpoint replays the whole feed, which this design calls safe — so the same
      * unreadable document arrives again. Minting fresh ids each time turned every replay into
      * another set of duplicate notebooks in the library.

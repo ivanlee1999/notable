@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -246,7 +247,12 @@ class CouchDbClient(
 
     /**
      * One row of `_changes`. [json] is the document body (`include_docs=true`), left raw until the
-     * caller's id prefix says which shape to decode it as. Absent for rows the server elided.
+     * caller's id prefix says which shape to decode it as.
+     *
+     * Only ever null for a tombstone. CouchDB answers `"doc": null` for a row whose document was
+     * deleted between the feed reading the sequence and `include_docs` fetching the body, and the
+     * engine already synthesizes what a stripped tombstone needs. A *live* row without a body is
+     * malformed transport data and is rejected in [parseChanges] instead.
      */
     data class ChangeRow(
         val id: String,
@@ -312,20 +318,52 @@ class CouchDbClient(
             primitive.contentOrNullSafe ?: primitive.longOrNull?.toString()
         } ?: throw CouchError.MalformedResponse("_changes carried no last_seq")
 
-        val rows = (root["results"] as? JsonArray)
-            ?.mapNotNull { element ->
-                val row = element as? JsonObject ?: return@mapNotNull null
-                val id = row["id"]?.jsonPrimitive?.contentOrNullSafe ?: return@mapNotNull null
-                val rev = row["changes"]?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("rev")?.jsonPrimitive?.contentOrNullSafe.orEmpty()
-                ChangeRow(
-                    id = id,
-                    rev = rev,
-                    deleted = row["deleted"]?.jsonPrimitive?.booleanOrNull ?: false,
-                    json = row["doc"] as? JsonObject,
+        // Strict, because `last_seq` is checkpointed the moment this batch applies. A row dropped
+        // here — a proxy that truncated the response, a server answering a shape this client does
+        // not know — is a remote change lost *permanently*: the checkpoint moves past it and
+        // CouchDB never offers that sequence again. Refusing the whole response costs one retry;
+        // accepting a partial one costs the change. This used to be a `mapNotNull`.
+        //
+        // A document this build cannot *merge* is a different thing and is not rejected here: it is
+        // valid transport carrying an unknown schema, and the engine preserves it as a conflict
+        // copy and checkpoints it.
+        val results = root["results"] as? JsonArray
+            ?: throw CouchError.MalformedResponse("_changes carried no results array")
+        val rows = results.mapIndexed { index, element ->
+            val row = element as? JsonObject
+                ?: throw CouchError.MalformedResponse("_changes result $index is not an object")
+            val id = row["id"]?.jsonPrimitive?.contentOrNullSafe?.takeIf { it.isNotEmpty() }
+                ?: throw CouchError.MalformedResponse("_changes result $index carried no id")
+            val rev = row["changes"]?.jsonArray?.firstOrNull()
+                ?.jsonObject?.get("rev")?.jsonPrimitive?.contentOrNullSafe
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw CouchError.MalformedResponse("_changes result $index carried no revision")
+
+            val rawDeleted = row["deleted"]
+            val deleted = when {
+                rawDeleted == null || rawDeleted is JsonNull -> false
+                // `booleanOrNull` also parses the *string* `"true"`, and a numeric 1 is not a
+                // Boolean at all. Only an unquoted true/false counts.
+                else -> (rawDeleted as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                    ?: throw CouchError.MalformedResponse(
+                        "_changes result $index carried a non-Boolean deleted"
+                    )
+            }
+
+            val rawDocument = row["doc"]
+            val json = when {
+                rawDocument is JsonObject -> rawDocument
+                // The one body CouchDB legitimately omits: `include_docs` found the document
+                // already deleted. The engine synthesizes the tombstone the merge needs from
+                // `deleted` and the revision alone, so there is nothing to fetch and nothing to
+                // lose.
+                deleted && (rawDocument == null || rawDocument is JsonNull) -> null
+                else -> throw CouchError.MalformedResponse(
+                    "_changes result $index ($id) carried no document"
                 )
             }
-            .orEmpty()
+            ChangeRow(id = id, rev = rev, deleted = deleted, json = json)
+        }
         return Changes(lastSeq = lastSeq, rows = rows)
     }
 

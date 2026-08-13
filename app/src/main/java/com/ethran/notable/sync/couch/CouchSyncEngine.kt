@@ -307,6 +307,12 @@ class CouchSyncEngine(
         val lastSeq: String = "0",
         /** See [CouchDbClient.clockSkewSeconds]. Null means "nothing worth saying". */
         val clockSkewSeconds: Long? = null,
+        /**
+         * Feed batches dropped because an overlapping pull had already moved the checkpoint past
+         * them. Diagnostic only — never surfaced as a failure. A foreground catch-up racing the
+         * longpoll is normal, and the batch is refetched from the winner's checkpoint.
+         */
+        val discardedStaleBatches: Int = 0,
     ) {
         /** Folds a later batch of the same pull into this one. */
         fun merge(next: PullReport) = PullReport(
@@ -317,6 +323,7 @@ class CouchSyncEngine(
             fetchedAssets = fetchedAssets + next.fetchedAssets,
             lastSeq = next.lastSeq,
             clockSkewSeconds = next.clockSkewSeconds,
+            discardedStaleBatches = discardedStaleBatches + next.discardedStaleBatches,
         )
     }
 
@@ -711,24 +718,44 @@ class CouchSyncEngine(
         // slow and dead. Checkpointing each batch also means an interrupted catch-up resumes where
         // it stopped instead of starting over.
         //
-        // A longpoll is never paged: it is one wait for one notification, and the batch that
-        // follows is whatever changed while it waited.
+        // A longpoll is bounded the same way. It used to be sent with no limit at all, on the
+        // reasoning that it is one wait for one notification — but the batch that follows a wait is
+        // whatever changed *while* it waited, and after this device or a proxy has been
+        // disconnected for a day that is the same unbounded response the paging above exists to
+        // prevent, ink and inline base64 and all. On a device with this one's memory that is the
+        // difference between slow and dead.
+        //
+        // Once a longpoll comes back full, the backlog is already on the server and there is
+        // nothing left to wait for, so the loop drops to normal requests and drains at full speed
+        // until a short batch says the server is caught up. Parking a fresh longpoll instead would
+        // wait for a *new* change before collecting the ones already queued.
         var report = PullReport()
+        var longpollThisPass = longpoll
         while (true) {
             val since = mutex.withLock { lastSeq }
             val changes = client.changes(
                 since = since,
-                longpoll = longpoll,
+                longpoll = longpollThisPass,
                 timeoutMs = timeoutMs,
-                limit = if (longpoll) null else CATCH_UP_BATCH_SIZE,
+                limit = CATCH_UP_BATCH_SIZE,
             )
             val batch = mutex.withLock { applyChanges(changes, since) }
             report = report.merge(batch)
+            if (batch.discardedStaleBatches > 0) {
+                // A batch an overlapping pull already superseded says nothing about how far behind
+                // the server is — its row count describes a window that has since moved. Ask again
+                // from the current checkpoint instead of concluding anything from it.
+                //
+                // Except on a longpoll: the caller asked to wait for one notification, and the pull
+                // that won has already delivered what this one was waiting for.
+                if (longpoll) break else continue
+            }
             // The server is caught up when it returns a short batch; a full one may have more
             // behind it. A full batch that did not move the checkpoint would ask the same question
             // forever — no CouchDB does that, which is why it is worth refusing to loop on it here
             // rather than finding out on a device with the battery draining.
-            if (longpoll || changes.rows.size < CATCH_UP_BATCH_SIZE) break
+            if (changes.rows.size < CATCH_UP_BATCH_SIZE) break
+            longpollThisPass = false
             if (mutex.withLock { lastSeq } == since) break
         }
         // Also outside the lock: this is a download queue, and the blobs belong to the store rather
@@ -743,9 +770,28 @@ class CouchSyncEngine(
     /**
      * Apply one feed batch. Callers hold [mutex].
      *
-     * [since] is the checkpoint this batch was fetched from; see [pull] for why it is needed.
+     * [since] is the checkpoint this batch was fetched from. The lock is released across the feed
+     * request, so a second pull — a foreground catch-up while the longpoll waits — can run to
+     * completion in that gap, and its checkpoint is then newer than the one this batch describes.
+     *
+     * The whole batch is dropped in that case, not merely its checkpoint. Keeping the rows was
+     * defensible while the argument was about content — merges are idempotent, so re-applying what
+     * the winner already applied lands on the identical document — but [revs] is not part of that
+     * argument. It caches "the revision the next push must build on", and writing an older revision
+     * into it moves it *backwards*: the next push then quotes a stale `_rev` and takes a 409 it did
+     * not need, and the echo check stops recognising this device's own writes, which is a push
+     * ping-pong rather than a merge.
+     *
+     * Dropping the batch costs nothing. The next request starts from the winner's checkpoint, so
+     * anything this batch carried that the winner did not is returned again immediately.
      */
     private suspend fun applyChanges(changes: CouchDbClient.Changes, since: String): PullReport {
+        // Reports the winner's checkpoint, not this batch's: `merge` folds `lastSeq` forward, and
+        // the default "0" would read as a checkpoint reset.
+        if (lastSeq != since) {
+            return PullReport(discardedStaleBatches = 1, lastSeq = lastSeq)
+        }
+
         val applied = mutableListOf<String>()
         val pushBack = mutableListOf<String>()
         val skippedEchoes = mutableListOf<String>()
@@ -767,18 +813,35 @@ class CouchSyncEngine(
                 continue
             }
 
+            // A live row without a body cannot be applied and must not be checkpointed past. The
+            // parser rejects such a response before it reaches here, so this is defence rather than
+            // a path — but it throws instead of skipping, because skipping is exactly the silent
+            // loss the strict parser exists to prevent: a pull that fails is retried, a change the
+            // checkpoint stepped over is gone. It used to record the revision and move on.
             val json = row.json
-            if (json == null) {
-                // The server elided the body; there is nothing to apply and nothing to copy.
-                revs[row.id] = row.rev
-                continue
-            }
-            val incoming = decode(row.id, json, row.deleted)
-            if (incoming == null) {
-                store.applyConflictCopy(row.id, json)
-                conflictCopies += row.id
-                revs[row.id] = row.rev
-                continue
+            val incoming: CouchDocBody
+            if (json != null) {
+                val decoded = decode(row.id, json, row.deleted)
+                if (decoded == null) {
+                    // Valid transport, unmergeable content — a future schema, most often. Preserved
+                    // beside the local copy and checkpointed: unlike a missing body, nothing is
+                    // lost by moving past it.
+                    store.applyConflictCopy(row.id, json)
+                    conflictCopies += row.id
+                    revs[row.id] = row.rev
+                    continue
+                }
+                incoming = decoded
+            } else {
+                val type = CouchDocId.split(row.id)?.first
+                if (!row.deleted || type == null) {
+                    throw CouchError.MalformedResponse("_changes row ${row.id} carried no document")
+                }
+                // A tombstone CouchDB answered without a body, because `include_docs` found the
+                // document already deleted. `deletedAt` is left empty for the reason `decode`
+                // gives: stamping "now" would outrank every local edit and destroy work done after
+                // the deletion.
+                incoming = CouchDocBody.Deleted(CouchDeletedDoc(type = type, updatedBy = deviceId))
             }
 
             val local = store.load(row.id)
@@ -786,8 +849,12 @@ class CouchSyncEngine(
             if (local != null) {
                 val result = CouchMerge.mergeBodies(local, incoming)
                 if (result == null) {
-                    store.applyConflictCopy(row.id, json)
-                    conflictCopies += row.id
+                    // Nothing to preserve when the body never arrived; the tombstone is the fact,
+                    // and the revision still has to be recorded so the next push builds on it.
+                    if (json != null) {
+                        store.applyConflictCopy(row.id, json)
+                        conflictCopies += row.id
+                    }
                     revs[row.id] = row.rev
                     continue
                 }
@@ -810,11 +877,10 @@ class CouchSyncEngine(
             }
         }
 
-        // Only if nothing moved it while this pull was waiting. An overlapping pull that already
-        // advanced the checkpoint is at least as far along as this batch, and overwriting it with
-        // an older sequence would replay changes we have already applied — harmless, since applying
-        // is idempotent, but it would do so on every pull from then on.
-        if (lastSeq == since) lastSeq = changes.lastSeq
+        // Unconditional now, unlike the guarded assignment this replaces: the batch was checked
+        // against [since] before any row was touched, and this function holds [mutex] throughout,
+        // so no overlapping pull can have moved the checkpoint in between.
+        lastSeq = changes.lastSeq
         persist()
         return PullReport(
             applied = applied,
