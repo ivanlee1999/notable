@@ -14,7 +14,12 @@ import javax.inject.Provider
 
 /**
  * The deletion path, wired from a test database. Every `AppRepository` a test builds needs one,
- * and assembling it by hand at four call sites is four chances to wire it differently.
+ * and assembling it by hand at six call sites is six chances to wire it differently.
+ *
+ * The default provider is deliberately one that throws: `AppRepository` only holds the Trash so
+ * callers can reach it and never calls into it itself, so a test that does not exercise
+ * trash/restore/purge should fail loudly if that ever stops being true, rather than quietly
+ * wiring a second half-built repository.
  */
 fun trashRepositoryFor(
     db: AppDatabase, appRepository: Provider<AppRepository> = Provider { error("not wired") }
