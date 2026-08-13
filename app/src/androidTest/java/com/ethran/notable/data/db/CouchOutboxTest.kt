@@ -12,6 +12,7 @@ import com.ethran.notable.sync.couch.CouchNotebook
 import com.ethran.notable.sync.couch.CouchPage
 import com.ethran.notable.sync.couch.RoomCouchStore
 import com.ethran.notable.testing.TestDatabaseFactory
+import com.ethran.notable.testing.trashRepositoryFor
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -83,6 +84,7 @@ class CouchOutboxTest {
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
+        trashRepository = trashRepositoryFor(db),
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
     )
