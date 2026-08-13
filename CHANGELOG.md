@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.0
+
+Deleting a notebook here left it sitting in the library on your iPad. The Trash now travels, so
+"delete" means the same thing on both devices.
+
+### The Trash was private to each device
+
+- **Moving a notebook or folder to the Trash published nothing.** It disappeared from the library
+  here and stayed exactly where it was on the other device, and the two only agreed again when
+  somebody emptied the Trash. Deleting therefore meant "hide it from me" rather than "delete it".
+- Trashing now takes the item out of the library **everywhere**, and restoring it from either device
+  brings it back on both. Nothing is destroyed until you empty the Trash, which is still the only
+  irreversible step and still the only one that deletes anything.
+- A trashed notebook goes on syncing, ink and all. Someone drawing in it on the other device loses
+  nothing, and an edit written *after* the trashing takes the notebook back out of the Trash — the
+  same rule that has always protected work done after a deletion.
+- **A trashed notebook could climb back out of the Trash on its own.** Anything arriving from the
+  other device — a rename, a stroke — rebuilt the notebook's row without its Trash mark, so the next
+  sync quietly put it back in the library.
+
+No database change: the Trash has been recorded here since 0.11.0. It just never went anywhere.
+
 ## 0.12.0
 
 The BOOX and the iPad were quietly re-uploading each other's work. Nothing was ever lost to it, but
