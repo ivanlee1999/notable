@@ -285,6 +285,17 @@ class CouchSyncEngine(
         val heldDeletions: List<String> = emptyList(),
         /** See [CouchDbClient.clockSkewSeconds]. Null means "nothing worth saying". */
         val clockSkewSeconds: Long? = null,
+        /**
+         * Whether any failure above could plausibly succeed on a later attempt — offline, a 5xx, a
+         * 429. False when the only failures were ones the server will keep refusing, which is what
+         * tells the controller to stop rescheduling and leave the message standing.
+         */
+        val hasRetriableFailure: Boolean = false,
+        /**
+         * The longest `Retry-After` any server sent during this flush. The controller waits at
+         * least this long instead of its own backoff.
+         */
+        val retryAfterMs: Long? = null,
     ) {
         /** Set when the mass-deletion guard held something back. */
         val blockedByDeletionGuard: Boolean get() = heldDeletions.isNotEmpty()
@@ -464,6 +475,8 @@ class CouchSyncEngine(
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
         val failures = LinkedHashMap<String, String>()
+        var hasRetriableFailure = false
+        var retryAfterMs: Long? = null
         // The table, not only what `markDirty` was told. A repository queues a document by writing
         // its outbox row inside the transaction that changed the data, without going anywhere near
         // this engine — which is precisely what stops a new mutation site from being one forgotten
@@ -501,6 +514,12 @@ class CouchSyncEngine(
             } catch (error: CouchError) {
                 failures[documentId] = error.detail
                 stillDirty += documentId
+                if (error.isRetriable) {
+                    hasRetriableFailure = true
+                    (error as? CouchError.Server)?.retryAfterMs?.let {
+                        retryAfterMs = maxOf(retryAfterMs ?: 0L, it)
+                    }
+                }
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
                 // ...and so do rejected credentials, which no amount of retrying will fix.
@@ -524,6 +543,10 @@ class CouchSyncEngine(
             } catch (error: Exception) {
                 failures[documentId] = error.toString()
                 stillDirty += documentId
+                // Not a `CouchError` at all — a store read that failed, most likely. Local faults
+                // are usually transient (a row locked, a device briefly out of space), and the
+                // document stays in the durable outbox either way.
+                hasRetriableFailure = true
             }
         }
         persist()
@@ -532,6 +555,8 @@ class CouchSyncEngine(
             merged = merged,
             stillDirty = stillDirty,
             failures = failures,
+            hasRetriableFailure = hasRetriableFailure,
+            retryAfterMs = retryAfterMs,
             heldDeletions = heldDeletions,
             // Whatever the last response said about the server's clock. Reported rather than acted
             // on: it is a warning, and a warning must never be able to fail a push.

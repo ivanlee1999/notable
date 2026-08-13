@@ -463,6 +463,146 @@ class CouchSyncControllerTest {
             )
     }
 
+    // region Push backoff
+
+    private fun failingFlush(retriable: Boolean, retryAfterMs: Long? = null) =
+        CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:p1"),
+            failures = mapOf("page:p1" to "server(503)"),
+            hasRetriableFailure = retriable,
+            retryAfterMs = retryAfterMs,
+        )
+
+    /**
+     * A failing outbox has to retry itself. Before this it flushed once, reported the failure, and
+     * then waited for the user to edit something else or tap Sync now — on a server that was
+     * briefly down, the queued pages simply sat there.
+     */
+    @Test
+    fun `a failed push retries itself with growing delays`() {
+        val backend = BackendSpy()
+        backend.flushReport = failingFlush(retriable = true)
+        val sleeper = FakeSleeper(allowedTicks = 4)
+        val controller = controller(backend, sleeper, quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+        settle(400)
+        controller.stop()
+
+        assertTrue("the outbox should have been tried again", backend.flushCount > 1)
+        val waits = sleeper.recorded
+        assertTrue("expected several retries: $waits", waits.size >= 2)
+        // Jittered, so compare across a doubling rather than between neighbours.
+        assertTrue("backoff should grow: $waits", waits[1] > waits[0] * 1.2)
+    }
+
+    /**
+     * The trap the hardening plan calls out: pull and push fail independently, and the pull
+     * recovers first. One shared counter meant every successful pull reset the push delay to a
+     * second, so an outbox that kept failing retried at full speed forever.
+     */
+    @Test
+    fun `a successful pull does not reset push backoff`() {
+        val backend = BackendSpy()
+        backend.flushReport = failingFlush(retriable = true)
+        val sleeper = FakeSleeper(allowedTicks = 8)
+        val controller = controller(backend, sleeper, quietMs = 10)
+
+        // Climb the backoff a few steps.
+        runBlocking { controller.pushNow() }
+        settle(400)
+        val climbed = sleeper.recorded.last()
+        controller.stop()
+
+        // A pull succeeds — the network is back for reads — and the outbox keeps failing.
+        backend.pullReport = CouchSyncEngine.PullReport()
+        backend.pending = 1
+        runBlocking { controller.pushNow() }
+        settle(150)
+        controller.stop()
+
+        val resumed = sleeper.recorded.last()
+        assertTrue(
+            "the push delay should have carried on from where it was, not restarted: " +
+                "${sleeper.recorded}",
+            resumed > climbed * 0.5,
+        )
+    }
+
+    @Test
+    fun `a successful push resets the backoff`() {
+        val backend = BackendSpy()
+        backend.flushReport = failingFlush(retriable = true)
+        val sleeper = FakeSleeper(allowedTicks = 8)
+        val controller = controller(backend, sleeper, quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+        settle(400)
+        controller.stop()
+        val climbed = sleeper.recorded.last()
+        assertTrue("the backoff should have grown past the floor first", climbed > 1_000)
+
+        // The outbox drains, and then something fails again from scratch.
+        backend.flushReport = CouchSyncEngine.FlushReport()
+        runBlocking { controller.pushNow() }
+        backend.flushReport = failingFlush(retriable = true)
+        val before = sleeper.recorded.size
+        runBlocking { controller.pushNow() }
+        settle(100)
+        controller.stop()
+
+        val afterReset = sleeper.recorded.drop(before)
+        assertTrue("the new failure should have scheduled a retry", afterReset.isNotEmpty())
+        assertTrue(
+            "a push that succeeded should have put the delay back at the floor: $afterReset",
+            afterReset[0] < climbed,
+        )
+    }
+
+    /**
+     * A terminal failure is left queued and reported, but must not put the device into a retry loop
+     * that cannot end. Nothing about waiting makes a 413 acceptable to the server.
+     */
+    @Test
+    fun `a terminal push failure is not retried on a timer`() {
+        val backend = BackendSpy()
+        backend.flushReport = failingFlush(retriable = false)
+        val sleeper = FakeSleeper(allowedTicks = 8)
+        val controller = controller(backend, sleeper, quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+        settle(400)
+        controller.stop()
+
+        assertEquals(
+            "a refusal on the merits should not be re-sent on a timer", 1, backend.flushCount)
+        assertEquals("and the document stays queued", 1, controller.state.value.pendingCount)
+        assertTrue(
+            "expected the failure to be reported",
+            controller.status is CouchSyncController.Status.Failed,
+        )
+    }
+
+    /** RFC 9110 §10.2.3: when the server says when to come back, that beats the client's guess. */
+    @Test
+    fun `a retry-after overrides the clients own delay`() {
+        val backend = BackendSpy()
+        backend.flushReport = failingFlush(retriable = true, retryAfterMs = 30_000)
+        val sleeper = FakeSleeper(allowedTicks = 2)
+        val controller = controller(backend, sleeper, quietMs = 10)
+
+        runBlocking { controller.pushNow() }
+        settle(150)
+        controller.stop()
+
+        val first = sleeper.recorded.first()
+        // Jittered ±15%, so assert the band rather than the number.
+        assertTrue("should have waited the 30s the server asked for: $first", first > 24_000)
+        assertTrue("$first", first < 36_000)
+    }
+
+    // endregion
+
     @Test
     fun `a recovered pull clears the previous failure`() {
         val backend = BackendSpy()

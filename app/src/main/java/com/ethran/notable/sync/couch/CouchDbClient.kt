@@ -35,7 +35,15 @@ sealed class CouchError(val detail: String) : Exception(detail) {
         private fun readResolve(): Any = Unauthorized
     }
 
-    class Server(val status: Int, val path: String) : CouchError("server($status, $path)")
+    /**
+     * Any other status the client does not handle specially. [retryAfterMs] carries the server's
+     * own answer to "when should I come back", when it sent one.
+     */
+    class Server(
+        val status: Int,
+        val path: String,
+        val retryAfterMs: Long? = null,
+    ) : CouchError("server($status, $path)")
 
     /** Offline, DNS failure, timeout: keep the work queued and back off. */
     class Transport(val reason: String) : CouchError("transport($reason)")
@@ -50,9 +58,33 @@ sealed class CouchError(val detail: String) : Exception(detail) {
 
     class MalformedResponse(val reason: String) : CouchError("malformedResponse($reason)")
 
-    /** Whether waiting and trying again could plausibly succeed. */
+    /**
+     * Whether waiting and trying again could plausibly succeed.
+     *
+     * Every [Server] status used to answer yes, which meant a request the server had already
+     * refused on its merits — a document larger than the configured maximum, a malformed request, a
+     * database name this account may not touch — was retried on the same escalating schedule as a
+     * dropped connection, forever, and the one message that would tell the user what to fix
+     * scrolled past between attempts.
+     *
+     * The line is whether *waiting* is plausibly part of the answer. 5xx says the server failed at
+     * something it agreed to do; 408, 425 and 429 say "not now, ask again". Every other 4xx is this
+     * device having asked something the server will keep declining.
+     *
+     * [Blocked] stays terminal for the reason its own doc comment gives, and [Conflict], [NotFound],
+     * [Unauthorized] and [MalformedResponse] are inputs to the caller's logic rather than failures
+     * to retry blindly.
+     */
     val isRetriable: Boolean
-        get() = this is Transport || this is Server
+        get() = when (this) {
+            is Transport -> true
+            is Server -> when (status) {
+                408, 425, 429 -> true          // timeout, too early, rate limited
+                in 500..599 -> true            // the server's own fault, possibly transient
+                else -> false                  // 400, 403, 405, 413, … will not improve
+            }
+            else -> false
+        }
 }
 
 /**
@@ -485,7 +517,15 @@ class CouchDbClient(
         HTTP_UNAUTHORIZED, HTTP_FORBIDDEN -> CouchError.Unauthorized
         HTTP_NOT_FOUND -> CouchError.NotFound(path)
         HTTP_CONFLICT -> CouchError.Conflict(path)
-        else -> CouchError.Server(response.status, path)
+        else -> CouchError.Server(
+            response.status,
+            path,
+            retryAfterMs = parseRetryAfter(
+                response.headers.entries
+                    .firstOrNull { it.key.equals("Retry-After", ignoreCase = true) }
+                    ?.value
+            ),
+        )
     }
 
     // endregion
@@ -530,6 +570,27 @@ internal fun parseHttpDate(header: String): Long? = try {
     ZonedDateTime.parse(header, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
 } catch (_: Exception) {
     null
+}
+
+/** The longest a server may push this device out — the same ceiling the controller backs off to. */
+const val MAX_RETRY_AFTER_MS = 60_000L
+
+/**
+ * `Retry-After` in either shape RFC 9110 §10.2.3 allows: a delay in seconds, or an HTTP date.
+ *
+ * Clamped rather than trusted. A misconfigured proxy answering `Retry-After: 86400` would otherwise
+ * park sync for a day — the server gets to slow this device down, not to switch it off — and a date
+ * already in the past means "now", not a negative sleep.
+ *
+ * [nowMs] is injectable only so the date branch is testable; production always passes the clock.
+ */
+internal fun parseRetryAfter(header: String?, nowMs: Long = System.currentTimeMillis()): Long? {
+    val trimmed = header?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    val millis = trimmed.toLongOrNull()?.times(1_000)
+        ?: parseHttpDate(trimmed)?.minus(nowMs)
+        ?: return null
+    return millis.coerceIn(0, MAX_RETRY_AFTER_MS)
 }
 
 /**
