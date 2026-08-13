@@ -359,7 +359,8 @@ class RoomCouchStore(
             defaultPageHeight = notebook.defaultPageHeight,
             createdAt = iso(notebook.createdAt),
             updatedAt = iso(notebook.updatedAt),
-            updatedBy = deviceId,
+            // Null means this device wrote it last; see [Notebook.updatedBy].
+            updatedBy = notebook.updatedBy ?: deviceId,
         )
     }
 
@@ -380,7 +381,8 @@ class RoomCouchStore(
                 .map { CouchTombstone(id = it.imageId, deletedAt = iso(it.deletedAt)) },
             createdAt = iso(data.page.createdAt),
             updatedAt = iso(data.page.updatedAt),
-            updatedBy = deviceId,
+            // Null means this device wrote it last; see [Page.updatedBy].
+            updatedBy = data.page.updatedBy ?: deviceId,
         )
     }
 
@@ -415,7 +417,8 @@ class RoomCouchStore(
             parentFolderId = folder.parentFolderId,
             createdAt = iso(folder.createdAt),
             updatedAt = iso(folder.updatedAt),
-            updatedBy = deviceId,
+            // Null means this device wrote it last; see [Folder.updatedBy].
+            updatedBy = folder.updatedBy ?: deviceId,
         )
     }
 
@@ -488,6 +491,8 @@ class RoomCouchStore(
             linkedExternalUri = existing?.linkedExternalUri,
             createdAt = date(notebook.createdAt),
             updatedAt = date(notebook.updatedAt),
+            // See the note in [applyPage]: the real author, not this device.
+            updatedBy = notebook.updatedBy,
         )
         // updateVerbatim, not update: `update` stamps `updatedAt = now()`, which would overwrite
         // the merged timestamp and make this device look like the newest writer of every document
@@ -560,6 +565,10 @@ class RoomCouchStore(
             parentFolderId = existing?.page?.parentFolderId,
             createdAt = date(page.createdAt),
             updatedAt = date(page.updatedAt),
+            // Who actually wrote this, so the next merge can break a scalar tie on the real author
+            // instead of on this device's id. Written through unchanged — the repository keeps it
+            // only because this runs under `RemoteApply`; a local edit stamps it back to null.
+            updatedBy = page.updatedBy,
         )
         if (existing == null) appRepository.pageRepository.create(row)
         else appRepository.pageRepository.update(row)
@@ -625,6 +634,8 @@ class RoomCouchStore(
             parentFolderId = resolveFolder(folder.parentFolderId),
             createdAt = date(folder.createdAt),
             updatedAt = date(folder.updatedAt),
+            // See the note in [applyPage]: the real author, not this device.
+            updatedBy = folder.updatedBy,
         )
         if (existing == null) appRepository.folderRepository.create(row)
         else appRepository.folderRepository.updateVerbatim(row)

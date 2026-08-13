@@ -17,6 +17,7 @@ import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.Log
+import kotlinx.coroutines.currentCoroutineContext
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -51,7 +52,25 @@ data class Page(
     // because a page outside a notebook has no notebook to ask.
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
-    val createdAt: Date = Date(), val updatedAt: Date = Date()
+    val createdAt: Date = Date(), val updatedAt: Date = Date(),
+    /**
+     * Which device last wrote this page, or null when that device is this one.
+     *
+     * Protocol §4 breaks a scalar tie on `updatedBy`, so the sync store has to be able to answer
+     * "who wrote this" for a page that arrived from a peer. Room had no column for it and
+     * `RoomCouchStore.loadPage` filled in this device's id unconditionally, which made the BOOX
+     * claim authorship of every page the iPad wrote: the merge then read its own copy as different
+     * from the incoming one, pushed it back, and the peer did the same in return. Whole revisions
+     * of identical content were being written on both sides.
+     *
+     * Null means "this device" rather than storing the id, so the column needs no backfill and no
+     * local write path has to learn what this device is called. It is cleared wherever `updatedAt`
+     * is stamped — the two describe one event — which is [PageRepository.authored] for whole-row
+     * writes and the `updatedBy=NULL` in [PageDao.updateTitle] / [PageDao.touchUpdatedAt] for the
+     * single-column ones. Deliberately *not* cleared when a document is merely queued: drawing on a
+     * page queues its notebook too, and that notebook was not authored by this edit.
+     */
+    val updatedBy: String? = null
 )
 
 
@@ -89,12 +108,15 @@ interface PageDao {
     // Renaming touches one column, so it does not read-modify-write the row and cannot race a
     // concurrent stroke save into overwriting the page's drawing state. updatedAt is stored as
     // epoch millis (Date <-> Long converter), matching [touchUpdatedAt].
-    @Query("UPDATE page SET title=:title, updatedAt=:updatedAt WHERE id =:pageId")
+    // `updatedBy` is cleared alongside `updatedAt`: the two describe one event, and a rename made
+    // here is authored here even if the last write came from a peer. See [Page.updatedBy].
+    @Query("UPDATE page SET title=:title, updatedAt=:updatedAt, updatedBy=NULL WHERE id =:pageId")
     suspend fun updateTitle(pageId: String, title: String?, updatedAt: Long)
 
     // Bump only the edit timestamp, without a read-modify-write of the whole row. updatedAt is
     // stored as epoch millis (Date <-> Long converter), so a Long here matches the column format.
-    @Query("UPDATE page SET updatedAt=:updatedAt WHERE id =:pageId")
+    // `updatedBy` is cleared with it, for the reason given above [updateTitle].
+    @Query("UPDATE page SET updatedAt=:updatedAt, updatedBy=NULL WHERE id =:pageId")
     suspend fun touchUpdatedAt(pageId: String, updatedAt: Long)
 
     @Query("SELECT * FROM page WHERE notebookId is null AND parentFolderId is :folderId")
@@ -155,10 +177,22 @@ class PageRepository @Inject constructor(
     }
 
     suspend fun create(page: Page): Long = database.withTransaction {
-        val rowId = db.create(page)
+        val rowId = db.create(authored(page))
         queuePage(page.id, page.notebookId)
         rowId
     }
+
+    /**
+     * The row as it should be stored, with authorship resolved.
+     *
+     * A write made here is authored here, so `updatedBy` goes back to null; a write the sync engine
+     * is landing carries the peer's id and has to keep it, or this device would claim every page it
+     * receives and the merge would read its own copy as a change worth pushing back — see
+     * [Page.updatedBy]. [RemoteApply] is the same marker the outbox already uses to tell the two
+     * apart, so there is one definition of "this came from the server" rather than two.
+     */
+    private suspend fun authored(page: Page): Page =
+        if (currentCoroutineContext()[RemoteApply] != null) page else page.copy(updatedBy = null)
 
     /**
      * Scroll position is device-local and deliberately not part of the synced document (see
@@ -241,7 +275,7 @@ class PageRepository @Inject constructor(
 
     suspend fun update(page: Page) {
         database.withTransaction {
-            db.update(page)
+            db.update(authored(page))
             // This is also the only write behind a background-only change, which changes no ink and
             // so was never queued by any drawing path.
             queuePage(page.id, page.notebookId)

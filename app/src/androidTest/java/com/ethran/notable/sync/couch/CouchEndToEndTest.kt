@@ -390,17 +390,14 @@ class CouchEndToEndTest {
      * it must also be *harmless* — the second pass has to reach the same content as the first, and
      * anything it decides to send must be what the server already holds.
      *
-     * It is not, however, silent, and this pins the reason rather than pretending otherwise. A
-     * notebook row has no `updatedBy` column, so `RoomCouchStore.loadNotebook` stamps the reading
-     * device's own id. On a replay the local copy therefore claims authorship of a document the peer
-     * wrote, the timestamps tie, and `CouchMerge.wins` breaks the tie on `updatedBy` — so on the
-     * device whose id sorts higher ("ipad" > "boox") the local copy wins and is queued back.
-     *
-     * The content is identical, which is why this is recovery rather than corruption, and it settles
-     * after one exchange rather than ping-ponging. But a device that loses its checkpoint re-uploads
-     * what it holds, and the shared scenario for this (`checkpoint-loss-replays`) cannot see it: its
-     * store keeps `updatedBy` verbatim, where a Room row cannot. Fixing it needs a column and a
-     * migration, so it is recorded here rather than papered over.
+     * It is now silent too. It was not: a notebook row had no `updatedBy` column, so
+     * `RoomCouchStore.loadNotebook` stamped the reading device's own id. On a replay the local copy
+     * claimed authorship of a document the peer wrote, the timestamps tied, and `CouchMerge.wins`
+     * broke the tie on `updatedBy` — so on the device whose id sorts higher ("ipad" > "boox") the
+     * local copy won and was queued straight back. The content was identical, which is why it was
+     * recovery rather than corruption, but a device that lost its checkpoint re-uploaded what it
+     * held. [Notebook.updatedBy] is that column, so the replay now recognises the peer's document as
+     * the peer's and sends nothing at all — which is what the empty outbox below asserts.
      */
     @Test
     fun losing_the_checkpoint_replays_without_changing_anything() {
@@ -426,14 +423,16 @@ class CouchEndToEndTest {
                 listOf(pageId),
                 afterReplay?.pageIds,
             )
-            // Whatever the replay decided to send back must be content the server already has, or
-            // "idempotent recovery" would mean the second device rewriting the first one's work.
+            // Nothing at all: the replay re-read documents this device knows the peer wrote, so the
+            // merge finds nothing of its own to contribute and queues no push. Before
+            // [Notebook.updatedBy] existed this held the notebook and its page — identical content,
+            // uploaded again for no reason — and the assertion below is what keeps that from
+            // quietly coming back.
             val requeued = runBlocking { otherDb.couchOutboxDao().allIds().toSet() }
-            assertTrue(
-                "the replay queued a document it had never received: $requeued",
-                requeued.all {
-                    it == CouchDocId.notebook(notebookId) || it == CouchDocId.page(pageId)
-                },
+            assertEquals(
+                "a replay of documents the peer wrote must send nothing back",
+                emptySet<String>(),
+                requeued,
             )
             flush(engine(store = store, deviceId = "ipad"))
             assertEquals("Replayed", notebookOnServer(notebookId)?.title)

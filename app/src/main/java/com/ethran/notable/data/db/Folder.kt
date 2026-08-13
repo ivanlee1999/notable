@@ -49,7 +49,10 @@ data class Folder(
      * [com.ethran.notable.data.TrashRepository] for why deletion is staged this way.
      */
     @ColumnInfo(index = true)
-    val deletedAt: Date? = null
+    val deletedAt: Date? = null,
+
+    /** Which device last wrote this folder, or null when that device is this one. See [Page.updatedBy]. */
+    val updatedBy: String? = null
 )
 
 // DAO
@@ -126,7 +129,8 @@ class FolderRepository @Inject constructor(
      */
     suspend fun update(folder: Folder) {
         database.withTransaction {
-            db.update(folder.copy(updatedAt = Date()))
+            // `updatedBy = null` travels with the stamp: this write happened here.
+            db.update(folder.copy(updatedAt = Date(), updatedBy = null))
             outbox.queue(CouchDocId.folder(folder.id))
         }
     }
