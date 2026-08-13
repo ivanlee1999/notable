@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.12.0
+
+The BOOX and the iPad were quietly re-uploading each other's work. Nothing was ever lost to it, but
+every exchange cost a round trip that achieved nothing, and a page's title or background could settle
+the wrong way.
+
+### Each device claimed to have written the other's notes
+
+- **Every page, notebook and folder the BOOX read back was stamped with the BOOX's own name**,
+  whoever had actually written it. Nothing recorded the real author, so sync had to assume one, and
+  it always assumed "me". The iPad's copy therefore looked like a change worth sending back, the
+  BOOX's copy looked the same way to the iPad, and both devices wrote a fresh revision of
+  byte-identical content. A single page could reach twelve revisions where five would have done.
+- The author now travels with the note and is stored beside it, so a document that arrived from the
+  other device is recognised as theirs and left alone.
+- The same guess also decided **which title, background or page size won** when two edits shared a
+  timestamp — the tie was broken on a name that was always this device's. Those now settle on
+  whichever device really made the edit.
+- A device that loses its place in the sync history replays it from the beginning. That replay used
+  to re-upload everything it held; it now sends nothing.
+
+Your drawings were never at risk from this: ink merges stroke by stroke and was always kept in full.
+Schema 44 -> 45, in one automatic step.
+
 ## 0.11.0
 
 Deleting a folder no longer takes everything inside it away for good, and an edit made on the BOOX
