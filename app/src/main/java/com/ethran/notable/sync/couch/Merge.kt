@@ -272,6 +272,10 @@ object CouchMerge {
             defaultBackgroundType = winner.defaultBackgroundType,
             defaultPageWidth = winner.defaultPageWidth ?: loser.defaultPageWidth,
             defaultPageHeight = winner.defaultPageHeight ?: loser.defaultPageHeight,
+            // The winner's, not a union: unlike a tombstone, the Trash is a state that can be left.
+            // Taking the earlier of the two would make a restore impossible to express — the peer
+            // still holding the trashed copy would put it straight back on the next merge.
+            deletedAt = winner.deletedAt,
             createdAt = earlier(a.createdAt, b.createdAt),
             updatedAt = later(a.updatedAt, b.updatedAt),
             updatedBy = winner.updatedBy,
@@ -293,6 +297,7 @@ object CouchMerge {
             "defaultBackgroundType" to notebook.defaultBackgroundType,
             "defaultPageWidth" to notebook.defaultPageWidth?.toString(),
             "defaultPageHeight" to notebook.defaultPageHeight?.toString(),
+            "deletedAt" to notebook.deletedAt,
         )
     )
 
@@ -307,6 +312,7 @@ object CouchMerge {
             schema = maxOf(a.schema, b.schema),
             title = winner.title,
             parentFolderId = winner.parentFolderId,
+            deletedAt = winner.deletedAt,
             createdAt = earlier(a.createdAt, b.createdAt),
             updatedAt = later(a.updatedAt, b.updatedAt),
             updatedBy = winner.updatedBy,
@@ -324,6 +330,7 @@ object CouchMerge {
             "createdAt" to folder.createdAt, "updatedAt" to folder.updatedAt,
             "updatedBy" to folder.updatedBy, "title" to folder.title,
             "parentFolderId" to folder.parentFolderId,
+            "deletedAt" to folder.deletedAt,
         )
     )
 

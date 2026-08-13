@@ -30,8 +30,8 @@ data class TrashUiState(
 /**
  * The Trash screen's state and the four things it can do.
  *
- * Restoring is cheap and local; purging is the only irreversible act in the app, and it is the
- * only one here that touches the network — see [TrashRepository] for why the two are split.
+ * Restoring and purging both reach the network — the Trash is synced — but only purging is
+ * irreversible. See [TrashRepository] for why the two are split.
  */
 @HiltViewModel
 class TrashViewModel @Inject constructor(
@@ -55,9 +55,9 @@ class TrashViewModel @Inject constructor(
     fun restoreNotebook(notebookId: String) = restore { trashRepository.restoreNotebook(notebookId) }
 
     /**
-     * A restore only needs to reach the server when it also re-homed the item, which is why the
-     * repository returns the ids rather than the caller guessing: clearing `deletedAt` changed
-     * nothing a peer can see, and queueing it anyway would push an identical document on every tap.
+     * Every restore reaches the server: `deletedAt` is part of the document, so taking something
+     * out of the Trash here is only true elsewhere once the peer has heard about it. The
+     * repository returns the ids rather than the caller guessing which ones changed.
      */
     private fun restore(block: suspend () -> List<String>) {
         viewModelScope.launch(Dispatchers.IO) {

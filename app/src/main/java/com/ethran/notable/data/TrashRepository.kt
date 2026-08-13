@@ -30,8 +30,16 @@ import javax.inject.Singleton
  *
  *  1. **Trash.** [trashFolder]/[trashNotebook] set `deletedAt` and nothing else. The rows stay
  *     where they are, so [restoreFolder]/[restoreNotebook] are one column write and cannot
- *     half-fail. Nothing is published: a trashed document keeps syncing, because it is not deleted
- *     anywhere yet and a peer that still has it is not wrong.
+ *     half-fail. Nothing is *deleted*: a trashed document keeps syncing, ink and all, because it
+ *     is not deleted anywhere yet and a peer that is still editing it loses nothing.
+ *
+ *     `deletedAt` is published, though — it is a field of the `notebook`/`folder` document
+ *     (protocol §3.2), not a note this device keeps to itself. Throwing something away takes it
+ *     out of the library on every device, and restoring it on any of them brings it back on all,
+ *     which is the only way "delete" can mean one thing across two apps. That is why these go
+ *     through `update` rather than `setDeletedAt`: `update` stamps `updatedAt` and queues the
+ *     outbox, and the stamp is what §5.5 compares — an unstamped trashing ties with the peer's
+ *     live copy and can lose.
  *  2. **Purge.** [purgeFolder]/[purgeNotebook] walk the whole subtree first, write a tombstone for
  *     every folder and notebook in it, and only then delete the root row — all inside one
  *     transaction. Either the tombstones and the deletion both happen or neither does, which is
@@ -132,16 +140,23 @@ class TrashRepository @Inject constructor(
      * Move a folder to the Trash. Only the folder's own row is marked: its descendants stay
      * untouched and become unreachable simply because their ancestor is no longer listed, which is
      * what makes restoring the whole subtree a single write rather than a second cascade to get
-     * wrong.
+     * wrong. The peer hides the same subtree from the same one field.
+     *
+     * @return the CouchDB document ids peers need to hear about, for the caller to nudge sync
+     *   with. The write is already durable in the outbox either way.
      */
-    suspend fun trashFolder(folderId: String) {
-        folderRepository.setDeletedAt(folderId, Date())
+    suspend fun trashFolder(folderId: String): List<String> {
+        val folder = folderRepository.get(folderId) ?: return emptyList()
+        folderRepository.update(folder.copy(deletedAt = Date()))
         log.i("Moved folder $folderId to the Trash")
+        return listOf(CouchDocId.folder(folderId))
     }
 
-    suspend fun trashNotebook(notebookId: String) {
-        bookRepository.setDeletedAt(notebookId, Date())
+    suspend fun trashNotebook(notebookId: String): List<String> {
+        val notebook = bookRepository.getById(notebookId) ?: return emptyList()
+        bookRepository.update(notebook.copy(deletedAt = Date()))
         log.i("Moved notebook $notebookId to the Trash")
+        return listOf(CouchDocId.notebook(notebookId))
     }
 
     /**
@@ -150,21 +165,22 @@ class TrashRepository @Inject constructor(
      * invisible parent would put it somewhere the user cannot reach and look exactly like the
      * restore having silently failed.
      *
-     * @return the CouchDB document ids that changed in a way peers need to hear about. Clearing
-     *   `deletedAt` is not one of them — the Trash never left this device — but being re-homed is,
-     *   so only that case is worth queueing.
+     * @return the CouchDB document ids peers need to hear about — always the item itself, because
+     *   clearing `deletedAt` is what takes it out of the Trash on the *other* device too. Only a
+     *   newer write does that, so a restore that published nothing would be undone by the peer's
+     *   trashed copy on the next merge.
      */
     suspend fun restoreFolder(folderId: String): List<String> {
         val folder = folderRepository.get(folderId) ?: return emptyList()
+        // update(), not setDeletedAt(): it stamps updatedAt and queues the outbox, and without the
+        // stamp the restore loses the timestamp comparison against the peer's trashed copy.
         if (!isReachable(folder.parentFolderId)) {
-            // update(), not setDeletedAt(): this genuinely moves the folder, so it has to stamp
-            // updatedAt or the move loses the timestamp comparison against a peer's copy.
             folderRepository.update(folder.copy(parentFolderId = null, deletedAt = null))
             log.i("Restored folder $folderId to the top level; its parent is gone")
-            return listOf(CouchDocId.folder(folderId))
+        } else {
+            folderRepository.update(folder.copy(deletedAt = null))
         }
-        folderRepository.setDeletedAt(folderId, null)
-        return emptyList()
+        return listOf(CouchDocId.folder(folderId))
     }
 
     /** The notebook twin of [restoreFolder], with the same re-homing rule and return contract. */
@@ -173,10 +189,10 @@ class TrashRepository @Inject constructor(
         if (!isReachable(notebook.parentFolderId)) {
             bookRepository.update(notebook.copy(parentFolderId = null, deletedAt = null))
             log.i("Restored notebook $notebookId to the top level; its folder is gone")
-            return listOf(CouchDocId.notebook(notebookId))
+        } else {
+            bookRepository.update(notebook.copy(deletedAt = null))
         }
-        bookRepository.setDeletedAt(notebookId, null)
-        return emptyList()
+        return listOf(CouchDocId.notebook(notebookId))
     }
 
     /**

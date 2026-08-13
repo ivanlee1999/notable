@@ -148,16 +148,18 @@ fun NotebookConfigDialog(
         ShowSimpleConfirmationDialog(
             title = "Move to Trash?",
             message = "\"${book!!.title}\" (${book!!.pageIds.size} page" +
-                "${if (book!!.pageIds.size == 1) "" else "s"}) stays recoverable from the " +
-                "Trash in your library until you empty it.",
+                "${if (book!!.pageIds.size == 1) "" else "s"}) leaves the library on your other " +
+                "devices too, and stays recoverable from the Trash until you empty it.",
             onConfirm = {
-                // Nothing is tombstoned or uploaded here. Deletion is now two steps — stage
-                // locally, publish on purge — so that a notebook can come back. The transaction
-                // main wrote for this, `AppRepository.deleteNotebookLocally`, is what the purge
-                // calls when the Trash is emptied; peers keep their copy until then, which is what
-                // makes the restore mean anything.
+                // Nothing is tombstoned here — deletion is two steps, stage then publish on purge,
+                // so that a notebook can come back. What *is* published is the Trash itself: it is
+                // a field of the notebook document, so this takes the notebook out of the library
+                // everywhere, and a restore from any device puts it back on all of them. The
+                // tombstone still waits for `AppRepository.deleteNotebookLocally`, which the purge
+                // calls when the Trash is emptied.
                 scope.launch {
                     appRepository.trashRepository.trashNotebook(bookId)
+                        .forEach { couchSync.noteDocumentChanged(it) }
                 }
                 showDeleteDialog = false
                 onClose()
