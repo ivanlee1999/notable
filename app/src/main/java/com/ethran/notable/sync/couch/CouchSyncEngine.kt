@@ -26,6 +26,15 @@ data class CouchSyncState(
     val revs: Map<String, String> = emptyMap(),
     /** The outbox: documents changed locally and not yet accepted by the server. */
     val dirty: Set<String> = emptySet(),
+    /**
+     * Which database the state above describes (protocol §1.2), or null for state written before
+     * this field existed — or by a device that has not yet met a server carrying the metadata.
+     *
+     * The checkpoint and revision cache are only meaningful against the database they were built
+     * from, and "same address, same name" does not establish that: a database dropped and recreated
+     * answers to both. Null is treated as "not yet known", never as "any database will do".
+     */
+    val databaseGeneration: String? = null,
 )
 
 // endregion
@@ -265,6 +274,16 @@ class CouchSyncEngine(
     private val deviceId: String,
     state: CouchSyncState = CouchSyncState(),
     private val maxPushAttempts: Int = DEFAULT_MAX_PUSH_ATTEMPTS,
+    /**
+     * Whether a database-identity problem stops sync (§1.2 stage 3) or is merely reported.
+     *
+     * Off by default, and that is the whole point of the staged rollout: a client that *required*
+     * the metadata would refuse to sync with a peer of the previous release, which has never
+     * written it. Reading, creating and recording run unconditionally; only blocking waits.
+     */
+    private val enforceDatabaseIdentity: Boolean = false,
+    private val nowIso: () -> String = { Instant.now().toString() },
+    private val newGeneration: () -> String = { java.util.UUID.randomUUID().toString() },
     private val onStateChange: ((CouchSyncState) -> Unit)? = null,
 ) {
 
@@ -297,6 +316,11 @@ class CouchSyncEngine(
          * least this long instead of its own backoff.
          */
         val retryAfterMs: Long? = null,
+        /**
+         * What the database said about itself this pass (§1.2). Reported even when it is not
+         * enforced, which is what makes the staged rollout observable before it is enabled.
+         */
+        val databaseIdentity: DatabaseIdentity? = null,
     ) {
         /** Set when the mass-deletion guard held something back. */
         val blockedByDeletionGuard: Boolean get() = heldDeletions.isNotEmpty()
@@ -338,6 +362,11 @@ class CouchSyncEngine(
          * longpoll is normal, and the batch is refetched from the winner's checkpoint.
          */
         val discardedStaleBatches: Int = 0,
+        /**
+         * What the database said about itself this pass (§1.2). Reported even when it is not
+         * enforced, which is what makes the staged rollout observable before it is enabled.
+         */
+        val databaseIdentity: DatabaseIdentity? = null,
     ) {
         /**
          * Whether anything about the images is worth telling the user. The page and its ink are
@@ -361,6 +390,7 @@ class CouchSyncEngine(
             lastSeq = next.lastSeq,
             clockSkewSeconds = next.clockSkewSeconds,
             discardedStaleBatches = discardedStaleBatches + next.discardedStaleBatches,
+            databaseIdentity = next.databaseIdentity ?: databaseIdentity,
         )
     }
 
@@ -368,6 +398,22 @@ class CouchSyncEngine(
     private var lastSeq: String = state.lastSeq
     private val revs: MutableMap<String, String> = LinkedHashMap(state.revs)
     private val dirty: MutableSet<String> = LinkedHashSet(state.dirty)
+    private var databaseGeneration: String? = state.databaseGeneration
+
+    /**
+     * What the last identity check saw, or null before the first one. Cached so pull and flush do
+     * not each re-read the document on every pass.
+     */
+    private var identity: DatabaseIdentity? = null
+
+    /**
+     * Guards the identity check alone, deliberately not [mutex].
+     *
+     * The check makes a round trip, and holding the state lock across it would stall every push for
+     * its duration — the same stall the split lock in [pull] exists to remove. Two callers arriving
+     * together serialize here instead, and the second finds the answer cached.
+     */
+    private val identityMutex = Mutex()
 
     /**
      * Document ids the user has explicitly waved past the mass-deletion guard, and nothing else.
@@ -394,7 +440,158 @@ class CouchSyncEngine(
     }
 
     val currentState: CouchSyncState
-        get() = CouchSyncState(lastSeq = lastSeq, revs = revs.toMap(), dirty = dirty.toSet())
+        get() = CouchSyncState(
+            lastSeq = lastSeq,
+            revs = revs.toMap(),
+            dirty = dirty.toSet(),
+            databaseGeneration = databaseGeneration,
+        )
+
+    /** The last identity observation, for a UI that wants to explain a refusal. */
+    val databaseIdentity: DatabaseIdentity? get() = identity
+
+    // region Database identity (§1.2)
+
+    /** What the last check made of the database this device is pointed at. */
+    sealed class DatabaseIdentity {
+        /**
+         * The database this state was built against, or one that has just adopted this device's
+         * first sight of it.
+         */
+        data class Matched(val generation: String) : DatabaseIdentity()
+
+        /**
+         * A database with the same address and name, but not the same database. Nothing is applied
+         * or uploaded until a human chooses what should happen to the two libraries.
+         */
+        data class GenerationChanged(val stored: String, val found: String) : DatabaseIdentity()
+
+        /** The server requires a newer client than this one. */
+        data class ClientTooOld(val minimum: Int) : DatabaseIdentity()
+
+        /** A rebuild is in progress on another device. */
+        data class Locked(val reason: String?) : DatabaseIdentity()
+
+        /**
+         * The server holds no metadata: a database created before this document existed, or a peer
+         * that has not shipped it yet. Explicitly *not* a mismatch.
+         */
+        object Unknown : DatabaseIdentity()
+
+        val isUsable: Boolean get() = this is Matched || this is Unknown
+    }
+
+    /**
+     * Reads — and on an empty database, creates — the identity document, and reconciles it with
+     * what this device believes.
+     *
+     * Called before the feed is read and before the outbox is sent. Cheap after the first pass: the
+     * result is cached for the life of the engine, which is the life of one configuration.
+     */
+    suspend fun verifyDatabaseIdentity(): DatabaseIdentity = identityMutex.withLock {
+        identity?.let { return@withLock it }
+
+        val stored = databaseGeneration
+        val metadata = try {
+            client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())?.body
+        } catch (e: CouchError.NotFound) {
+            null
+        }
+
+        if (metadata == null) {
+            // No metadata. On a database that already holds documents this means "created before
+            // this document existed", and the only safe reading is to leave it alone: treating a
+            // missing identity as permission to mint one — and therefore as permission to decide
+            // this is a *new* database — is how a client would come to rebuild a library it should
+            // have been syncing with.
+            //
+            // On an empty database there is nothing to be wrong about, so this device names it.
+            val resolved = claimEmptyDatabase() ?: DatabaseIdentity.Unknown
+            identity = resolved
+            return@withLock resolved
+        }
+
+        val resolved = when {
+            metadata.minimumClientProtocol > COUCH_PROTOCOL_VERSION ->
+                DatabaseIdentity.ClientTooOld(metadata.minimumClientProtocol)
+
+            metadata.locked -> DatabaseIdentity.Locked(metadata.lockReason)
+
+            stored == null -> {
+                // First sight of a database that already has an identity. Adopt it — this device
+                // has no prior claim to contradict it with.
+                mutex.withLock {
+                    databaseGeneration = metadata.generation
+                    persist()
+                }
+                DatabaseIdentity.Matched(metadata.generation)
+            }
+
+            stored == metadata.generation -> DatabaseIdentity.Matched(metadata.generation)
+
+            // The name and address are the same; the database is not. The checkpoint describes
+            // history this server never had, and the revision cache would suppress genuine changes
+            // as though they were this device's own echoes.
+            else -> DatabaseIdentity.GenerationChanged(stored, metadata.generation)
+        }
+        identity = resolved
+        return@withLock resolved
+    }
+
+    /**
+     * Names an empty database, or returns null when it turns out not to be empty.
+     *
+     * `PUT` with no `_rev` is the whole concurrency story: two devices reaching a fresh database
+     * together both try to create the document, and CouchDB gives exactly one of them the write.
+     * The loser re-reads and adopts the winner's generation rather than retrying, because the
+     * question "which of us names it" has already been answered.
+     */
+    private suspend fun claimEmptyDatabase(): DatabaseIdentity? {
+        // Pre-existing library, no metadata: record nothing and block nothing.
+        if (!isDatabaseEmpty()) return null
+
+        val metadata = CouchDatabaseMetadata(
+            generation = databaseGeneration ?: newGeneration(),
+            updatedAt = nowIso(),
+        )
+        return try {
+            client.put(
+                CouchMetaDocId.DATABASE,
+                rev = null,
+                body = metadata,
+                serializer = CouchDatabaseMetadata.serializer(),
+            )
+            mutex.withLock {
+                databaseGeneration = metadata.generation
+                persist()
+            }
+            DatabaseIdentity.Matched(metadata.generation)
+        } catch (e: CouchError.Conflict) {
+            // Another device got there first in the moment between the read and the write.
+            val winner = client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())
+                ?.body ?: return null
+            mutex.withLock {
+                databaseGeneration = winner.generation
+                persist()
+            }
+            DatabaseIdentity.Matched(winner.generation)
+        }
+    }
+
+    /**
+     * Whether the server holds any document this protocol cares about. Reserved ids do not count: a
+     * database holding nothing but protocol bookkeeping is still an empty library.
+     *
+     * A page of rows rather than one, because a single row could be a reserved id and say nothing
+     * about what follows it. One page is enough: the answer only has to be right about a database
+     * small enough to be plausibly new, and anything with a hundred documents is not.
+     */
+    private suspend fun isDatabaseEmpty(): Boolean {
+        val probe = client.changes(since = "0", longpoll = false, limit = CATCH_UP_BATCH_SIZE)
+        return probe.rows.all { CouchMetaDocId.isReserved(it.id) }
+    }
+
+    // endregion
 
     val pendingCount: Int get() = dirty.size
 
@@ -496,7 +693,39 @@ class CouchSyncEngine(
 
     // region Push
 
-    suspend fun flush(): FlushReport = mutex.withLock {
+    suspend fun flush(): FlushReport {
+        // Checked before a single document goes out, and before the flush lock is taken. Uploading
+        // a library into a database that is not the one this device has been syncing with is the
+        // one mistake here that cannot be undone from the other side.
+        //
+        // Outside the lock for two reasons: it makes a round trip, and [verifyDatabaseIdentity]
+        // takes [mutex] itself to record what it learns — Kotlin's `Mutex` is not reentrant, so
+        // asking from inside would deadlock rather than fail.
+        //
+        // A check that could not complete is *not* evidence about identity — offline is the usual
+        // reason — so it is swallowed and the flush proceeds exactly as it did before this existed.
+        // The pushes will discover the same network for themselves, and report it per document the
+        // way every other caller expects.
+        val identity = runCatching { verifyDatabaseIdentity() }.getOrNull()
+        if (enforceDatabaseIdentity && identity != null && !identity.isUsable) {
+            return mutex.withLock {
+                FlushReport(
+                    stillDirty = dirty.sorted(),
+                    failures = mapOf(
+                        CouchMetaDocId.DATABASE to CouchError.DatabaseIdentity(identity).detail
+                    ),
+                    // Terminal on purpose: no amount of retrying resolves whose library this is.
+                    // The outbox keeps everything, and the user's answer is what releases it.
+                    hasRetriableFailure = false,
+                    databaseIdentity = identity,
+                )
+            }
+        }
+        return flushDocuments(identity)
+    }
+
+    /** The flush proper. Callers have already settled [identity]. */
+    private suspend fun flushDocuments(identity: DatabaseIdentity?): FlushReport = mutex.withLock {
         val pushed = mutableListOf<String>()
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
@@ -583,6 +812,7 @@ class CouchSyncEngine(
             failures = failures,
             hasRetriableFailure = hasRetriableFailure,
             retryAfterMs = retryAfterMs,
+            databaseIdentity = identity,
             heldDeletions = heldDeletions,
             // Whatever the last response said about the server's clock. Reported rather than acted
             // on: it is a warning, and a warning must never be able to fail a push.
@@ -780,7 +1010,14 @@ class CouchSyncEngine(
         // nothing left to wait for, so the loop drops to normal requests and drains at full speed
         // until a short batch says the server is caught up. Parking a fresh longpoll instead would
         // wait for a *new* change before collecting the ones already queued.
-        var report = PullReport()
+        val identity = verifyDatabaseIdentity()
+        if (enforceDatabaseIdentity && !identity.isUsable) {
+            // Nothing is applied and the checkpoint does not move. A device that cannot tell whose
+            // history it is reading must not act on it.
+            throw CouchError.DatabaseIdentity(identity)
+        }
+
+        var report = PullReport(databaseIdentity = identity)
         var longpollThisPass = longpoll
         while (true) {
             val since = mutex.withLock { lastSeq }
@@ -853,6 +1090,17 @@ class CouchSyncEngine(
         val conflictCopies = mutableListOf<String>()
 
         for (row in changes.rows) {
+            // Protocol bookkeeping, not a library item (§1.1). Recorded and stepped past: it is
+            // neither merged nor conflict-copied, and a `sync-meta:` id this build does not know is
+            // still recognisably ours rather than a document from a future schema.
+            //
+            // Ahead of the echo check, so it never reaches any of the report's lists. A caller
+            // counting what a pull brought down is asking about the library, and bookkeeping
+            // turning up as a "skipped echo" is noise in every report that mentions it.
+            if (CouchMetaDocId.isReserved(row.id)) {
+                revs[row.id] = row.rev
+                continue
+            }
             // Our own write coming back. Applying it would be harmless (merges are idempotent) but
             // it would also mark the document dirty and start a push ping-pong.
             if (revs[row.id] == row.rev) {

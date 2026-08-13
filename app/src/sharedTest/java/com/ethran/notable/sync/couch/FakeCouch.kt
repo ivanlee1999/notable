@@ -305,7 +305,17 @@ class FakeCouchTransport : CouchTransport {
     fun isDeleted(documentId: String): Boolean =
         synchronized(lock) { docs[documentId]?.deleted ?: false }
 
-    fun documentIds(): List<String> = synchronized(lock) { docs.keys.sorted() }
+    /**
+     * The *library* documents the server holds.
+     *
+     * Reserved ids are excluded by default because the protocol says they are not library items
+     * (§1.1): `sync-meta:database` appears the moment any engine touches a fresh database, and a
+     * test asking "did this notebook reach the server" is not asking about bookkeeping. The
+     * identity tests pass [includeReserved] to see it.
+     */
+    fun documentIds(includeReserved: Boolean = false): List<String> = synchronized(lock) {
+        docs.keys.filter { includeReserved || !CouchMetaDocId.isReserved(it) }.sorted()
+    }
 
     /** Writes a document as if another device had pushed it. */
     fun <T> seed(

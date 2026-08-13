@@ -59,6 +59,14 @@ sealed class CouchError(val detail: String) : Exception(detail) {
     class MalformedResponse(val reason: String) : CouchError("malformedResponse($reason)")
 
     /**
+     * The database is not the one this device has been syncing with, requires a newer client, or is
+     * locked for a rebuild (§1.2). Never retried: the answer is a human's, not a delay's.
+     */
+    class DatabaseIdentity(
+        val identity: CouchSyncEngine.DatabaseIdentity,
+    ) : CouchError("databaseIdentity($identity)")
+
+    /**
      * Whether waiting and trying again could plausibly succeed.
      *
      * Every [Server] status used to answer yes, which meant a request the server had already
