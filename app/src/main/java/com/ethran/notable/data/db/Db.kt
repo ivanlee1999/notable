@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 44,
+    version = 45,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -91,6 +91,7 @@ class Converters {
         // Folder.deletedAt / Notebook.deletedAt: nullable columns, so Room adds them itself and
         // every existing row reads as "not in the Trash".
         AutoMigration(43, 44),
+        // 44 -> 45 is hand-written: see MIGRATION_44_45 in Migrations.kt.
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

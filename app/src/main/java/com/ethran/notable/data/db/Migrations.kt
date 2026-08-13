@@ -168,6 +168,22 @@ val MIGRATION_41_42 = object : Migration(41, 42) {
     }
 }
 
+// Records which *peer* last wrote a page, notebook or folder, so a scalar tie-break can be decided
+// on the real author rather than on this device's own id — see [Page.updatedBy] for what that was
+// costing.
+//
+// Hand-written rather than an AutoMigration because `schemas/44.json` was never exported, and Room
+// generates an auto-migration only from a schema file it can read. Three nullable columns with no
+// backfill: null already means "written here", which is the correct reading of every row that
+// predates this column, since a device that has never synced authored everything it holds.
+val MIGRATION_44_45 = object : Migration(44, 45) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `Page` ADD COLUMN `updatedBy` TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE `Notebook` ADD COLUMN `updatedBy` TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE `Folder` ADD COLUMN `updatedBy` TEXT DEFAULT NULL")
+    }
+}
+
 /**
  * Every hand-written migration, in one list, because opening the database at the current version
  * needs *all* of them — the auto-migrations Room generates only cover the gaps between these.
@@ -185,4 +201,5 @@ val APP_MIGRATIONS = arrayOf(
     MIGRATION_32_33,
     MIGRATION_37_38,
     MIGRATION_41_42,
+    MIGRATION_44_45,
 )

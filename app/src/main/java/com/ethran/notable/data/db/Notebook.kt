@@ -61,7 +61,10 @@ data class Notebook(
      * yet and must keep syncing until it really is.
      */
     @ColumnInfo(index = true)
-    val deletedAt: Date? = null
+    val deletedAt: Date? = null,
+
+    /** Which device last wrote this notebook, or null when that device is this one. See [Page.updatedBy]. */
+    val updatedBy: String? = null
 )
 
 // DAO
@@ -105,7 +108,11 @@ interface NotebookDao {
 
     // Advances updatedAt alongside pageIds so a structural change (add/remove/reorder) marks the
     // notebook dirty for sync — otherwise the change would not be detected and could be lost.
-    @Query("UPDATE notebook SET pageIds=:pageIds, updatedAt=:updatedAt WHERE id=:id")
+    // `updatedBy` is cleared alongside `updatedAt`: adding, removing or reordering pages here is
+    // authored here, whoever wrote the manifest last. See [Notebook.updatedBy]. Only the local
+    // repository paths reach this — `RoomCouchStore.applyNotebook` writes the whole row through
+    // [BookRepository.updateVerbatim] instead, and so keeps the peer's author.
+    @Query("UPDATE notebook SET pageIds=:pageIds, updatedAt=:updatedAt, updatedBy=NULL WHERE id=:id")
     suspend fun setPageIds(id: String, pageIds: List<String>, updatedAt: Date)
 
     @Insert
@@ -173,7 +180,8 @@ class BookRepository @Inject constructor(
 
     suspend fun update(notebook: Notebook) {
         log.i("updating DB")
-        val updatedNotebook = notebook.copy(updatedAt = Date())
+        // `updatedBy = null` for the same reason `updatedAt` is stamped: this write happened here.
+        val updatedNotebook = notebook.copy(updatedAt = Date(), updatedBy = null)
         database.withTransaction {
             notebookDao.update(updatedNotebook)
             outbox.queue(CouchDocId.notebook(updatedNotebook.id))
@@ -235,7 +243,9 @@ class BookRepository @Inject constructor(
                 // remove the "open page" if it's the one
                 openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId,
                 // a structural change marks the notebook dirty for sync
-                updatedAt = Date()
+                updatedAt = Date(),
+                // and it was made here, whoever wrote the manifest last
+                updatedBy = null
             )
             notebookDao.update(updatedNotebook)
             // Only the notebook. The removal travels inside its manifest and `deletedPageIds`
