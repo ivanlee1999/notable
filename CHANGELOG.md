@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.14.0
+
+Sync could skip a change from the other device and never mention it again. Nothing here is a
+feature; it is the set of ways sync could go wrong quietly, and what each one cost you.
+
+### A change from the other device could be skipped for good
+
+- **A truncated or unfamiliar answer from the server was accepted as if it were complete.** Sync
+  reads a list of what changed and then records how far it has read. If anything went missing from
+  that list on the way — a proxy that cut the response short, a server that phrased something in a
+  way this app did not expect — the app recorded the position anyway and moved on. The server only
+  ever offers a change once, so whatever was in the gap was never offered again: a page written on
+  the iPad that simply never appeared here, with nothing reporting a problem.
+- A response that does not make sense is now refused whole and asked for again, which costs one
+  retry rather than the change.
+- **Two syncs running at once could put an older answer on top of a newer one.** A catch-up while
+  the app was waiting for news left it holding a description of a moment that had passed. The stale
+  half is now discarded rather than half-applied, which stops the needless re-uploads and false
+  clashes it caused.
+
+### Coming back after a long time away could take the app down
+
+- **The first sync after a long gap asked for everything that had changed at once**, in a single
+  response, with every page's ink inside it. After a week off, or behind a proxy that had been
+  holding things back, that is a large amount of data to hold in memory at once on this device —
+  the difference between slow and dead. It now arrives in pieces and is written down as it goes, so
+  an interrupted catch-up resumes where it stopped.
+
+### Sync that kept trying, or stopped trying, for the wrong reasons
+
+- **A note the server had refused on its merits was retried forever** — a page too large for the
+  server to accept, a request it would never take — on the same schedule as a lost connection, and
+  the one message that would have told you what to fix scrolled past between attempts. Those now
+  stop and say what happened, and a page the server considers too large says exactly that.
+- One document the server will not take no longer holds up everything queued behind it.
+- **A server asking for a pause is now obeyed** rather than argued with, and repeated attempts to
+  send are spaced out properly instead of resetting to full speed every time a read succeeded.
+
+### Pictures that had not arrived looked like everything was fine
+
+- **An image that failed to download was silently forgotten.** The page and its ink arrived,
+  sync reported itself finished, and the picture was simply absent — with nothing to say whether it
+  was still coming, missing from the server, or damaged.
+- Those are now told apart and reported beside the status: *"2 images still downloading. Notes and
+  ink are synced."* It stays a note rather than a failure, because the writing really is synced, and
+  it clears itself when the images land.
+
+### Work done just before closing the app
+
+- **The last strokes before you left the app were the most likely to be left behind.** The final
+  send was started and then abandoned as soon as Android stopped the app, and nothing else was
+  scheduled to finish it — the next attempt could be a quarter of an hour later.
+- Leaving the app now queues that work durably, so it survives the app being closed and is finished
+  in the background.
+
+### The server being rebuilt is now noticed
+
+- **A database recreated under the same name looked identical to the original one.** The app would
+  carry on from a position describing history that server never had, and treat genuine changes as
+  its own echoes.
+- The database now carries an identity, so the two can be told apart. This release only records and
+  reports it; the iPad app has to understand it too before either can act on it.
+
+No database change.
+
 ## 0.13.0
 
 Deleting a notebook here left it sitting in the library on your iPad. The Trash now travels, so
