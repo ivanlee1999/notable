@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
 
 /**
  * Everything the pumps need from the CouchDB stack, behind an interface.
@@ -170,8 +171,37 @@ class CouchSyncController @Inject constructor(
          * [CouchDbClient.clockSkewSeconds].
          */
         val clockSkewSeconds: Long? = null,
+        /** Referenced images the last pull could not bring down; see [assetWarning]. */
+        val waitingImages: Int = 0,
+        /** Of those, the ones whose bytes did not match the id that named them. */
+        val unverifiedImages: Int = 0,
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
+
+        /**
+         * Images that have not arrived, or null. Non-fatal by construction, like
+         * [clockSkewWarning]: it is never a [Status], so nothing can mistake it for a reason a sync
+         * did not happen.
+         *
+         * Saying "notes and ink are synced" is the point of the sentence. Without it, a gap where a
+         * picture belongs reads as a broken sync — and the two things people then try, waiting and
+         * re-downloading the library, are the two things that will not help.
+         */
+        val assetWarning: String?
+            get() = when {
+                unverifiedImages > 0 -> {
+                    val plural = if (unverifiedImages == 1) "" else "s"
+                    "$unverifiedImages image$plural could not be verified and will be retried. " +
+                        "Notes and ink are synced."
+                }
+
+                waitingImages > 0 -> {
+                    val plural = if (waitingImages == 1) "" else "s"
+                    "$waitingImages image$plural still downloading. Notes and ink are synced."
+                }
+
+                else -> null
+            }
 
         /**
          * The clock warning, or null. Non-fatal by construction: it is never a [Status], so nothing
@@ -206,7 +236,8 @@ class CouchSyncController @Inject constructor(
                 // Appended rather than substituted: sync is working, and the caption still has to
                 // say so. The warning is extra information about *how well*, not a replacement for
                 // what happened.
-                return listOfNotNull(line, clockSkewWarning).joinToString(" ").ifEmpty { null }
+                return listOfNotNull(line, assetWarning, clockSkewWarning)
+                    .joinToString(" ").ifEmpty { null }
             }
     }
 
@@ -215,6 +246,23 @@ class CouchSyncController @Inject constructor(
 
     val status: Status get() = _state.value.status
     val pendingCount: Int get() = _state.value.pendingCount
+
+    /**
+     * Whether anything is still owed to the server — documents in the outbox, or an edit whose
+     * debounce timer has not fired yet.
+     *
+     * Read at `onStop` to decide whether the last push needs a durable continuation. The pending
+     * count alone would miss the commonest case by far: someone draws a stroke and immediately
+     * leaves the app, so the edit is queued in the engine but the three-second timer that would
+     * have sent it never fires. That is exactly the work most at risk of being lost, because it is
+     * the most recent.
+     *
+     * Cheap and synchronous, because the caller is a lifecycle callback that cannot suspend. A
+     * pending push also implies the CouchDB backend is the selected one: every path that starts one
+     * checks [CouchSyncBackend.isEnabled] first.
+     */
+    val hasUnfinishedWork: Boolean
+        get() = pendingCount > 0 || synchronized(jobs) { pushJob != null }
     val lastSyncedAt: Long? get() = _state.value.lastSyncedAt
     val lastError: String? get() = _state.value.lastError
 
@@ -222,6 +270,25 @@ class CouchSyncController @Inject constructor(
     private val jobs = Any()
     private var pullJob: Job? = null
     private var pushJob: Job? = null
+
+    /**
+     * The push loop's own backoff, deliberately separate from [runFeed]'s.
+     *
+     * The two fail independently, and the feed is the one that recovers first: a pull succeeds as
+     * soon as the network is back, while an outbox can keep failing for its own reasons — a
+     * document the server keeps rejecting, a rate limit that applies to writes. Sharing one counter
+     * meant every successful pull reset the push delay to a second, so a persistently failing
+     * outbox retried at full speed forever, which is precisely the request flood the backoff exists
+     * to prevent. Guarded by [jobs].
+     */
+    private var pushBackoffMs = clock.retryFloorMs
+
+    /**
+     * Whether the pending [pushJob] is a scheduled retry rather than an edit timer. Only a retry
+     * may schedule another, so an edit arriving mid-backoff replaces it with a normal push instead
+     * of adding a second timer. Guarded by [jobs].
+     */
+    private var isRetryingPush = false
 
     /** Serializes flushes so two pushes cannot interleave over the reported state. */
     private val flushMutex = Mutex()
@@ -263,6 +330,10 @@ class CouchSyncController @Inject constructor(
             pullJob = null
             pushJob?.cancel()
             pushJob = null
+            isRetryingPush = false
+            // [pushBackoffMs] is deliberately *not* reset here. Stopping is what happens when sync
+            // is switched off or the app stops, and a device that comes straight back to a server
+            // that is still rate-limiting it should not arrive at full speed.
         }
         _state.update { if (it.status is Status.Syncing) it.copy(status = Status.Idle) else it }
     }
@@ -319,6 +390,7 @@ class CouchSyncController @Inject constructor(
         val generation = editGeneration.incrementAndGet()
         synchronized(jobs) {
             pushJob?.cancel()
+            isRetryingPush = false
             pushJob = scope.launch {
                 try {
                     clock.sleep(clock.editQuietPeriodMs)
@@ -339,11 +411,45 @@ class CouchSyncController @Inject constructor(
 
     /** Pushes immediately — leaving the editor, backgrounding, reconnecting, or "Sync now". */
     suspend fun pushNow() {
-        synchronized(jobs) {
+        val wasRetry = synchronized(jobs) {
             pushJob?.cancel()
             pushJob = null
+            val was = isRetryingPush
+            isRetryingPush = false
+            was
         }
-        flushNow()
+        flushNow(wasRetry = wasRetry)
+    }
+
+    /**
+     * Waits out the push backoff and tries the outbox again.
+     *
+     * Scheduled only after a flush that failed in a way waiting could fix. A terminal failure — a
+     * page the server will not accept at any size, a malformed request — leaves the documents
+     * queued and the message standing, but does not put the device in a retry loop that cannot end:
+     * the next edit, foreground, or manual "Sync now" tries again, by which point something may
+     * have changed.
+     */
+    private fun schedulePushRetry(delayMs: Long) {
+        synchronized(jobs) {
+            pushJob?.cancel()
+            isRetryingPush = true
+            // Jitter so a household of devices that all lost the same Wi-Fi does not come back in
+            // lockstep and rebuild the thundering herd the backoff exists to break up.
+            val wait = (delayMs * (0.85 + Random.nextDouble() * 0.3)).toLong()
+            pushJob = scope.launch {
+                try {
+                    clock.sleep(wait)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    return@launch
+                }
+                val self = currentCoroutineContext()[Job]
+                synchronized(jobs) { if (pushJob === self) pushJob = null }
+                flushNow(wasRetry = true)
+            }
+        }
     }
 
     /** Fire-and-forget [pushNow], for callers that cannot suspend (`onStop`, a click handler). */
@@ -355,7 +461,10 @@ class CouchSyncController @Inject constructor(
      * @param coveringGeneration when set, skip if an earlier flush already covered that edit. Only
      *   the debounce timer passes it; an explicit push always sends.
      */
-    private suspend fun flushNow(coveringGeneration: Long? = null) = flushMutex.withLock {
+    private suspend fun flushNow(
+        coveringGeneration: Long? = null,
+        wasRetry: Boolean = false,
+    ) = flushMutex.withLock {
         if (coveringGeneration != null && flushedGeneration.get() >= coveringGeneration) {
             return@withLock
         }
@@ -375,6 +484,25 @@ class CouchSyncController @Inject constructor(
         }
         logFlush(report)
         noteClockSkew(report.clockSkewSeconds)
+        synchronized(jobs) {
+            when {
+                // Reset on a push that actually succeeded, and on nothing else. A successful *pull*
+                // used to do it, which is how an outbox that had been failing for ten minutes went
+                // back to retrying every second.
+                report.failures.isEmpty() -> pushBackoffMs = clock.retryFloorMs
+
+                report.hasRetriableFailure -> {
+                    // The server's own answer wins when it gave one (RFC 9110 §10.2.3);
+                    // `CouchDbClient` has already clamped it to something sane.
+                    schedulePushRetry(report.retryAfterMs ?: pushBackoffMs)
+                    pushBackoffMs = (pushBackoffMs * 2).coerceAtMost(clock.retryCeilingMs)
+                }
+
+                // A retry that came back terminal: stop climbing, and let the next edit or
+                // foreground start from the floor rather than from wherever this sequence reached.
+                wasRetry -> pushBackoffMs = clock.retryFloorMs
+            }
+        }
         _state.update { current ->
             val pending = report.stillDirty.size
             val held = report.heldDeletions
@@ -607,6 +735,9 @@ class CouchSyncController @Inject constructor(
     private fun apply(report: CouchSyncEngine.PullReport) {
         logPull(report)
         noteClockSkew(report.clockSkewSeconds)
+        for ((assetId, reason) in report.assetFailures) {
+            SyncLogger.w("CouchSync", "asset $assetId unavailable: $reason")
+        }
         _state.update { current ->
             current.copy(
                 // A pull that returned at all clears any previous failure: the server is
@@ -617,6 +748,16 @@ class CouchSyncController @Inject constructor(
                 conflictCopies =
                     if (report.conflictCopies.isEmpty()) current.conflictCopies
                     else current.conflictCopies + report.conflictCopies,
+                // Assigned from each report, never accumulated: the sets are derived from the
+                // store's own list of what is still owed, so a blob that lands on a later pull
+                // clears the warning without anything having to remember it was set.
+                // A corrupt asset is recorded in both `corruptAssets` and `assetFailures`, so it is
+                // subtracted back out here rather than counted twice. A 404 is only in
+                // `missingAssets` — it is not a failure, it is a peer that has not finished
+                // uploading.
+                waitingImages = report.missingAssets.size +
+                    (report.assetFailures.size - report.corruptAssets.size).coerceAtLeast(0),
+                unverifiedImages = report.corruptAssets.size,
             )
         }
     }
@@ -695,7 +836,14 @@ class CouchSyncController @Inject constructor(
         is CouchError.Blocked ->
             "Android refused this address: sync needs an https:// server. A plain http:// one " +
                 "would send your password in the clear, so it is not allowed."
-        is CouchError.Server -> "The sync server returned an error (${error.status})."
+        // 413 is the one terminal status with an answer the user can act on. Everything else in
+        // that class is a server or configuration fault they can only report.
+        is CouchError.Server -> when {
+            error.status == 413 -> "A page is too large for the sync server to accept."
+            error.status < 500 ->
+                "The sync server refused the request (${error.status}). Check the sync settings."
+            else -> "The sync server returned an error (${error.status})."
+        }
         else -> error.toString()
     }
 

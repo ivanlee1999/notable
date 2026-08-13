@@ -264,7 +264,24 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         val controller = couchSyncController.get()
+        // Read before `stop()`, which cancels the debounce timer this asks about.
+        val unfinished = controller.hasUnfinishedWork
         controller.stop()
+
+        // Enqueued *before* the push, and deliberately not instead of it. WorkManager writes the
+        // request to disk as it is enqueued; the fire-and-forget push below holds its intent only
+        // in a process Android may kill at any moment after this returns. So the worker is what
+        // remembers, and the push is the fast path that usually makes it a no-op.
+        //
+        // Not a foreground service: near-real-time sync is the on-screen loop's job, and holding a
+        // notification-bearing service to keep it running while notable is not on screen would be
+        // spending the user's battery on latency they cannot see. A queued worker is the right
+        // shape — it costs nothing until it runs, and it survives the process dying.
+        if (unfinished) {
+            Log.i(TAG, "Backgrounding with work still queued; scheduling a durable catch-up")
+            syncScheduler.get().triggerImmediateSync()
+        }
+
         // Last chance before the process may be killed. The push is per-document, so a truncated
         // run leaves the rest queued rather than a half-written notebook.
         controller.requestPushNow()

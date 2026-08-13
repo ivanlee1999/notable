@@ -51,6 +51,57 @@ object CouchDocType {
     const val NOTEBOOK = "notebook"
     const val PAGE = "page"
     const val ASSET = "asset"
+
+    /**
+     * Protocol bookkeeping, never a library item (§1.1). Reserved as a *prefix* so a client that
+     * meets a `sync-meta:` id it does not know still recognises it as ours and steps past it,
+     * rather than filing it as a document from a future schema.
+     */
+    const val SYNC_META = "sync-meta"
+}
+
+/**
+ * Documents the protocol reserves for itself. None of them carry user content, so none of them are
+ * enumerated, merged, conflict-copied, or shown.
+ */
+object CouchMetaDocId {
+    /** §1.2 — which database this is, and whether this client may sync it. */
+    const val DATABASE = "sync-meta:database"
+
+    /** Whether an id belongs to the reserved namespace. */
+    fun isReserved(documentId: String): Boolean =
+        documentId.startsWith("${CouchDocType.SYNC_META}:")
+}
+
+/**
+ * The protocol version this build speaks (§1.2). Distinct from [COUCH_SCHEMA_VERSION], which
+ * describes one document's shape: this describes the conversation.
+ */
+const val COUCH_PROTOCOL_VERSION: Int = 1
+
+/**
+ * §1.2. The identity of the database itself, so a device can tell "the library I have been syncing"
+ * from "a new database that happens to have the same name at the same address".
+ */
+@Serializable
+data class CouchDatabaseMetadata(
+    val type: String = DOCUMENT_TYPE,
+    val protocolVersion: Int = COUCH_PROTOCOL_VERSION,
+    /**
+     * The lowest protocol version allowed to sync this database. A client below it must refuse
+     * rather than guess at documents written by a newer one.
+     */
+    val minimumClientProtocol: Int = COUCH_PROTOCOL_VERSION,
+    /** Minted with the database. Its only job is to be different when the database is not the same. */
+    val generation: String,
+    /** Set while a rebuild is in progress; no client may pull or push ordinary documents. */
+    val locked: Boolean = false,
+    val lockReason: String? = null,
+    val updatedAt: String,
+) {
+    companion object {
+        const val DOCUMENT_TYPE = "sync-database-metadata"
+    }
 }
 
 /**

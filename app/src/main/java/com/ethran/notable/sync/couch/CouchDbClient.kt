@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -34,7 +35,15 @@ sealed class CouchError(val detail: String) : Exception(detail) {
         private fun readResolve(): Any = Unauthorized
     }
 
-    class Server(val status: Int, val path: String) : CouchError("server($status, $path)")
+    /**
+     * Any other status the client does not handle specially. [retryAfterMs] carries the server's
+     * own answer to "when should I come back", when it sent one.
+     */
+    class Server(
+        val status: Int,
+        val path: String,
+        val retryAfterMs: Long? = null,
+    ) : CouchError("server($status, $path)")
 
     /** Offline, DNS failure, timeout: keep the work queued and back off. */
     class Transport(val reason: String) : CouchError("transport($reason)")
@@ -49,9 +58,41 @@ sealed class CouchError(val detail: String) : Exception(detail) {
 
     class MalformedResponse(val reason: String) : CouchError("malformedResponse($reason)")
 
-    /** Whether waiting and trying again could plausibly succeed. */
+    /**
+     * The database is not the one this device has been syncing with, requires a newer client, or is
+     * locked for a rebuild (§1.2). Never retried: the answer is a human's, not a delay's.
+     */
+    class DatabaseIdentity(
+        val identity: CouchSyncEngine.DatabaseIdentity,
+    ) : CouchError("databaseIdentity($identity)")
+
+    /**
+     * Whether waiting and trying again could plausibly succeed.
+     *
+     * Every [Server] status used to answer yes, which meant a request the server had already
+     * refused on its merits — a document larger than the configured maximum, a malformed request, a
+     * database name this account may not touch — was retried on the same escalating schedule as a
+     * dropped connection, forever, and the one message that would tell the user what to fix
+     * scrolled past between attempts.
+     *
+     * The line is whether *waiting* is plausibly part of the answer. 5xx says the server failed at
+     * something it agreed to do; 408, 425 and 429 say "not now, ask again". Every other 4xx is this
+     * device having asked something the server will keep declining.
+     *
+     * [Blocked] stays terminal for the reason its own doc comment gives, and [Conflict], [NotFound],
+     * [Unauthorized] and [MalformedResponse] are inputs to the caller's logic rather than failures
+     * to retry blindly.
+     */
     val isRetriable: Boolean
-        get() = this is Transport || this is Server
+        get() = when (this) {
+            is Transport -> true
+            is Server -> when (status) {
+                408, 425, 429 -> true          // timeout, too early, rate limited
+                in 500..599 -> true            // the server's own fault, possibly transient
+                else -> false                  // 400, 403, 405, 413, … will not improve
+            }
+            else -> false
+        }
 }
 
 /**
@@ -246,7 +287,12 @@ class CouchDbClient(
 
     /**
      * One row of `_changes`. [json] is the document body (`include_docs=true`), left raw until the
-     * caller's id prefix says which shape to decode it as. Absent for rows the server elided.
+     * caller's id prefix says which shape to decode it as.
+     *
+     * Only ever null for a tombstone. CouchDB answers `"doc": null` for a row whose document was
+     * deleted between the feed reading the sequence and `include_docs` fetching the body, and the
+     * engine already synthesizes what a stripped tombstone needs. A *live* row without a body is
+     * malformed transport data and is rejected in [parseChanges] instead.
      */
     data class ChangeRow(
         val id: String,
@@ -312,20 +358,52 @@ class CouchDbClient(
             primitive.contentOrNullSafe ?: primitive.longOrNull?.toString()
         } ?: throw CouchError.MalformedResponse("_changes carried no last_seq")
 
-        val rows = (root["results"] as? JsonArray)
-            ?.mapNotNull { element ->
-                val row = element as? JsonObject ?: return@mapNotNull null
-                val id = row["id"]?.jsonPrimitive?.contentOrNullSafe ?: return@mapNotNull null
-                val rev = row["changes"]?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("rev")?.jsonPrimitive?.contentOrNullSafe.orEmpty()
-                ChangeRow(
-                    id = id,
-                    rev = rev,
-                    deleted = row["deleted"]?.jsonPrimitive?.booleanOrNull ?: false,
-                    json = row["doc"] as? JsonObject,
+        // Strict, because `last_seq` is checkpointed the moment this batch applies. A row dropped
+        // here — a proxy that truncated the response, a server answering a shape this client does
+        // not know — is a remote change lost *permanently*: the checkpoint moves past it and
+        // CouchDB never offers that sequence again. Refusing the whole response costs one retry;
+        // accepting a partial one costs the change. This used to be a `mapNotNull`.
+        //
+        // A document this build cannot *merge* is a different thing and is not rejected here: it is
+        // valid transport carrying an unknown schema, and the engine preserves it as a conflict
+        // copy and checkpoints it.
+        val results = root["results"] as? JsonArray
+            ?: throw CouchError.MalformedResponse("_changes carried no results array")
+        val rows = results.mapIndexed { index, element ->
+            val row = element as? JsonObject
+                ?: throw CouchError.MalformedResponse("_changes result $index is not an object")
+            val id = row["id"]?.jsonPrimitive?.contentOrNullSafe?.takeIf { it.isNotEmpty() }
+                ?: throw CouchError.MalformedResponse("_changes result $index carried no id")
+            val rev = row["changes"]?.jsonArray?.firstOrNull()
+                ?.jsonObject?.get("rev")?.jsonPrimitive?.contentOrNullSafe
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw CouchError.MalformedResponse("_changes result $index carried no revision")
+
+            val rawDeleted = row["deleted"]
+            val deleted = when {
+                rawDeleted == null || rawDeleted is JsonNull -> false
+                // `booleanOrNull` also parses the *string* `"true"`, and a numeric 1 is not a
+                // Boolean at all. Only an unquoted true/false counts.
+                else -> (rawDeleted as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                    ?: throw CouchError.MalformedResponse(
+                        "_changes result $index carried a non-Boolean deleted"
+                    )
+            }
+
+            val rawDocument = row["doc"]
+            val json = when {
+                rawDocument is JsonObject -> rawDocument
+                // The one body CouchDB legitimately omits: `include_docs` found the document
+                // already deleted. The engine synthesizes the tombstone the merge needs from
+                // `deleted` and the revision alone, so there is nothing to fetch and nothing to
+                // lose.
+                deleted && (rawDocument == null || rawDocument is JsonNull) -> null
+                else -> throw CouchError.MalformedResponse(
+                    "_changes result $index ($id) carried no document"
                 )
             }
-            .orEmpty()
+            ChangeRow(id = id, rev = rev, deleted = deleted, json = json)
+        }
         return Changes(lastSeq = lastSeq, rows = rows)
     }
 
@@ -447,7 +525,15 @@ class CouchDbClient(
         HTTP_UNAUTHORIZED, HTTP_FORBIDDEN -> CouchError.Unauthorized
         HTTP_NOT_FOUND -> CouchError.NotFound(path)
         HTTP_CONFLICT -> CouchError.Conflict(path)
-        else -> CouchError.Server(response.status, path)
+        else -> CouchError.Server(
+            response.status,
+            path,
+            retryAfterMs = parseRetryAfter(
+                response.headers.entries
+                    .firstOrNull { it.key.equals("Retry-After", ignoreCase = true) }
+                    ?.value
+            ),
+        )
     }
 
     // endregion
@@ -492,6 +578,27 @@ internal fun parseHttpDate(header: String): Long? = try {
     ZonedDateTime.parse(header, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
 } catch (_: Exception) {
     null
+}
+
+/** The longest a server may push this device out — the same ceiling the controller backs off to. */
+const val MAX_RETRY_AFTER_MS = 60_000L
+
+/**
+ * `Retry-After` in either shape RFC 9110 §10.2.3 allows: a delay in seconds, or an HTTP date.
+ *
+ * Clamped rather than trusted. A misconfigured proxy answering `Retry-After: 86400` would otherwise
+ * park sync for a day — the server gets to slow this device down, not to switch it off — and a date
+ * already in the past means "now", not a negative sleep.
+ *
+ * [nowMs] is injectable only so the date branch is testable; production always passes the clock.
+ */
+internal fun parseRetryAfter(header: String?, nowMs: Long = System.currentTimeMillis()): Long? {
+    val trimmed = header?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    val millis = trimmed.toLongOrNull()?.times(1_000)
+        ?: parseHttpDate(trimmed)?.minus(nowMs)
+        ?: return null
+    return millis.coerceIn(0, MAX_RETRY_AFTER_MS)
 }
 
 /**
