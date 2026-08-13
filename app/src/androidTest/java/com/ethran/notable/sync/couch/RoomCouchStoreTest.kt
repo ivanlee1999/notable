@@ -51,6 +51,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import javax.inject.Provider
 import java.time.Instant
 import java.util.Base64
 import java.util.Date
@@ -314,6 +315,96 @@ class RoomCouchStoreTest {
         assertNotNull("folder did not load back", loaded)
         assertEquals(folder, loaded!!.folder)
     }
+
+    // endregion
+
+    // region The Trash rides on the document
+
+    /**
+     * A notebook thrown away on the iPad has to land in this device's Trash — not stay in the
+     * library with a `deletedAt` nothing reads — and it has to still be *there*: trashed is not
+     * deleted, so the row, its pages and its ink all survive and go on syncing.
+     */
+    @Test
+    fun anIncomingTrashingLandsInTheTrashWithoutDeletingAnything() {
+        val id = CouchDocId.notebook("nb1")
+        store.apply(id, CouchDocBody.Notebook(CouchNotebook(
+            title = "notes", pageIds = listOf("p1"), deletedAt = stamp(9),
+            createdAt = stamp(0), updatedAt = stamp(9), updatedBy = "ipad",
+        )))
+
+        val row = runBlocking { repository.bookRepository.getById("nb1") }
+        assertNotNull("trashed is not deleted: the row stays", row)
+        assertEquals(Instant.parse(stamp(9)).toEpochMilli(), row!!.deletedAt!!.time)
+
+        val loaded = store.load(id) as? CouchDocBody.Notebook
+        assertEquals(stamp(9), loaded!!.notebook.deletedAt)
+    }
+
+    /**
+     * The other direction, and the reason `applyNotebook` writes `deletedAt` from the document
+     * rather than carrying the local value over: before this field existed the row was rebuilt
+     * without it, so any incoming edit quietly emptied the Trash.
+     */
+    @Test
+    fun anIncomingRestoreTakesTheNotebookBackOutOfTheTrash() {
+        val id = CouchDocId.notebook("nb1")
+        store.apply(id, CouchDocBody.Notebook(CouchNotebook(
+            title = "notes", deletedAt = stamp(9),
+            createdAt = stamp(0), updatedAt = stamp(9), updatedBy = "ipad",
+        )))
+
+        store.apply(id, CouchDocBody.Notebook(CouchNotebook(
+            title = "notes", createdAt = stamp(0), updatedAt = stamp(12), updatedBy = "ipad",
+        )))
+
+        assertNull(runBlocking { repository.bookRepository.getById("nb1") }!!.deletedAt)
+        assertNull((store.load(id) as CouchDocBody.Notebook).notebook.deletedAt)
+    }
+
+    @Test
+    fun aFolderTrashingTravelsTheSameWay() {
+        val id = CouchDocId.folder("f1")
+        store.apply(id, CouchDocBody.Folder(CouchFolder(
+            title = "study", deletedAt = stamp(4),
+            createdAt = stamp(0), updatedAt = stamp(4), updatedBy = "ipad",
+        )))
+
+        assertNotNull(runBlocking { repository.folderRepository.get("f1") }!!.deletedAt)
+        assertEquals(stamp(4), (store.load(id) as CouchDocBody.Folder).folder.deletedAt)
+    }
+
+    /**
+     * Trashing here is published, or the iPad would go on showing a notebook this device has
+     * binned. The stamp matters as much as the queueing: `deletedAt` merges as an ordinary scalar,
+     * so a trashing that did not move `updatedAt` would tie with the peer's live copy.
+     */
+    @Test
+    fun trashingANotebookQueuesItAndStampsIt() {
+        val trash = trashRepositoryFor(db, Provider { repository })
+        store.apply(CouchDocId.notebook("nb1"), CouchDocBody.Notebook(CouchNotebook(
+            title = "notes", createdAt = stamp(0), updatedAt = stamp(5), updatedBy = "ipad",
+        )))
+        runBlocking { CouchOutboxRepository(db.couchOutboxDao()).clear(CouchDocId.notebook("nb1")) }
+
+        runBlocking { trash.trashNotebook("nb1") }
+
+        val row = runBlocking { repository.bookRepository.getById("nb1") }!!
+        assertNotNull("it is in the Trash", row.deletedAt)
+        assertTrue(
+            "the trashing has to outrank the peer's live copy",
+            row.updatedAt.time > CouchMerge.millis(stamp(5)),
+        )
+        assertTrue(
+            "and it has to be queued, or the peer never hears about it",
+            runBlocking { CouchOutboxRepository(db.couchOutboxDao()).pendingIds() }
+                .contains(CouchDocId.notebook("nb1")),
+        )
+    }
+
+    // endregion
+
+    // region Round trips
 
     @Test
     fun absentDocumentsLoadAsNull() {

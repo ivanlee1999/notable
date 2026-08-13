@@ -83,11 +83,13 @@ fun FolderConfigDialog(appRepository: AppRepository,
             scope = deletionScope,
             onConfirm = {
                 isConfirmingDelete = false
-                // Nothing is published here. The folder is only staged locally, so a peer that
-                // still holds it is not wrong yet — the tombstones are written when the Trash is
-                // emptied, all of them, in one transaction. See [TrashRepository].
+                // Nothing is *deleted* here — the tombstones are written when the Trash is
+                // emptied, all of them, in one transaction. But the Trash itself is published, so
+                // the folder and its subtree leave the library on every device at once, from this
+                // one field. See [TrashRepository].
                 scope.launch {
                     trashRepository.trashFolder(folderId)
+                        .forEach { couchSync.noteDocumentChanged(it) }
                     onClose()
                 }
             },
@@ -260,8 +262,8 @@ private fun ConfirmFolderDeletionDialog(
 
     ShowSimpleConfirmationDialog(
         title = "Move \"$title\" to Trash?",
-        message = "$contents Everything inside goes with it, and stays recoverable from the " +
-            "Trash in your library until you empty it.",
+        message = "$contents Everything inside goes with it — on your other devices as well — " +
+            "and stays recoverable from the Trash until you empty it.",
         // Disabled-looking rather than disabled: the scope is one query and lands immediately, but
         // confirming before it arrives would delete without having shown what.
         onConfirm = { if (scope != null) onConfirm() },

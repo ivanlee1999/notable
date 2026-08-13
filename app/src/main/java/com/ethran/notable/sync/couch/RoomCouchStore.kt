@@ -357,6 +357,8 @@ class RoomCouchStore(
             defaultBackgroundType = notebook.defaultBackgroundType,
             defaultPageWidth = notebook.defaultPageWidth,
             defaultPageHeight = notebook.defaultPageHeight,
+            // The Trash travels: it is a state of the notebook, not of this device (§3.2).
+            deletedAt = notebook.deletedAt?.let { iso(it) },
             createdAt = iso(notebook.createdAt),
             updatedAt = iso(notebook.updatedAt),
             // Null means this device wrote it last; see [Notebook.updatedBy].
@@ -415,6 +417,7 @@ class RoomCouchStore(
         return CouchFolder(
             title = folder.title,
             parentFolderId = folder.parentFolderId,
+            deletedAt = folder.deletedAt?.let { iso(it) },
             createdAt = iso(folder.createdAt),
             updatedAt = iso(folder.updatedAt),
             // Null means this device wrote it last; see [Folder.updatedBy].
@@ -489,6 +492,11 @@ class RoomCouchStore(
             defaultPageWidth = notebook.defaultPageWidth ?: existing?.defaultPageWidth,
             defaultPageHeight = notebook.defaultPageHeight ?: existing?.defaultPageHeight,
             linkedExternalUri = existing?.linkedExternalUri,
+            // Written from the document, not carried over from `existing`: the Trash is synced
+            // now, so this is how a notebook thrown away on the iPad leaves the library here — and
+            // how one restored there comes back. Before the field existed this row was rebuilt
+            // without `deletedAt` at all, so any incoming edit silently emptied the local Trash.
+            deletedAt = notebook.deletedAt?.let { date(it) },
             createdAt = date(notebook.createdAt),
             updatedAt = date(notebook.updatedAt),
             // See the note in [applyPage]: the real author, not this device.
@@ -632,6 +640,8 @@ class RoomCouchStore(
             id = id,
             title = folder.title,
             parentFolderId = resolveFolder(folder.parentFolderId),
+            // See [applyNotebook]: the Trash is part of the document.
+            deletedAt = folder.deletedAt?.let { date(it) },
             createdAt = date(folder.createdAt),
             updatedAt = date(folder.updatedAt),
             // See the note in [applyPage]: the real author, not this device.

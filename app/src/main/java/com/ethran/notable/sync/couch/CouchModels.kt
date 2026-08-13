@@ -146,6 +146,14 @@ data class CouchNotebook(
     // Sheet for new pages here, in page units; null for a notebook created before page sizes.
     val defaultPageWidth: Int? = null,
     val defaultPageHeight: Int? = null,
+    /**
+     * In the Trash since — protocol §3.2. Null is a notebook in the library.
+     *
+     * The Trash is a *state of the notebook*, not a fact about one device: it is staged deletion,
+     * so it hides the notebook everywhere and can be undone from anywhere. Only emptying the Trash
+     * deletes for good, and that is a `_deleted` tombstone (§6.4), not this.
+     */
+    val deletedAt: String? = null,
     val createdAt: String,
     var updatedAt: String = "",
     val updatedBy: String = "",
@@ -227,6 +235,8 @@ data class CouchFolder(
     val schema: Int = COUCH_SCHEMA_VERSION,
     val title: String = "",
     val parentFolderId: String? = null,
+    /** In the Trash since; see [CouchNotebook.deletedAt]. Hides the whole subtree, one field. */
+    val deletedAt: String? = null,
     val createdAt: String,
     var updatedAt: String = "",
     val updatedBy: String = "",
