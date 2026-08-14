@@ -15,7 +15,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
-import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.utils.logCallStack
 import com.onyx.android.sdk.api.device.epd.EpdController
@@ -137,36 +136,19 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
 
 
 /**
- * The band the docked rail occupies, and everything else — the pen may draw on the latter
- * only. [toolbarThickness] is the rail's height when it is docked top/bottom and its width
- * when docked left/right; pass 0 while the rail is collapsed.
- *
- * Shared so the two input paths cannot drift apart: the firmware is handed these as its
- * exclude/limit rects, and the [com.ethran.notable.editor.canvas.MotionEventStrokeSource]
- * fallback — which the firmware is not there to gate — tests the same limit rect itself.
- */
-fun toolbarBands(viewWidth: Int, viewHeight: Int, toolbarThickness: Int): Pair<Rect, Rect> =
-    when (GlobalAppSettings.current.toolbarPosition) {
-        AppSettings.Position.Top -> Rect(0, 0, viewWidth, toolbarThickness) to
-                Rect(0, toolbarThickness, viewWidth, viewHeight)
-
-        AppSettings.Position.Bottom -> Rect(0, viewHeight - toolbarThickness, viewWidth, viewHeight) to
-                Rect(0, 0, viewWidth, viewHeight - toolbarThickness)
-
-        AppSettings.Position.Left -> Rect(0, 0, toolbarThickness, viewHeight) to
-                Rect(toolbarThickness, 0, viewWidth, viewHeight)
-
-        AppSettings.Position.Right -> Rect(viewWidth - toolbarThickness, 0, viewWidth, viewHeight) to
-                Rect(0, 0, viewWidth - toolbarThickness, viewHeight)
-    }
-
-/**
- * Arms raw drawing over everything but the docked tool rail.
+ * Arms raw drawing over everything but the docked chrome.
  *
  * [toolbarThickness] is the rail's height when it is docked top/bottom and its width when
- * docked left/right; pass 0 while the rail is collapsed.
+ * docked left/right. [titleBarHeight] is the editor title bar, which runs along the top of
+ * whatever the rail leaves. Both are hidden together, so pass 0 for both while the toolbar
+ * is collapsed — the pen then has the whole sheet.
  */
-fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarThickness: Int) {
+fun setupSurface(
+    view: View,
+    touchHelper: TouchHelper?,
+    toolbarThickness: Int,
+    titleBarHeight: Int,
+) {
     if (touchHelper == null) return
     // Takes at least 50ms on Note 4c,
     // and I don't think that we need it immediately
@@ -175,13 +157,17 @@ fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarThickness: Int) {
     touchHelper.setRawDrawingEnabled(false)
     touchHelper.closeRawDrawing()
 
-    // Store view dimensions locally before using in Rect
-    val viewWidth = view.width
-    val viewHeight = view.height
+    val surface = drawingSurface(
+        position = GlobalAppSettings.current.toolbarPosition,
+        viewWidth = view.width,
+        viewHeight = view.height,
+        toolbarThickness = toolbarThickness,
+        titleBarHeight = titleBarHeight,
+    )
 
-    val (excludeRect, limitRect) = toolbarBands(viewWidth, viewHeight, toolbarThickness)
-
-    touchHelper.setLimitRect(mutableListOf(limitRect)).setExcludeRect(listOf(excludeRect))
+    touchHelper
+        .setLimitRect(mutableListOf(surface.limit.toRect()))
+        .setExcludeRect(surface.exclude.map { it.toRect() })
         .openRawDrawing()
 
     touchHelper.setRawDrawingEnabled(true)

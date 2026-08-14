@@ -67,6 +67,8 @@ data class ToolbarUiState(
     val notebookId: String? = null,
     val pageId: String? = null,
     val isBookActive: Boolean = false,
+    /** The open notebook's name, for the editor's title bar. Null for a loose page. */
+    val notebookTitle: String? = null,
     val pageNumberInfo: String = "1/1",
     val currentPageNumber: Int = 0,
 
@@ -592,6 +594,7 @@ class EditorViewModel @Inject constructor(
                 notebookId = bookId,
                 pageId = pageId,
                 isBookActive = bookId != null,
+                notebookTitle = book?.title,
                 pageNumberInfo = if (bookId != null) "${pageIndex + 1}/$totalPages" else "1/1",
                 currentPageNumber = pageIndex,
                 backgroundType = page.backgroundType,

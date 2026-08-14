@@ -21,11 +21,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.ui.EditorSurface
+import com.ethran.notable.editor.ui.EditorTitleBar
 import com.ethran.notable.editor.ui.HorizontalScrollIndicator
 import com.ethran.notable.editor.ui.SaveStateBadge
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.toolbar.PositionedToolbar
+import com.ethran.notable.editor.ui.toolbar.editorChromeInset
 import com.ethran.notable.editor.ui.toolbar.toolbarInset
 import com.ethran.notable.gestures.EditorGestureReceiver
 import com.ethran.notable.navigation.NavigationDestination
@@ -254,21 +256,32 @@ fun EditorView(
             SelectedBitmap(
                 context = context, controlTower = editorControlTower
             )
-            // Both indicators hug an edge, so they are inset by the rail's own band —
-            // otherwise a left- or right-docked rail sits on top of them.
-            val railInset = toolbarInset(toolbarState.isToolbarOpen)
+            // Both indicators hug an edge, so they are inset by everything the docked chrome
+            // covers — otherwise a left- or right-docked rail, or the title bar, sits on top
+            // of them.
+            val chromeInset = editorChromeInset(toolbarState.isToolbarOpen)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight()
-                    .padding(railInset)
+                    .padding(chromeInset)
             ) {
                 Spacer(modifier = Modifier.weight(1f))
                 ScrollIndicator(viewModel = viewModel, page = page)
             }
             PositionedToolbar(
                 viewModel = viewModel, onDrawingStateCheck = { viewModel.updateDrawingState() })
-            Box(Modifier.padding(railInset)) {
+            // Inside the rail's band only: the title bar runs along the top of what the rail
+            // leaves, the way it does beside a left-docked rail in the design.
+            if (toolbarState.isToolbarOpen) {
+                Box(Modifier.padding(toolbarInset(true))) {
+                    EditorTitleBar(
+                        uiState = toolbarState,
+                        onAction = viewModel::onToolbarAction,
+                    )
+                }
+            }
+            Box(Modifier.padding(chromeInset)) {
                 HorizontalScrollIndicator(viewModel = viewModel, page = page)
             }
             // Last, so it is over the toolbar rather than under it: the one thing on this screen

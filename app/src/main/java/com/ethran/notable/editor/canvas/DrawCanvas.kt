@@ -6,16 +6,18 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.ui.unit.dp
+import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.datastore.TOOLBAR_THICKNESS
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.drawing.OpenGLRenderer
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Operation
+import com.ethran.notable.editor.ui.editorTitleBarHeight
 import com.ethran.notable.editor.utils.DeviceCompat
+import com.ethran.notable.editor.utils.drawingSurface
 import com.ethran.notable.editor.utils.onSurfaceChanged
 import com.ethran.notable.editor.utils.onSurfaceDestroy
-import com.ethran.notable.editor.utils.toolbarBands
 import com.ethran.notable.ui.convertDpToPixel
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
@@ -78,18 +80,30 @@ class DrawCanvas(
      * The stroke path for an ONYX device whose raw channel never opened — see
      * [OnyxInputHandler.usesRawInput]. Reproduces the two things the firmware would be
      * enforcing on our behalf: strokes only while the editor is actually in drawing mode,
-     * and only outside the docked rail's band.
+     * and only outside the docked chrome — the rail's band and the title bar above the
+     * paper.
      */
     private fun collectStrokeWithoutFirmware(event: MotionEvent) {
         if (!viewModel.toolbarState.value.isDrawing) {
             fallbackStrokeSource.cancel()
             return
         }
+        val open = viewModel.toolbarState.value.isToolbarOpen
         val toolbarThickness =
-            if (viewModel.toolbarState.value.isToolbarOpen)
-                convertDpToPixel(TOOLBAR_THICKNESS.dp, context).toInt()
+            if (open) convertDpToPixel(TOOLBAR_THICKNESS.dp, context).toInt() else 0
+        val titleBarHeight =
+            if (open) convertDpToPixel(
+                editorTitleBarHeight(context.resources.configuration.screenWidthDp),
+                context
+            ).toInt()
             else 0
-        val (_, limitRect) = toolbarBands(width, height, toolbarThickness)
+        val limitRect = drawingSurface(
+            position = GlobalAppSettings.current.toolbarPosition,
+            viewWidth = width,
+            viewHeight = height,
+            toolbarThickness = toolbarThickness,
+            titleBarHeight = titleBarHeight,
+        ).limit.toRect()
         fallbackStrokeSource.onTouchEvent(event, limitRect)
     }
 
