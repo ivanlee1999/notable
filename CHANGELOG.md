@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.18.0
+
+A long notebook could only be crossed a page at a time. QuickNav now shows every page, a table of
+contents you write yourself, and the pages you starred — and starring travels to your other device.
+
+### Getting around a notebook
+
+- **QuickNav shows the notebook's pages as thumbnails.** Before, it offered a slider and a row of
+  favourites, so finding a particular page in a notebook of forty meant dragging the slider and
+  watching the page redraw until the right one appeared. Tap a thumbnail to go there.
+- **Bookmarks.** Star the page you are on from the panel's header; a starred page carries a solid
+  tab in the corner of its thumbnail, and the Bookmarks tab lists them in page order.
+- **An outline.** Name a section and it becomes an entry pointing at that page, nestable three
+  levels deep. Hold a page in the Pages tab to add one, hold an entry to rename, indent, reorder
+  or remove it. Handwriting has no headings to read, so the entries are yours to write — a page
+  can carry more than one, which is how a page that ends one section and starts another says so.
+- The page slider stays where it was, below the tabs, working whichever tab is showing.
+
+### Favourites are now called Pinned, and bookmarks are the ones that sync
+
+- **The old favourites list keeps working and keeps its own tab**, renamed *Pinned* so it is not
+  confused with the new bookmarks. Nothing you had pinned has moved.
+- The difference is what each one is about. **A bookmark belongs to the notebook**, so a page
+  starred on the BOOX is starred on the iPad too, and un-starring travels the same way. **A pinned
+  page is about this device** — a jump list spanning every notebook — so it stays here. Merging
+  the two would have had to give up one of those.
+- Deleting a page takes its bookmark and its outline entries with it, on both devices.
+
 ## 0.17.0
 
 Import a PDF on one device and the book reached the other one without the PDF. Every page, every
