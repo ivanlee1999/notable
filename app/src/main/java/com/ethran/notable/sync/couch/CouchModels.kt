@@ -184,6 +184,66 @@ data class CouchPage(
     }
 }
 
+/**
+ * A page the reader starred, or the record of it being un-starred — protocol §3.2.1.
+ *
+ * Deliberately *not* a list of ids plus a [CouchTombstone] list, which is how every other removal
+ * in this protocol is expressed. That pattern makes removal permanent, and it is sound everywhere
+ * it is used because the thing removed never comes back under the same id: a redrawn stroke is a
+ * new stroke with a new id. A bookmark is the exception — the page keeps its id, so starring the
+ * same page again is a thing users do routinely, and "remove wins forever" would make the second
+ * star impossible to express. Carrying [removed] on the entry instead lets whichever write came
+ * last say either thing, which is what last-writer-wins per [pageId] needs.
+ */
+@Serializable
+data class CouchBookmark(
+    val pageId: String,
+    val updatedAt: String = "",
+    /**
+     * True for a page that was bookmarked and then un-bookmarked. Kept rather than dropped so the
+     * un-starring propagates to a peer that still holds the star.
+     */
+    val removed: Boolean = false,
+)
+
+/**
+ * One line of a notebook's outline — its table of contents, protocol §3.2.2.
+ *
+ * An entry points at a *page*, not at a position on one. Both apps this protocol has to satisfy
+ * anchor the same way (Goodnotes' outline and the BOOX reader's TOC), and a page anchor is the
+ * only one that survives the page being written on: ink has no headings to re-find, so an offset
+ * anchor would drift the moment the page was edited on the other device.
+ */
+@Serializable
+data class CouchOutlineEntry(
+    /**
+     * The entry's own id, not the page's. A page is allowed to appear in the outline more than
+     * once — both reference apps allow it, and it is how a page that opens one section and closes
+     * another gets to say so — which rules out keying entries by page.
+     */
+    val id: String,
+    val pageId: String = "",
+    val title: String = "",
+    /**
+     * 0, 1 or 2: heading, subheading, sub-subheading. Three levels is what both reference apps
+     * settled on. Clamped rather than rejected on decode, so a document from a build that one day
+     * allows four levels degrades to a flatter outline instead of failing to merge.
+     */
+    var depth: Int = 0,
+    val updatedAt: String = "",
+    /** True for a deleted entry, kept for the same reason as [CouchBookmark.removed]. */
+    val removed: Boolean = false,
+) {
+    init {
+        depth = depth.coerceIn(0, MAX_DEPTH)
+    }
+
+    companion object {
+        /** The deepest [depth] this build understands. */
+        const val MAX_DEPTH: Int = 2
+    }
+}
+
 @Serializable
 data class CouchNotebook(
     val type: String = CouchDocType.NOTEBOOK,
@@ -192,6 +252,16 @@ data class CouchNotebook(
     val pageIds: List<String> = emptyList(),
     val deletedPageIds: List<CouchTombstone> = emptyList(),
     val parentFolderId: String? = null,
+    /**
+     * Starred pages, including the un-starred ones — see [CouchBookmark]. Sorted by `pageId` in a
+     * merged document so the encoded body is byte-stable across devices.
+     */
+    val bookmarks: List<CouchBookmark> = emptyList(),
+    /**
+     * The notebook's table of contents, in reading order. Order is carried by the list itself, the
+     * way [pageIds] carries page order, and merged the same way.
+     */
+    val outline: List<CouchOutlineEntry> = emptyList(),
     val defaultBackground: String = "blank",
     val defaultBackgroundType: String = "native",
     // Sheet for new pages here, in page units; null for a notebook created before page sizes.

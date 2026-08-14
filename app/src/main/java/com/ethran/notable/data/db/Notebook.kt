@@ -12,7 +12,10 @@ import androidx.room.Update
 import androidx.room.withTransaction
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.sync.couch.CouchBookmark
 import com.ethran.notable.sync.couch.CouchDocId
+import com.ethran.notable.sync.couch.CouchMerge
+import com.ethran.notable.sync.couch.CouchOutlineEntry
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.Flow
 import java.util.Date
@@ -48,6 +51,22 @@ data class Notebook(
     // before page sizes existed.
     val defaultPageWidth: Int? = null,
     val defaultPageHeight: Int? = null,
+
+    /**
+     * Starred pages, and the record of pages that were un-starred — see [CouchBookmark].
+     *
+     * Stored as a JSON column rather than as its own table, and holding the sync layer's own type
+     * rather than a domain twin, because these lists *are* what the notebook document carries: the
+     * merge in [CouchMerge.mergeNotebook] is defined over them, and a second representation would
+     * be a second place for the two to drift apart. The outline additionally needs its order kept,
+     * which a JSON list gives for free and a table would need a position column to fake.
+     */
+    @ColumnInfo(defaultValue = "[]")
+    val bookmarks: List<CouchBookmark> = emptyList(),
+
+    /** The notebook's table of contents, in reading order. See [bookmarks] for why it lives here. */
+    @ColumnInfo(defaultValue = "[]")
+    val outline: List<CouchOutlineEntry> = emptyList(),
 
     // File that its linked to:
     val linkedExternalUri: String? = null,

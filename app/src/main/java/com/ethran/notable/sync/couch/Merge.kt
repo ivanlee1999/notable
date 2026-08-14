@@ -121,6 +121,68 @@ object CouchMerge {
 
     // endregion
 
+    // region Bookmarks and outline
+
+    /**
+     * Union keyed by `pageId`, keeping whichever side wrote last — protocol §3.2.1.
+     *
+     * Last-writer-wins rather than remove-wins, because a bookmark is re-addable under the same
+     * id; see [CouchBookmark]. Equal instants fall back to `removed` losing, so two devices that
+     * star and un-star in the same millisecond both end up keeping the star rather than
+     * disagreeing — and, more importantly, agreeing is what makes this commutative.
+     */
+    fun unionBookmarks(
+        a: List<CouchBookmark>, b: List<CouchBookmark>,
+    ): List<CouchBookmark> =
+        unionById(a, b, id = { it.pageId }) { x, y ->
+            val mx = millis(x.updatedAt)
+            val my = millis(y.updatedAt)
+            when {
+                mx != my -> if (mx > my) x else y
+                x.removed != y.removed -> if (x.removed) y else x
+                else -> if (x.updatedAt >= y.updatedAt) x else y
+            }
+        }.sortedBy { it.pageId }
+
+    /**
+     * Merge two outlines — protocol §3.2.2.
+     *
+     * Order comes from [winner], with entries only [loser] knows about appended in the loser's own
+     * relative order; content per entry is last-writer-wins. This is deliberately the same rule as
+     * `pageIds` in [mergeNotebook] rather than a fractional index or a position field: the outline
+     * is a list the user reorders wholesale, the ordered add-wins union is already proven and
+     * vector-tested here, and it needs no extra state on the entry to stay deterministic.
+     *
+     * Removed entries stay in the list. They are the tombstones, so dropping them here would let a
+     * peer that still holds the entry put it back on the next merge.
+     */
+    fun mergeOutline(
+        winner: List<CouchOutlineEntry>, loser: List<CouchOutlineEntry>,
+    ): List<CouchOutlineEntry> {
+        val content = LinkedHashMap<String, CouchOutlineEntry>()
+        for (entry in winner + loser) {
+            val held = content[entry.id]
+            content[entry.id] = if (held == null) entry else {
+                val mh = millis(held.updatedAt)
+                val me = millis(entry.updatedAt)
+                when {
+                    mh != me -> if (mh > me) held else entry
+                    // Same instant: `removed` loses, then the raw string breaks the tie, so both
+                    // devices pick the same entry whichever order they merged in.
+                    held.removed != entry.removed -> if (held.removed) entry else held
+                    else -> if (held.updatedAt >= entry.updatedAt) held else entry
+                }
+            }
+        }
+
+        val known = winner.map { it.id }.toSet()
+        val ordered = winner.map { it.id } + loser.map { it.id }.filter { it !in known }
+        val seen = HashSet<String>()
+        return ordered.mapNotNull { id -> if (seen.add(id)) content[id] else null }
+    }
+
+    // endregion
+
     // region Page
 
     fun mergePage(a: CouchPage, b: CouchPage): CouchPage {
@@ -268,6 +330,21 @@ object CouchMerge {
             pageIds = pageIds,
             deletedPageIds = deletedPageIds,
             parentFolderId = winner.parentFolderId,
+            // A bookmark on a deleted page is dropped. Safe to do here because a bookmark is keyed
+            // by the very field being tested: the same pageId is filtered on every future merge,
+            // so the drop cannot come undone.
+            bookmarks = unionBookmarks(a.bookmarks, b.bookmarks)
+                .filter { it.pageId !in removed },
+            // The outline is deliberately *not* filtered the same way, though the dangling entries
+            // it keeps are just as useless to tap. An entry is keyed by its own id while the test
+            // would be on `pageId`, and those can disagree: if the surviving version of entry `e`
+            // points at a deleted page, filtering erases `e` from the result entirely — and the
+            // next merge against the peer that still holds `e` reads it as an entry this side has
+            // never seen and adds it straight back. Not idempotent, and the randomised merge tests
+            // catch it. Deleting a page instead marks its entries removed at the point of deletion,
+            // which is an ordinary edit the merge already knows how to carry, and readers skip any
+            // entry whose page is gone.
+            outline = mergeOutline(winner.outline, loser.outline),
             defaultBackground = winner.defaultBackground,
             defaultBackgroundType = winner.defaultBackgroundType,
             defaultPageWidth = winner.defaultPageWidth ?: loser.defaultPageWidth,

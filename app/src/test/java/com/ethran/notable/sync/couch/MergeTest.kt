@@ -144,6 +144,105 @@ class MergeTest {
         )
     }
 
+    /**
+     * A notebook carrying bookmarks and an outline, both of which the merge has to reconcile
+     * without a common ancestor. Page ids are drawn from a small pool so the two sides collide
+     * often — a generator whose documents never overlap would exercise none of the interesting
+     * cases.
+     */
+    private fun randomNotebook(rng: Rng, deviceId: String): CouchNotebook {
+        val pageIds = LinkedHashSet<String>()
+        repeat(rng.next(6)) { pageIds.add("p${rng.next(8)}") }
+        val bookmarks = ArrayList<CouchBookmark>()
+        repeat(rng.next(5)) {
+            bookmarks.add(
+                CouchBookmark(
+                    pageId = "p${rng.next(8)}", updatedAt = stamp(rng.next(60)),
+                    removed = rng.next(3) == 0,
+                )
+            )
+        }
+        val outline = ArrayList<CouchOutlineEntry>()
+        repeat(rng.next(5)) {
+            outline.add(
+                CouchOutlineEntry(
+                    id = "e${rng.next(8)}", pageId = "p${rng.next(8)}",
+                    title = "section ${rng.next(4)}", depth = rng.next(3),
+                    updatedAt = stamp(rng.next(60)), removed = rng.next(4) == 0,
+                )
+            )
+        }
+        val tombs = ArrayList<CouchTombstone>()
+        repeat(rng.next(3)) {
+            tombs.add(CouchTombstone(id = "p${rng.next(8)}", deletedAt = stamp(rng.next(30))))
+        }
+        return CouchNotebook(
+            title = "book ${rng.next(3)}", pageIds = pageIds.toList(), deletedPageIds = tombs,
+            bookmarks = bookmarks, outline = outline,
+            createdAt = stamp(0), updatedAt = stamp(rng.next(60)), updatedBy = deviceId,
+        )
+    }
+
+    /**
+     * The property the whole design rests on: two devices that were both offline reconcile to the
+     * same notebook whichever way round they merge, and re-merging changes nothing.
+     */
+    @Test
+    fun notebook_merge_is_commutative_and_idempotent_over_random_notebooks() {
+        val rng = Rng(0xB00C)
+        for (iteration in 0 until 300) {
+            val a = randomNotebook(rng, "ipad")
+            val b = randomNotebook(rng, "boox")
+            val ab = CouchMerge.mergeNotebook(a, b)
+            assertEquals("iteration $iteration: not commutative", ab, CouchMerge.mergeNotebook(b, a))
+            assertEquals(
+                "iteration $iteration: not idempotent in a", ab, CouchMerge.mergeNotebook(ab, a)
+            )
+            assertEquals(
+                "iteration $iteration: not idempotent in b", ab, CouchMerge.mergeNotebook(ab, b)
+            )
+        }
+    }
+
+    /**
+     * A bookmark must never point at a page the notebook no longer has, however many times the two
+     * sides re-merge.
+     *
+     * Asserted for bookmarks only. The outline cannot be filtered this way and stay idempotent —
+     * see the note in [CouchMerge.mergeNotebook] — so a dangling outline entry is the reader's to
+     * skip, not the merge's to remove.
+     */
+    @Test
+    fun bookmarks_never_outlive_their_page() {
+        val rng = Rng(0x0B17)
+        repeat(200) {
+            val a = randomNotebook(rng, "ipad")
+            val b = randomNotebook(rng, "boox")
+            val merged = CouchMerge.mergeNotebook(a, b)
+            val removed = merged.deletedPageIds.map { it.id }.toSet()
+            assertTrue(merged.bookmarks.none { it.pageId in removed })
+            assertTrue(CouchMerge.mergeNotebook(merged, a).bookmarks.none { it.pageId in removed })
+        }
+    }
+
+    /**
+     * Outline entries carry no position field, so the only thing keeping two devices from rendering
+     * the table of contents in different orders is that the merge is deterministic.
+     */
+    @Test
+    fun outline_order_is_identical_in_both_argument_orders() {
+        val rng = Rng(0x0F17)
+        for (iteration in 0 until 200) {
+            val a = randomNotebook(rng, "ipad")
+            val b = randomNotebook(rng, "boox")
+            assertEquals(
+                "iteration $iteration: outline order depends on argument order",
+                CouchMerge.mergeNotebook(a, b).outline.map { it.id },
+                CouchMerge.mergeNotebook(b, a).outline.map { it.id },
+            )
+        }
+    }
+
     @Test
     fun merge_is_commutative_and_idempotent_over_random_pages() {
         val rng = Rng(0x5EED)

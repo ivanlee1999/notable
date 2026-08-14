@@ -8,6 +8,8 @@ import com.ethran.notable.data.db.decodeStrokePoints
 import com.ethran.notable.data.db.encodeStrokePoints
 import com.ethran.notable.data.db.withNormalizedPressure
 import com.ethran.notable.editor.utils.Pen
+import com.ethran.notable.sync.couch.CouchBookmark
+import com.ethran.notable.sync.couch.CouchOutlineEntry
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import com.ethran.notable.utils.logCallStack
@@ -59,6 +61,8 @@ object NotebookSerializer {
             linkedExternalUri = notebook.linkedExternalUri,
             defaultPageWidth = notebook.defaultPageWidth,
             defaultPageHeight = notebook.defaultPageHeight,
+            bookmarks = notebook.bookmarks,
+            outline = notebook.outline,
             createdAt = notebook.createdAt.toInstant().toString(),
             updatedAt = notebook.updatedAt.toInstant().toString(),
             serverTimestamp = Instant.now().toString()
@@ -97,6 +101,8 @@ object NotebookSerializer {
                     // "unset" must not produce a notebook nothing can lay out.
                     defaultPageWidth = manifestDto.defaultPageWidth?.takeIf { it > 0 },
                     defaultPageHeight = manifestDto.defaultPageHeight?.takeIf { it > 0 },
+                    bookmarks = manifestDto.bookmarks,
+                    outline = manifestDto.outline,
                     createdAt = createdAt,
                     updatedAt = updatedAt
                 )
@@ -358,6 +364,11 @@ object NotebookSerializer {
         // a manifest written before the field existed still parses.
         val defaultPageWidth: Int? = null,
         val defaultPageHeight: Int? = null,
+        // Starred pages and the table of contents. Defaulted for the same reason as the sheet
+        // above: a manifest written before the fields existed still parses. A stock upstream
+        // Notable ignores both on read and drops them when it writes the manifest back.
+        val bookmarks: List<CouchBookmark> = emptyList(),
+        val outline: List<CouchOutlineEntry> = emptyList(),
         val createdAt: String,
         val updatedAt: String,
         val serverTimestamp: String
