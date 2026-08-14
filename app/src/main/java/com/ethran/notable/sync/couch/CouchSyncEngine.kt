@@ -88,15 +88,23 @@ sealed class CouchDocBody {
         }
 
     /**
-     * The `asset:` documents this body names. Only a page names any; the engine uses this to send
-     * an image's bytes before the page that places it, and to fetch them when one arrives.
+     * The `asset:` documents this body names: a page's placed images and its background, and a
+     * notebook's default background. The engine uses this to send those bytes before the document
+     * that references them, so the peer never has a reference it cannot resolve.
+     *
+     * The filter is the whole test. A `background` that is not a content-addressed id is a native
+     * template's name (`"lined"`) or a path from a build that predates backgrounds travelling —
+     * neither names bytes anyone can fetch, and both fall out here without a special case.
      */
     val referencedAssetIds: List<String>
-        get() = if (this is Page) {
-            page.images.mapNotNull { it.assetId }
+        get() = when (this) {
+            is Page -> (page.images.mapNotNull { it.assetId } + page.background)
                 .filter { CouchAssetId.sha256HexOfAssetId(it) != null }
-        } else {
-            emptyList()
+
+            is Notebook -> listOf(notebook.defaultBackground)
+                .filter { CouchAssetId.sha256HexOfAssetId(it) != null }
+
+            else -> emptyList()
         }
 }
 
@@ -922,8 +930,9 @@ class CouchSyncEngine(
      * peer never has a reference it cannot resolve.
      *
      * Assets are not queued by the app: nothing "edits" one, and an image placed twice is the same
-     * document. They are derived here from the pages being sent, and skipped once the server is
-     * known to hold them — immutability means a revision we have seen can never go stale.
+     * document. They are derived here from the documents being sent — a page's pictures and
+     * background, a notebook's default background — and skipped once the server is known to hold
+     * them, immutability meaning a revision we have seen can never go stale.
      */
     private fun orderedDirty(): List<String> {
         fun rank(documentId: String): Int = when (CouchDocId.split(documentId)?.first) {
@@ -934,7 +943,8 @@ class CouchSyncEngine(
         }
         val queue = dirty.toMutableSet()
         for (documentId in dirty) {
-            if (CouchDocId.split(documentId)?.first != CouchDocType.PAGE) continue
+            val type = CouchDocId.split(documentId)?.first
+            if (type != CouchDocType.PAGE && type != CouchDocType.NOTEBOOK) continue
             val body = runCatching { store.load(documentId) }.getOrNull() ?: continue
             queue += body.referencedAssetIds.filter { it !in revs }
         }

@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.BackgroundFileWatcher
 import com.ethran.notable.data.db.KvDao
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.di.ApplicationScope
@@ -39,6 +40,7 @@ class CouchSyncHost @Inject constructor(
     private val appRepository: AppRepository,
     private val kvProxy: KvProxy,
     private val kvDao: KvDao,
+    private val backgroundFileWatcher: BackgroundFileWatcher,
     @param:ApplicationScope private val scope: CoroutineScope,
 ) : CouchSyncBackend {
 
@@ -250,6 +252,10 @@ class CouchSyncHost @Inject constructor(
             onPagesApplied = { pageIds ->
                 scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
             },
+            // A page's rows say which background file to draw; only the file itself says what is
+            // in it. A PDF that lands after the pages naming it therefore needs its own word —
+            // see [BackgroundFileWatcher.noteChanged].
+            onAssetFileWritten = backgroundFileWatcher::noteChanged,
         )
         val initial = loadState(stateKey)
         val engine = CouchSyncEngine(

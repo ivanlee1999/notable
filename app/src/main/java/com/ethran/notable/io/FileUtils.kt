@@ -16,6 +16,8 @@ import android.provider.OpenableColumns
 import androidx.core.net.toUri
 import com.ethran.notable.SCREEN_HEIGHT
 import com.ethran.notable.SCREEN_WIDTH
+import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.PageUnits
 import com.ethran.notable.utils.logCallStack
 import com.onyx.android.sdk.utils.UriUtils.getDataColumn
 import io.shipbook.shipbooksdk.ShipBook
@@ -245,6 +247,52 @@ fun getPdfPageCount(uri: String): Int {
         fileUtilsLog.e("Failed to open PDF: ${e.message}, for file $uri")
         logCallStack("getPdfPageCount")
         0
+    }
+}
+
+/**
+ * The sheet each page of a PDF is laid out on, in page units — one entry per page, in page order,
+ * and empty when the document cannot be read. A page whose size the renderer will not give is null
+ * rather than absent, so the entries stay lined up with the page numbers.
+ *
+ * An imported book has to declare its sheet, or it does not have one: an undeclared page falls back
+ * to *this device's screen width* ([legacyScreenSheet]), and the iPad falls back to 1404x1872. The
+ * background is fitted to the sheet, so two devices that disagree about the sheet draw the same PDF
+ * at two different sizes — and the ink written over it, which is stored in page units, lands
+ * somewhere else on the page. Annotations that sync perfectly and land in the wrong place are worse
+ * than annotations that do not sync.
+ *
+ * Per page rather than per document, because a scanned book has a fold-out in it and a report has a
+ * landscape table. The sheet is stored as the page actually is, portrait or not: the portrait
+ * convention in [PageSize] is about the paper sizes a *user* picks, and a document's own geometry
+ * is not up for interpretation.
+ */
+fun getPdfPageSizes(uri: String): List<PageSize?> {
+    if (uri.isEmpty()) return emptyList()
+    val file = File(uri)
+    if (!file.exists()) {
+        fileUtilsLog.w("getPdfPageSizes: File does not exist: $uri")
+        return emptyList()
+    }
+
+    return try {
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                (0 until renderer.pageCount).map { index ->
+                    // PdfRenderer reports a page in points (1/72 in) at its 72 dpi baseline, which
+                    // is exactly what PageUnits converts from.
+                    renderer.openPage(index).use { page ->
+                        PageSize.of(
+                            PageUnits.unitsFromPoints(page.width.toFloat()),
+                            PageUnits.unitsFromPoints(page.height.toFloat()),
+                        )
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        fileUtilsLog.e("Failed to measure PDF pages: ${e.message}, for file $uri")
+        emptyList()
     }
 }
 

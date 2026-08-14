@@ -824,6 +824,112 @@ class CouchSyncEngineTest {
         assertFalse(server.requestLog.any { it.second.endsWith("/blob") })
     }
 
+    // region An imported PDF
+
+    private val pdf = "%PDF-1.7\nlecture notes\n".toByteArray()
+    private val pdfId = CouchAssetId.forBytes(pdf)
+
+    /**
+     * A book imported on one device: the notebook follows the PDF's page numbers, and each page is
+     * drawn on one page of it. Both name the bytes rather than a path — the path is
+     * `/storage/emulated/0/Documents/notabledb/backgrounds/pdfs/...`, which is a real file on
+     * exactly one device in the world.
+     */
+    private fun FakeLocalStore.importPdf(by: String) {
+        set(
+            notebookId,
+            CouchDocBody.Notebook(
+                notebook("Lecture 3", listOf("p1"), updatedAt = 5, by = by).copy(
+                    defaultBackground = pdfId, defaultBackgroundType = "autoPdf",
+                )
+            ),
+        )
+        set(
+            pageId,
+            CouchDocBody.Page(
+                page(updatedAt = 5, by = by).copy(background = pdfId, backgroundType = "pdf0")
+            ),
+        )
+        set(pdfId, CouchDocBody.Asset(CouchAsset.of(pdf, at = stamp(1), updatedBy = by)))
+    }
+
+    /**
+     * The same rule as a placed picture, and the same reason. A page whose background arrived before
+     * its PDF is a page the peer draws blank, so the bytes go first — and the notebook's default is
+     * derived too, because a notebook whose pages were all deleted still hands that default to the
+     * next page created in it.
+     */
+    @Test
+    fun `an imported PDF is sent before the pages drawn on it`() = runBlocking {
+        ipadStore.importPdf(by = "ipad")
+        ipad.markDirty(listOf(pageId, notebookId))
+
+        val flush = ipad.flush()
+        assertEquals(listOf(pdfId, pageId, notebookId), flush.pushed)
+
+        val puts = putPaths()
+        assertTrue(
+            "the document must land before the pages that are drawn on it",
+            puts.indexOfFirst { it.contains("asset:") } < puts.indexOfFirst { it.contains("page:") },
+        )
+    }
+
+    /** A notebook alone is enough: its default background names bytes the peer will need. */
+    @Test
+    fun `a notebook's default background is sent with it`() = runBlocking {
+        ipadStore.importPdf(by = "ipad")
+        ipad.markDirty(listOf(notebookId))
+
+        assertEquals(listOf(pdfId, notebookId), ipad.flush().pushed)
+    }
+
+    /**
+     * The other half, and the whole point of the feature: the PDF itself crosses, byte for byte, so
+     * the ink written over it on this device lands on the same page of the same document there.
+     */
+    @Test
+    fun `pull fetches the PDF a page is drawn on`() = runBlocking {
+        ipadStore.importPdf(by = "ipad")
+        ipad.markDirty(listOf(pageId, notebookId))
+        ipad.flush()
+
+        val pulled = boox.pull()
+        assertEquals(listOf(pdfId), pulled.fetchedAssets)
+        assertTrue("nothing may be reported missing: $pulled", pulled.missingAssets.isEmpty())
+
+        val held = (booxStore.body(pdfId) as? CouchDocBody.Asset)?.asset
+        assertArrayEquals(pdf, held?.bytes)
+        assertEquals("application/pdf", held?.contentType)
+        // The reference travels as the id, so both devices agree on what the page is drawn on
+        // without agreeing on where either of them keeps it.
+        assertEquals(pdfId, booxStore.page(pageId)?.background)
+        assertEquals("pdf0", booxStore.page(pageId)?.backgroundType)
+
+        // Nothing left owed, so the next pull does not go asking for it again.
+        server.forgetRequests()
+        boox.pull()
+        assertFalse(server.requestLog.any { it.second.endsWith("/blob") })
+    }
+
+    /**
+     * Content-addressed, so importing the same PDF on both devices costs one copy on the server and
+     * no conflict — which is what makes a book both people already have cheap to start syncing.
+     */
+    @Test
+    fun `the same PDF imported on both devices is one document`() = runBlocking {
+        ipadStore.importPdf(by = "ipad")
+        booxStore.importPdf(by = "boox")
+        ipad.markDirty(listOf(pageId))
+        boox.markDirty(listOf(pageId))
+
+        ipad.flush()
+        val second = boox.flush()
+        assertTrue("a duplicate upload is not a failure: ${second.failures}", second.failures.isEmpty())
+        assertEquals(listOf(pdfId), server.documentIds().filter { it.startsWith("asset:") })
+    }
+
+    // endregion
+
     /** A download that fails is retried, not forgotten: the reference stays owed. */
     @Test
     fun `a picture that could not be fetched is tried again on the next pull`() = runBlocking {

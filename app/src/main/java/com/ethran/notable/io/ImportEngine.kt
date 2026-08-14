@@ -192,11 +192,18 @@ class ImportEngine @Inject constructor(
 
         val filePath = fileToSave.toString()
 
+        // The document's own first page, so a page added to the book later is the same sheet as the
+        // ones imported with it — and the same sheet on the other device. A document that cannot be
+        // measured declares nothing, and its pages fall back to the screen as they always did.
+        val firstSheet = getPdfPageSizes(filePath).firstOrNull()
+
         val book = Notebook(
             title = options.bookTitle,
             parentFolderId = options.folderId,
             defaultBackground = filePath,
-            defaultBackgroundType = BackgroundType.AutoPdf.key
+            defaultBackgroundType = BackgroundType.AutoPdf.key,
+            defaultPageWidth = firstSheet?.width,
+            defaultPageHeight = firstSheet?.height,
         )
         bookRepo.createEmpty(book)
 

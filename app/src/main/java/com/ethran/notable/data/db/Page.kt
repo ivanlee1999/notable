@@ -74,6 +74,19 @@ data class Page(
 )
 
 
+/**
+ * A background that is a file rather than a native template, without the row it came from.
+ *
+ * Shared by [PageDao.getFileBackgrounds] and [NotebookDao.getFileDefaultBackgrounds], which ask the
+ * same question of two tables: CouchDB sync needs the set of files the library refers to, so it can
+ * tell which of them it has yet to download.
+ */
+data class FileBackground(
+    val background: String,
+    val backgroundType: String,
+)
+
+
 data class PageWithData(
     @Embedded val page: Page,
     @Relation(
@@ -141,6 +154,18 @@ interface PageDao {
      */
     @Query("SELECT notebookId FROM page WHERE id = :pageId")
     suspend fun getNotebookId(pageId: String): String?
+
+    /**
+     * The files pages are drawn on rather than the native templates — what CouchDB sync checks for
+     * backgrounds whose bytes have not arrived, the way it checks image uris.
+     *
+     * Distinct, because an imported book is two hundred pages naming one PDF and this is asked on
+     * every pull: the question is which files the library refers to, not which pages refer to them.
+     */
+    @Query(
+        "SELECT DISTINCT background, backgroundType FROM page WHERE backgroundType != 'native'"
+    )
+    suspend fun getFileBackgrounds(): List<FileBackground>
 
     @Insert
     suspend fun create(page: Page): Long
@@ -258,6 +283,11 @@ class PageRepository @Inject constructor(
     suspend fun getSinglePageIdsInFolder(folderId: String?): List<String> {
         return db.getSinglePageIdsInFolder(folderId)
     }
+
+    suspend fun getFileBackgrounds(): List<FileBackground> {
+        return db.getFileBackgrounds()
+    }
+
     suspend fun getWithDataById(pageId: String): PageWithData? {
         val data = db.getPageWithDataById(pageId)
         if (data == null) {

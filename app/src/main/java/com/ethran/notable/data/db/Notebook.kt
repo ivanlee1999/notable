@@ -115,6 +115,22 @@ interface NotebookDao {
     @Query("UPDATE notebook SET pageIds=:pageIds, updatedAt=:updatedAt, updatedBy=NULL WHERE id=:id")
     suspend fun setPageIds(id: String, pageIds: List<String>, updatedAt: Date)
 
+    /**
+     * The default backgrounds that are files rather than native templates — the notebook half of
+     * what CouchDB sync checks for bytes that have not arrived.
+     *
+     * A notebook usually shares its PDF with the pages already drawn on it, so this rarely finds
+     * anything [PageDao.getFileBackgrounds] has not. It matters for the one that does: a notebook
+     * whose pages have all been deleted still hands its default to the next page created in it, and
+     * a default nobody ever downloaded would hand out a path to nothing.
+     */
+    @Query(
+        "SELECT DISTINCT defaultBackground AS background, " +
+            "defaultBackgroundType AS backgroundType FROM notebook " +
+            "WHERE defaultBackgroundType != 'native'"
+    )
+    suspend fun getFileDefaultBackgrounds(): List<FileBackground>
+
     @Insert
     suspend fun create(notebook: Notebook): Long
 
@@ -208,6 +224,10 @@ class BookRepository @Inject constructor(
 
     suspend fun getById(notebookId: String): Notebook? {
         return notebookDao.getById(notebookId)
+    }
+
+    suspend fun getFileDefaultBackgrounds(): List<FileBackground> {
+        return notebookDao.getFileDefaultBackgrounds()
     }
 
     fun getByIdLive(notebookId: String): LiveData<Notebook?> {
