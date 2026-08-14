@@ -15,6 +15,9 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.serialization.json.Json
+import com.ethran.notable.sync.couch.CouchBookmark
+import com.ethran.notable.sync.couch.CouchOutlineEntry
+import com.ethran.notable.sync.couch.couchJson
 import java.io.File
 import java.util.Date
 import javax.inject.Singleton
@@ -27,6 +30,22 @@ class Converters {
     @TypeConverter
     fun toListString(value: String) = Json.decodeFromString<List<String>>(value)
 
+    // Bookmarks and outline entries are stored as JSON, the same way pageIds is, and decoded with
+    // [couchJson] rather than the bare [Json] above: it is the lenient decoder, so a column written
+    // by a build that has since gained a field still reads instead of throwing on open.
+    @TypeConverter
+    fun fromBookmarks(value: List<CouchBookmark>): String = couchJson.encodeToString(value)
+
+    @TypeConverter
+    fun toBookmarks(value: String): List<CouchBookmark> =
+        if (value.isBlank()) emptyList() else couchJson.decodeFromString(value)
+
+    @TypeConverter
+    fun fromOutline(value: List<CouchOutlineEntry>): String = couchJson.encodeToString(value)
+
+    @TypeConverter
+    fun toOutline(value: String): List<CouchOutlineEntry> =
+        if (value.isBlank()) emptyList() else couchJson.decodeFromString(value)
 
     @TypeConverter
     fun fromTimestamp(value: Long?): Date? {
@@ -55,7 +74,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 46,
+    version = 47,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -92,6 +111,10 @@ class Converters {
         // every existing row reads as "not in the Trash".
         AutoMigration(43, 44),
         // 44 -> 45 is hand-written: see MIGRATION_44_45 in Migrations.kt.
+        // 45 -> 46 is hand-written: see MIGRATION_45_46 in Migrations.kt.
+        // Notebook.bookmarks / Notebook.outline: NOT NULL JSON columns defaulting to `[]`, so Room
+        // adds them itself and every existing notebook reads as having neither.
+        AutoMigration(46, 47),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

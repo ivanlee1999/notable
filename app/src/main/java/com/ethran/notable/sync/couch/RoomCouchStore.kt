@@ -366,6 +366,8 @@ class RoomCouchStore(
             deletedPageIds = appRepository.deletedPageRepository.getByNotebook(id)
                 .map { CouchTombstone(id = it.pageId, deletedAt = iso(it.deletedAt)) },
             parentFolderId = notebook.parentFolderId,
+            bookmarks = notebook.bookmarks,
+            outline = notebook.outline,
             defaultBackground = wireBackground(
                 notebook.defaultBackground, notebook.defaultBackgroundType
             ),
@@ -550,6 +552,11 @@ class RoomCouchStore(
             openPageId = existing?.openPageId,
             pageIds = notebook.pageIds,
             parentFolderId = resolveFolder(notebook.parentFolderId),
+            // Written from the document, not `?: existing`: unlike a declared sheet, an empty list
+            // is a real state — the last bookmark being removed — so falling back to what is
+            // already here would make removing the last one impossible.
+            bookmarks = notebook.bookmarks,
+            outline = notebook.outline,
             defaultBackground = localBackground(
                 incoming = notebook.defaultBackground,
                 backgroundType = notebook.defaultBackgroundType,

@@ -38,6 +38,7 @@ A maintained and customized fork of the archived [olup/notable](https://github.c
 - [Features](#features)
 - [Download](#download)
 - [Gestures](#gestures)
+- [Getting around a notebook](#getting-around-a-notebook)
 - [System Requirements and Permissions](#system-requirements-and-permissions)
 - [Export and Import](#export-and-import)
 - [Roadmap](#roadmap)
@@ -66,6 +67,7 @@ Future plans include exploring how AI can enhance the app, with a focus on solut
 * 📝 **Quick Pages:** instantly create a new page.
 * 📒 **Notebooks:** group related notes and switch easily between notebooks.
 * 📁 **Folders:** organize notes with folders.
+* 🧭 **QuickNav panel:** page previews, an outline, bookmarks and pinned pages in one sheet — see [Getting around a notebook](#getting-around-a-notebook).
 * 🤏 **Editor mode gestures:** [intuitive gesture controls](#gestures) to enhance editing.
 * 🌅 **Images:** add, move, scale, and remove images.
 * ➤ **Selection export:** export or share selected handwriting as PNG.
@@ -107,13 +109,32 @@ Notable features intuitive gesture controls within Editor mode to optimize the e
 
 #### 🤟 3 Fingers
 * **Swipe left or right:** show or hide the toolbar.
-* **Swipe up:** open QuickNav (can be disabled in Gesture settings).
+* **Swipe up:** open the [QuickNav panel](#getting-around-a-notebook) (can be disabled in Gesture settings).
 
 > ⚠️ **Caveat:** on Onyx devices, a three-finger swipe is also the system's screenshot gesture, which can steal the touch before Notable sees it. Enabling **"Block system gestures while in Notable"** in Gesture settings fixes this, but as a side effect, edge-navigation swipes (e.g. back/recent-apps) stop working while the app is open.
 
 #### 🔲 Selection
 * **Drag:** move the selection.
 * **Double tap:** copy the selected writing.
+
+---
+
+## Getting around a notebook
+
+Swipe up with three fingers to open the **QuickNav panel**. It has four tabs, plus a page slider
+across the bottom that works whichever tab is showing.
+
+* **Pages** — every page of the notebook as a thumbnail. Tap one to go to it; hold one to bookmark
+  it or add it to the outline.
+* **Outline** — your own table of contents. Entries point at a page and can be nested three levels
+  deep; hold an entry to rename, indent, reorder or remove it.
+* **Bookmarks** — the pages you starred in this notebook. The bookmark button in the panel's header
+  stars the page you are on, and a starred page carries a solid tab in the corner of its thumbnail.
+* **Pinned** — the cross-notebook jump list this panel has always had (previously "favourites").
+
+**Bookmarks and the outline sync**; pinned pages do not. A bookmark is a fact about the notebook,
+so starring a page here stars it on every device that syncs with this one. A pinned page is a note
+about how *this* device is being used, so it stays here.
 
 ---
 

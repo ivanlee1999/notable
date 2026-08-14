@@ -9,6 +9,7 @@ import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.io.ThumbnailBackfillQueue
+import com.ethran.notable.sync.couch.CouchOutlineEntry
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.SnackDispatcher
 import com.ethran.notable.ui.components.getFolderList
@@ -21,14 +22,30 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 
+/** Which way into the notebook the panel is showing. */
+enum class QuickNavTab { PAGES, OUTLINE, BOOKMARKS, PINNED }
+
 data class QuickNavUiState(
     val isLoading: Boolean = true,
     val currentPageId: String? = null,
     val folderId: String? = null,
     val breadcrumbFolders: List<Folder> = emptyList(),
     val bookId: String? = null,
-    val isCurrentPageFavorite: Boolean = false,
-    val favoritePages: List<Page> = emptyList(),
+    /**
+     * Whether the current page is on the *global* pinned list — the cross-notebook jump list this
+     * panel has always had, stored in settings and local to this device. Distinct from
+     * [isCurrentPageBookmarked], which is a fact about the notebook and travels.
+     */
+    val isCurrentPagePinned: Boolean = false,
+    val pinnedPages: List<Page> = emptyList(),
+
+    val tab: QuickNavTab = QuickNavTab.PAGES,
+
+    /** Starred pages in this notebook, in page order. */
+    val bookmarkedPageIds: List<String> = emptyList(),
+    val isCurrentPageBookmarked: Boolean = false,
+    /** The table of contents: live entries whose page still exists, in stored order. */
+    val outline: List<CouchOutlineEntry> = emptyList(),
 
     // Scrubber specific state
     val bookPageCount: Int = 0,
@@ -74,8 +91,8 @@ class QuickNavViewModel(
                     folderId = page?.parentFolderId,
                     breadcrumbFolders = folderList,
                     bookId = page?.notebookId,
-                    isCurrentPageFavorite = isFavorite,
-                    favoritePages = favoritePagesDb,
+                    isCurrentPagePinned = isFavorite,
+                    pinnedPages = favoritePagesDb,
                     isLoading = false
                 )
             }
@@ -85,28 +102,111 @@ class QuickNavViewModel(
         }
     }
 
-    private suspend fun loadBookData(
-        bookId: String, currentPageId: String, favorites: List<String>
-    ) {
-        val book = bookRepository.getById(bookId)
-        if (book != null && book.pageIds.size >= 2) {
-            val currentIdx = appRepository.getPageNumber(bookId, currentPageId)
-            val favIndexes = book.pageIds.mapIndexedNotNull { idx, id ->
-                if (favorites.contains(id)) idx else null
-            }
-
-            _uiState.update { state ->
-                state.copy(
-                    bookPageCount = book.pageIds.size,
-                    currentBookIndex = currentIdx,
-                    favoriteIndexesInBook = favIndexes,
-                    bookPageIds = book.pageIds
-                )
-            }
+    /**
+     * Re-read the notebook's own bookmarks and outline.
+     *
+     * Read back from the row after every edit rather than mutated in place: the merge sorts and
+     * reorders these lists, so the state after a write is the repository's to say, not something
+     * the view model can predict.
+     */
+    private suspend fun loadNotebookNavigation(bookId: String, currentPageId: String?) {
+        val book = bookRepository.getById(bookId) ?: return
+        val starred = book.bookmarks.filterNot { it.removed }.map { it.pageId }.toSet()
+        val pages = book.pageIds.toSet()
+        _uiState.update { state ->
+            state.copy(
+                bookmarkedPageIds = book.pageIds.filter { it in starred },
+                isCurrentPageBookmarked = currentPageId in starred,
+                // Dangling entries are skipped rather than repaired. The merge cannot drop them and
+                // stay idempotent (protocol §5.2.2), so hiding them here is what keeps a deleted
+                // page from leaving a line that does nothing when tapped.
+                outline = book.outline.filter { !it.removed && it.pageId in pages },
+            )
         }
     }
 
-    fun toggleFavorite() {
+    fun selectTab(tab: QuickNavTab) {
+        _uiState.update { it.copy(tab = tab) }
+    }
+
+    fun toggleBookmark() {
+        val state = _uiState.value
+        val bookId = state.bookId ?: return
+        val pageId = state.currentPageId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            bookRepository.setBookmark(bookId, pageId, !state.isCurrentPageBookmarked)
+            loadNotebookNavigation(bookId, pageId)
+        }
+    }
+
+    fun setBookmark(pageId: String, bookmarked: Boolean) {
+        val state = _uiState.value
+        val bookId = state.bookId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            bookRepository.setBookmark(bookId, pageId, bookmarked)
+            loadNotebookNavigation(bookId, state.currentPageId)
+        }
+    }
+
+    fun addOutlineEntry(pageId: String, title: String) {
+        val state = _uiState.value
+        val bookId = state.bookId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            bookRepository.addOutlineEntry(bookId, pageId, title)
+            loadNotebookNavigation(bookId, state.currentPageId)
+        }
+    }
+
+    fun renameOutlineEntry(entryId: String, title: String) = editOutline { bookId ->
+        bookRepository.updateOutlineEntry(bookId, entryId, title = title)
+    }
+
+    fun changeOutlineDepth(entryId: String, depth: Int) = editOutline { bookId ->
+        bookRepository.updateOutlineEntry(bookId, entryId, depth = depth)
+    }
+
+    fun removeOutlineEntry(entryId: String) = editOutline { bookId ->
+        bookRepository.removeOutlineEntry(bookId, entryId)
+    }
+
+    fun moveOutlineEntry(from: Int, to: Int) = editOutline { bookId ->
+        bookRepository.moveOutlineEntry(bookId, from, to)
+    }
+
+    private fun editOutline(edit: suspend (String) -> Unit) {
+        val state = _uiState.value
+        val bookId = state.bookId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            edit(bookId)
+            loadNotebookNavigation(bookId, state.currentPageId)
+        }
+    }
+
+    private suspend fun loadBookData(
+        bookId: String, currentPageId: String, favorites: List<String>
+    ) {
+        val book = bookRepository.getById(bookId) ?: return
+        val currentIdx = appRepository.getPageNumber(bookId, currentPageId)
+        val favIndexes = book.pageIds.mapIndexedNotNull { idx, id ->
+            if (favorites.contains(id)) idx else null
+        }
+
+        // Set unconditionally, where this used to bail out below two pages. The scrubber is still
+        // gated on the count by the view that draws it, but the Pages tab needs the page list for a
+        // one-page notebook too — and a notebook grows past one page without this being re-read.
+        _uiState.update { state ->
+            state.copy(
+                bookPageCount = book.pageIds.size,
+                currentBookIndex = currentIdx,
+                favoriteIndexesInBook = favIndexes,
+                bookPageIds = book.pageIds
+            )
+        }
+        loadNotebookNavigation(bookId, currentPageId)
+    }
+
+    /** Pin or unpin the current page on the global, device-local jump list. */
+    fun togglePinned() {
         val currentState = _uiState.value
         val pageId = currentState.currentPageId ?: return
 
@@ -125,11 +225,11 @@ class QuickNavViewModel(
             kv.setAppSettings(settings.copy(quickNavPages = newFavorites))
 
             // Update UI State locally immediately
-            _uiState.update { it.copy(isCurrentPageFavorite = !isFav) }
+            _uiState.update { it.copy(isCurrentPagePinned = !isFav) }
 
             // Re-fetch the rich page objects for the ShowPagesRow
-            val updatedFavoritePages = appRepository.pageRepository.getByIds(newFavorites)
-            _uiState.update { it.copy(favoritePages = updatedFavoritePages) }
+            val updatedPinnedPages = appRepository.pageRepository.getByIds(newFavorites)
+            _uiState.update { it.copy(pinnedPages = updatedPinnedPages) }
         }
     }
 
