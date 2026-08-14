@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.data.db.DeletedImage
 import com.ethran.notable.data.db.DeletedPage
@@ -27,6 +28,7 @@ import java.io.File
 import java.util.Base64
 import java.util.Date
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * [CouchLocalStore] over notable's Room database — the bridge between the sync engine and what the
@@ -74,6 +76,19 @@ class RoomCouchStore(
      * `android.*`.
      */
     private val imagesFolder: () -> File = ::ensureImagesFolder,
+    /** Where a downloaded PDF or background picture is filed. Deferred for the same reason. */
+    private val backgroundsFolder: () -> File = ::ensureBackgroundsFolder,
+    /**
+     * An asset's bytes have just been written to this path.
+     *
+     * The page showing that background is holding a decode that failed while the file was still on
+     * its way, and nothing on the drawing side is going to try again by itself: a background is
+     * decoded once and cached, and the watch that would have reported the file changing was never
+     * installed, because there was no file to watch when the page was opened. So the arrival has to
+     * be announced. Without it a PDF imported on the other device lands correctly and goes on
+     * showing a blank page until the notebook is closed and reopened.
+     */
+    private val onAssetFileWritten: ((String) -> Unit)? = null,
 ) : CouchLocalStore {
 
     private val log = ShipBook.getLogger("RoomCouchStore")
@@ -251,24 +266,22 @@ class RoomCouchStore(
     }
 
     /**
-     * Protocol §3.4. An image is placed by the page document and carried by a separate `asset:`
-     * document, so between a page arriving and its blob being downloaded the reference is real and
-     * the picture is not there yet. This is what is still owed.
+     * Protocol §3.4. A picture is placed by the page document, and a PDF or background image is
+     * named by it, but the bytes of either travel as a separate `asset:` document — so between a
+     * page arriving and its blob being downloaded the reference is real and the file is not there
+     * yet. This is what is still owed.
      *
-     * Read from the image rows rather than from a side table: a row whose file is missing and
-     * whose name is a hash *is* the record of an outstanding download, and it survives a restart
-     * for free — that window can span one, since the page can arrive in one session and the bytes
-     * only be fetchable in the next.
+     * Read from the rows rather than from a side table: a row whose file is missing and whose name
+     * is a hash *is* the record of an outstanding download, and it survives a restart for free —
+     * that window can span one, since the page can arrive in one session and the bytes only be
+     * fetchable in the next.
      */
     override fun missingAssetIds(): List<String> = runBlocking {
-        val folder = runCatching { imagesFolder() }.getOrNull() ?: return@runBlocking emptyList()
-        appRepository.imageRepository.getAllUris()
-            .mapNotNull { uri -> CouchImageFiles.fileFor(uri) }
-            .filter { !it.exists() && CouchAssetId.isSha256Hex(it.name) }
-            .map { CouchDocId.asset(it.name) }
+        pendingAssets()
+            .map { it.assetId }
             .distinct()
             .sorted()
-            .also { if (it.isNotEmpty()) log.i("${it.size} image(s) still to download into $folder") }
+            .also { if (it.isNotEmpty()) log.i("${it.size} asset(s) still to download") }
     }
 
     // endregion
@@ -353,7 +366,9 @@ class RoomCouchStore(
             deletedPageIds = appRepository.deletedPageRepository.getByNotebook(id)
                 .map { CouchTombstone(id = it.pageId, deletedAt = iso(it.deletedAt)) },
             parentFolderId = notebook.parentFolderId,
-            defaultBackground = notebook.defaultBackground,
+            defaultBackground = wireBackground(
+                notebook.defaultBackground, notebook.defaultBackgroundType
+            ),
             defaultBackgroundType = notebook.defaultBackgroundType,
             defaultPageWidth = notebook.defaultPageWidth,
             defaultPageHeight = notebook.defaultPageHeight,
@@ -371,7 +386,7 @@ class RoomCouchStore(
         return CouchPage(
             notebookId = data.page.notebookId,
             title = data.page.title,
-            background = data.page.background,
+            background = wireBackground(data.page.background, data.page.backgroundType),
             backgroundType = data.page.backgroundType,
             pageWidth = data.page.pageWidth,
             pageHeight = data.page.pageHeight,
@@ -391,25 +406,42 @@ class RoomCouchStore(
     /**
      * The bytes behind an asset this device holds.
      *
-     * A blob this device downloaded is named for its own hash, which is the whole lookup. The scan
-     * behind it is for an image that arrived by another route — the picker, or the WebDAV backend —
-     * and kept whatever name it came with; it is only reached when a page places such an image and
-     * its asset has never been pushed.
+     * A blob this device downloaded is named for its own hash, which is the whole lookup. The scans
+     * behind it are for a file that arrived by another route — the picker, the WebDAV backend, or a
+     * PDF the user imported under its own name — and they are only reached when such a file is
+     * pushed for the first time.
+     *
+     * Both folders are searched because the id says nothing about which it is: a `sha256` is a
+     * picture placed on a page or a document the whole notebook is drawn on, and by the time a
+     * peer asks for one, all that is known is the hash.
      */
     private fun loadAsset(documentId: String): CouchAsset? {
         val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return null
-        val folder = runCatching { imagesFolder() }.getOrNull() ?: return null
-        val byHash = File(folder, sha)
-        val file = if (byHash.exists()) {
-            byHash
-        } else {
-            folder.listFiles()?.firstOrNull { CouchAssetId.sha256Hex(it) == sha } ?: return null
-        }
+        val file = assetFile(sha) ?: return null
         val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
         // An asset carries no history of its own — it is bytes under the name of their hash. The
         // timestamps describe this device's copy and never decide anything: nothing merges an
         // asset, and nothing overwrites one.
         return CouchAsset.of(bytes, at = iso(Date(file.lastModified())), updatedBy = deviceId)
+    }
+
+    private fun assetFile(sha: String): File? {
+        val images = runCatching { imagesFolder() }.getOrNull()
+        val backgrounds = runCatching { backgroundsFolder() }.getOrNull()
+
+        val named = buildList {
+            images?.let { add(File(it, sha)) }
+            backgrounds?.let { folder ->
+                CouchBackgroundFiles.fileNamesFor(sha).forEach { add(File(folder, it)) }
+            }
+        }
+        named.firstOrNull { it.exists() }?.let { return it }
+
+        images?.listFiles()?.firstOrNull { CouchAssetId.sha256Hex(it) == sha }?.let { return it }
+        // Backgrounds sit one level down, in `pdfs/` or `images/`, so this walks rather than lists.
+        // Hashes are remembered ([hashOf]), so a notebook's own PDF is read once and not once per
+        // page that names it.
+        return backgrounds?.walkTopDown()?.firstOrNull { it.isFile && hashOf(it) == sha }
     }
 
     private suspend fun loadFolder(id: String): CouchFolder? {
@@ -458,6 +490,39 @@ class RoomCouchStore(
             .joinToString("-") { hex.substring(it.first, it.last + 1) }
     }
 
+    /**
+     * The background to publish: the `asset:` document holding its bytes for a PDF or a picture,
+     * and the value itself for a native template.
+     *
+     * A file-backed background that cannot be identified — an external PDF this device can no
+     * longer read, on a page it has never been able to draw — travels as whatever it says locally.
+     * That is a path naming nothing on the peer, which is exactly how [localBackground] reads it:
+     * as a peer with nothing to say about backgrounds, so the peer keeps its own. Sending "blank"
+     * instead would be a claim, and would wipe a background the peer can see.
+     */
+    private fun wireBackground(background: String, backgroundType: String): String =
+        CouchBackgroundFiles.assetIdFor(background, backgroundType, ::hashOf) ?: background
+
+    /** Path -> ((size, modified), hash). See [hashOf]. */
+    private val hashedBackgrounds = ConcurrentHashMap<String, Pair<Pair<Long, Long>, String>>()
+
+    /**
+     * The hash of a background file, remembered for as long as the file does not change.
+     *
+     * Every page of an imported book names the same PDF, and every push and every incoming page
+     * asks what it is. Reading a sixty-megabyte document once per page — two hundred times for a
+     * scanned book, on a device with an e-ink processor and a slow card — is the difference between
+     * a sync and an ordeal. Size and modification time are what a local edit moves, so keying on
+     * them means an externally-edited PDF (the whole point of a linked notebook) still re-reads.
+     */
+    private fun hashOf(file: File): String? {
+        val stamp = file.length() to file.lastModified()
+        hashedBackgrounds[file.path]?.let { (known, hash) -> if (known == stamp) return hash }
+        val hash = CouchAssetId.sha256Hex(file) ?: return null
+        hashedBackgrounds[file.path] = stamp to hash
+        return hash
+    }
+
     private fun couchImage(image: Image): CouchImage = CouchImage(
         id = image.id,
         // The wire names bytes, not a path: where this device keeps the file is its own business,
@@ -485,7 +550,12 @@ class RoomCouchStore(
             openPageId = existing?.openPageId,
             pageIds = notebook.pageIds,
             parentFolderId = resolveFolder(notebook.parentFolderId),
-            defaultBackground = notebook.defaultBackground,
+            defaultBackground = localBackground(
+                incoming = notebook.defaultBackground,
+                backgroundType = notebook.defaultBackgroundType,
+                held = existing?.defaultBackground,
+                heldType = existing?.defaultBackgroundType,
+            ),
             defaultBackgroundType = notebook.defaultBackgroundType,
             // A declared sheet is kept when the peer names none — the same rule the merge uses, and
             // for the same reason: a build that has not learned the field must not reflow pages.
@@ -566,7 +636,12 @@ class RoomCouchStore(
             scroll = existing?.page?.scroll ?: 0,
             notebookId = notebookId,
             title = page.title,
-            background = page.background,
+            background = localBackground(
+                incoming = page.background,
+                backgroundType = page.backgroundType,
+                held = existing?.page?.background,
+                heldType = existing?.page?.backgroundType,
+            ),
             backgroundType = page.backgroundType,
             pageWidth = page.pageWidth ?: existing?.page?.pageWidth,
             pageHeight = page.pageHeight ?: existing?.page?.pageHeight,
@@ -732,13 +807,101 @@ class RoomCouchStore(
         return CouchImageFiles.localUriFor(assetId, folder)
     }
 
-    /** Files the bytes of an asset a page referenced, under the name that page points at. */
-    private fun applyAsset(documentId: String, asset: CouchAsset) {
+    /**
+     * The local file an incoming background should be drawn from. [held] is what this device has
+     * been showing for it, and [heldType] what kind of thing that was.
+     *
+     * The two "keep what is here" branches are the same rule [localImageUri] applies, for the same
+     * reason: every path a row holds is one this device wrote, and a document never gets to decide
+     * which file this device reads. A peer that names no asset has said nothing about backgrounds
+     * — it is an older build, or one that cannot read its own file — so it must not be able to
+     * blank out a background that is here and working.
+     */
+    private fun localBackground(
+        incoming: String,
+        backgroundType: String,
+        held: String?,
+        heldType: String?,
+    ): String {
+        // A native template is its own value on every device; there is nothing to resolve.
+        if (!CouchBackgroundFiles.isFileBacked(backgroundType)) return incoming
+        if (CouchAssetId.sha256HexOfAssetId(incoming) == null) return held ?: incoming
+
+        // These exact bytes may already be here under the name they were imported with — the file
+        // the user picked, or one the WebDAV backend downloaded. That file keeps its name: this is
+        // most often a page coming back from the server that this very device sent.
+        if (held != null && heldType != null &&
+            CouchBackgroundFiles.assetIdFor(held, heldType, ::hashOf) == incoming
+        ) {
+            return held
+        }
+
+        // Storage is unreachable, so there is no path these bytes could be drawn from and none the
+        // downloader could put them at. The reference is kept rather than replaced with a guess:
+        // it names the right bytes, so it survives being pushed back, and the next apply resolves
+        // it once storage is there.
+        val folder = runCatching { backgroundsFolder() }.getOrNull() ?: return held ?: incoming
+        return CouchBackgroundFiles.localPathFor(incoming, backgroundType, folder)
+            ?: held ?: incoming
+    }
+
+    /**
+     * An asset this device is owed, and the file waiting for it.
+     *
+     * Read from the rows rather than from a side table, for the reason given on [missingAssetIds]:
+     * a row whose file is missing and whose name is a hash *is* the record of an outstanding
+     * download, and it survives a restart for free.
+     */
+    private data class PendingAsset(val assetId: String, val file: File)
+
+    private suspend fun pendingAssets(): List<PendingAsset> {
+        val pending = mutableListOf<PendingAsset>()
+
+        if (runCatching { imagesFolder() }.isSuccess) {
+            appRepository.imageRepository.getAllUris()
+                .mapNotNull { uri -> CouchImageFiles.fileFor(uri) }
+                .filter { !it.exists() && CouchAssetId.isSha256Hex(it.name) }
+                .forEach { pending += PendingAsset(CouchDocId.asset(it.name), it) }
+        }
+
+        appRepository.pageRepository.getFileBackgrounds().forEach { row ->
+            pendingBackground(row.background, row.backgroundType)?.let { pending += it }
+        }
+        appRepository.bookRepository.getFileDefaultBackgrounds().forEach { row ->
+            pendingBackground(row.background, row.backgroundType)?.let { pending += it }
+        }
+        return pending
+    }
+
+    private fun pendingBackground(background: String, backgroundType: String): PendingAsset? {
+        if (!CouchBackgroundFiles.isFileBacked(backgroundType) || background.isEmpty()) return null
+        val file = File(background)
+        if (file.exists()) return null
+        val sha = CouchBackgroundFiles.sha256HexOfFileName(file.name) ?: return null
+        return PendingAsset(CouchDocId.asset(sha), file)
+    }
+
+    /** Files the bytes of an asset, at every path a row is currently pointing at for them. */
+    private suspend fun applyAsset(documentId: String, asset: CouchAsset) {
         val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return
         val bytes = asset.bytes ?: return
-        val folder = runCatching { imagesFolder() }.getOrNull() ?: return
-        runCatching { File(folder, sha).writeBytes(bytes) }
-            .onFailure { log.e("Could not store image $sha: ${it.message}") }
+        // Nothing waiting means an image whose row already resolves — the fetch that asked for
+        // these bytes expects them in the images folder, under the hash that names them.
+        val destinations = pendingAssets().filter { it.assetId == documentId }.map { it.file }
+            .distinct()
+            .ifEmpty {
+                listOfNotNull(runCatching { imagesFolder() }.getOrNull()?.let { File(it, sha) })
+            }
+        for (file in destinations) {
+            runCatching {
+                file.parentFile?.mkdirs()
+                file.writeBytes(bytes)
+            }.onFailure {
+                log.e("Could not store asset $sha at ${file.name}: ${it.message}")
+            }.onSuccess {
+                onAssetFileWritten?.invoke(file.absolutePath)
+            }
+        }
     }
 
     // endregion

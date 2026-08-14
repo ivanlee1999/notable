@@ -123,6 +123,87 @@ object CouchImageFiles {
     }
 }
 
+/**
+ * Which backgrounds are files, and how one relates to the asset document carrying it between
+ * devices.
+ *
+ * A page's `background` is two different things depending on its `backgroundType`: for a native
+ * template it is the template's name (`"blank"`, `"lined"`), and for a PDF or a picture it is a
+ * path on whichever device wrote it. A path is the one thing that cannot travel — `/storage/.../
+ * notabledb/backgrounds/pdfs/lecture.pdf` names nothing on the iPad and nothing on a second BOOX —
+ * so a file-backed background travels as the `asset:<sha256>` id of its bytes, exactly as a placed
+ * image does, and each device resolves that id to a path of its own.
+ *
+ * The id goes in the same `background` field rather than beside it, deliberately. Both apps already
+ * carry that field through verbatim, so a page that passes through a build which has never heard of
+ * background assets comes back with the reference intact; a new field would be dropped on the way
+ * and the peer's PDF would come loose from its pages.
+ *
+ * The type strings are spelled out here rather than read off `BackgroundType`, which lives in the
+ * app's data layer: this package is exercised by plain JVM tests and may not touch `android.*`.
+ * bopa's `BackgroundKind.isFileBacked` is the twin of the rule, and must agree with it.
+ */
+object CouchBackgroundFiles {
+    /** PDFs are told from pictures by their name — see [localPathFor]. */
+    private const val PDF_EXTENSION = ".pdf"
+
+    fun isFileBacked(backgroundType: String): Boolean =
+        isPdf(backgroundType) || backgroundType.startsWith("image") || backgroundType == "coverImage"
+
+    fun isPdf(backgroundType: String): Boolean =
+        backgroundType.startsWith("pdf") || backgroundType == "autoPdf"
+
+    /**
+     * The asset document a page's background belongs to, or null when this device cannot say what
+     * bytes it is showing — an external PDF it can no longer read, or a native template.
+     *
+     * The filename is consulted before the bytes, which is the opposite of [CouchImageFiles]. A
+     * background named after a hash was written by sync and by nothing else — it is [localPathFor]'s
+     * own output — so its name is as good an answer as its content, and a great deal cheaper:
+     * backgrounds are the one asset that is routinely tens of megabytes and shared by every page of
+     * a notebook. Only a file this device imported under the user's own name has to be read, and
+     * [hashOf] is where the caller puts the memory of having done so.
+     */
+    fun assetIdFor(
+        background: String,
+        backgroundType: String,
+        hashOf: (File) -> String? = { CouchAssetId.sha256Hex(it) },
+    ): String? {
+        if (!isFileBacked(backgroundType) || background.isEmpty()) return null
+        // Already an id: a page received while storage was unreachable keeps the reference it
+        // arrived with, and must go on naming the same bytes when it is pushed back.
+        if (CouchAssetId.sha256HexOfAssetId(background) != null) return background
+        val file = File(background)
+        sha256HexOfFileName(file.name)?.let { return CouchDocId.asset(it) }
+        return hashOf(file)?.let(CouchDocId::asset)
+    }
+
+    /**
+     * Where this device will keep the bytes of [assetId] — the path a page points at while the
+     * download is still outstanding, and the one it is drawn from once the bytes land.
+     *
+     * PDFs keep the extension because that is how the renderer tells a document to page through
+     * from a picture to decode ([com.ethran.notable.io.loadBackgroundBitmap]). Pictures are decoded
+     * by content, so a bare hash is enough for them.
+     */
+    fun localPathFor(assetId: String, backgroundType: String, backgroundsFolder: File): String? {
+        val sha = CouchAssetId.sha256HexOfAssetId(assetId) ?: return null
+        val name = if (isPdf(backgroundType)) "$sha$PDF_EXTENSION" else sha
+        return File(backgroundsFolder, name).absolutePath
+    }
+
+    /**
+     * Every name a downloaded background can have been given for [sha256Hex] — the reverse of
+     * [localPathFor], for a lookup that has the hash but not the type that produced the name.
+     */
+    fun fileNamesFor(sha256Hex: String): List<String> =
+        listOf(sha256Hex, "$sha256Hex$PDF_EXTENSION")
+
+    /** The hash a downloaded background's filename encodes, or null for a name that is not one. */
+    fun sha256HexOfFileName(fileName: String): String? =
+        fileName.removeSuffix(PDF_EXTENSION).takeIf { CouchAssetId.isSha256Hex(it) }
+}
+
 /** Base64 of an attachment's bytes, which is how they ride inside the document. */
 internal fun ByteArray.toAttachmentData(): String = Base64.getEncoder().encodeToString(this)
 

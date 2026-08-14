@@ -91,6 +91,26 @@ class BackgroundFileWatcher @Inject constructor(
     }
 
     /**
+     * Report a change to [filePath] that inotify could not have seen.
+     *
+     * There is one: a background whose file did not exist when the page was opened is registered
+     * here without an observer ([watch] cannot watch what is not there), so the moment sync
+     * downloads it — a PDF imported on the other device, arriving after the pages that use it —
+     * nothing would say so, and those pages would go on showing the blank they decoded. The caller
+     * knows it wrote the file; this turns that into the same event a local save produces.
+     *
+     * A path no page is drawn from is not an error: assets are written for pictures too, and those
+     * simply map to nobody.
+     */
+    fun noteChanged(filePath: String) {
+        val watched = synchronized(registryLock) { !pagesByFile[filePath].isNullOrEmpty() }
+        if (!watched) return
+        // Now that the file exists there is something to observe, so later edits report themselves.
+        rearm(filePath)
+        scope.launch { fileChanges.emit(filePath) }
+    }
+
+    /**
      * After a delete/recreate, re-install an observer for [filePath] — but **only if pages still use
      * it**, and without touching the page set.
      *

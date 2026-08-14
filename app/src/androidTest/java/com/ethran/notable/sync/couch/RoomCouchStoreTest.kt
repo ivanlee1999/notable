@@ -84,18 +84,31 @@ class RoomCouchStoreTest {
      */
     private lateinit var images: File
 
+    /** The same stand-in for the backgrounds folder, where imported PDFs are kept. */
+    private lateinit var backgrounds: File
+
+    /** Asset files the store announced writing — how a page learns its PDF has landed. */
+    private val assetsWritten = mutableListOf<String>()
+
     @Before
     fun setUp() {
         db = TestDatabaseFactory.createInMemory(context)
         repository = repositoryFor(db)
         images = File(context.cacheDir, "couch-images-${UUID.randomUUID()}").apply { mkdirs() }
-        store = RoomCouchStore(repository, db.kvDao(), deviceId = "boox", imagesFolder = { images })
+        backgrounds = File(context.cacheDir, "couch-bg-${UUID.randomUUID()}").apply { mkdirs() }
+        store = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images },
+            backgroundsFolder = { backgrounds },
+            onAssetFileWritten = { assetsWritten += it },
+        )
     }
 
     @After
     fun tearDown() {
         db.close()
         images.deleteRecursively()
+        backgrounds.deleteRecursively()
     }
 
     // region Fixtures
@@ -260,6 +273,177 @@ class RoomCouchStoreTest {
 
         val uri = runBlocking { repository.imageRepository.getUrisForPage("p1") }.first()
         assertEquals(file.absolutePath, uri)
+        assertTrue(store.missingAssetIds().isEmpty())
+    }
+
+    // endregion
+
+    // region Imported PDFs
+
+    private val pdfBytes = "%PDF-1.7\nlecture notes\n".toByteArray()
+    private val pdfAssetId get() = CouchAssetId.forBytes(pdfBytes)
+
+    /**
+     * The page an imported book produces: drawn on one page of a document kept next to the
+     * database, and named by the path the importer wrote.
+     */
+    private fun pdfPage(file: File) = page(emptyList(), notebookId = "nb1", updatedAt = 5)
+        .copy(background = file.absolutePath, backgroundType = "pdf0")
+
+    private suspend fun backgroundOf(pageId: String): String? =
+        repository.pageRepository.getById(pageId)?.background
+
+    /**
+     * The whole feature in one test. What the importer wrote is a path that exists on this device
+     * and nowhere else; what leaves the device is the hash of the document's bytes.
+     */
+    @Test
+    fun anImportedPdfTravelsAsItsBytesRatherThanAsItsPath() {
+        val file = File(backgrounds, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+        val pageId = CouchDocId.page("p1")
+        // A path is what a device holds; nothing resolves it away on the way in, because a peer
+        // naming one has said nothing about assets.
+        store.apply(pageId, CouchDocBody.Page(pdfPage(file)))
+        assertEquals(file.absolutePath, runBlocking { backgroundOf("p1") })
+
+        val loaded = (store.load(pageId) as CouchDocBody.Page).page
+        assertEquals(pdfAssetId, loaded.background)
+        assertEquals("pdf0", loaded.backgroundType)
+
+        val asset = store.load(pdfAssetId) as? CouchDocBody.Asset
+        assertNotNull("the document behind the reference was not found", asset)
+        assertArrayEquals(pdfBytes, asset!!.asset.bytes)
+        assertEquals("application/pdf", asset.asset.contentType)
+    }
+
+    /** A notebook that follows a PDF's page numbers publishes that PDF the same way. */
+    @Test
+    fun aNotebooksDefaultPdfTravelsAsItsBytesToo() {
+        val file = File(backgrounds, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+        val id = CouchDocId.notebook("nb1")
+        store.apply(
+            id,
+            CouchDocBody.Notebook(
+                CouchNotebook(
+                    title = "Lecture 3", pageIds = emptyList(), createdAt = stamp(0),
+                    updatedAt = stamp(5), updatedBy = "boox",
+                    defaultBackground = file.absolutePath, defaultBackgroundType = "autoPdf",
+                )
+            ),
+        )
+
+        val loaded = (store.load(id) as CouchDocBody.Notebook).notebook
+        assertEquals(pdfAssetId, loaded.defaultBackground)
+    }
+
+    /**
+     * The receiving half: the page lands first and is drawn blank, the document follows, and it has
+     * to land exactly where the page was told to look — including the `.pdf`, which is how the
+     * renderer knows to page through it rather than decode it as a picture.
+     */
+    @Test
+    fun anIncomingPdfIsOwedUntilItsBytesArriveAndThenLandsWhereThePageLooks() {
+        val pageId = CouchDocId.page("p1")
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5)
+                    .copy(background = pdfAssetId, backgroundType = "pdf0")
+            ),
+        )
+
+        val expected = File(backgrounds, "${CouchAssetId.sha256Hex(pdfBytes)}.pdf")
+        assertEquals(expected.absolutePath, runBlocking { backgroundOf("p1") })
+        assertEquals(listOf(pdfAssetId), store.missingAssetIds())
+
+        store.apply(
+            pdfAssetId,
+            CouchDocBody.Asset(CouchAsset.of(pdfBytes, at = stamp(2), updatedBy = "ipad")),
+        )
+
+        assertTrue(store.missingAssetIds().isEmpty())
+        assertArrayEquals(pdfBytes, expected.readBytes())
+        // And the page showing it is told, because it decoded a blank while the file was on its way.
+        assertEquals(listOf(expected.absolutePath), assetsWritten)
+    }
+
+    /** A notebook's default is owed on its own, so a book whose pages are all gone still resolves. */
+    @Test
+    fun anIncomingDefaultBackgroundIsOwedEvenWithNoPagesToNameIt() {
+        store.apply(
+            CouchDocId.notebook("nb1"),
+            CouchDocBody.Notebook(
+                CouchNotebook(
+                    title = "Lecture 3", pageIds = emptyList(), createdAt = stamp(0),
+                    updatedAt = stamp(5), updatedBy = "ipad",
+                    defaultBackground = pdfAssetId, defaultBackgroundType = "autoPdf",
+                )
+            ),
+        )
+
+        assertEquals(listOf(pdfAssetId), store.missingAssetIds())
+    }
+
+    /**
+     * The document is already here, under the name the user imported it with. It keeps that name:
+     * this is most often the page coming back from the server that this very device sent, and
+     * re-filing the file under its hash would strand the copy the WebDAV backend syncs by filename.
+     */
+    @Test
+    fun aPdfAlreadyHereKeepsTheNameItWasImportedWith() {
+        val file = File(backgrounds, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+        val pageId = CouchDocId.page("p1")
+        store.apply(pageId, CouchDocBody.Page(pdfPage(file)))
+
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 9, by = "ipad")
+                    .copy(background = pdfAssetId, backgroundType = "pdf0")
+            ),
+        )
+
+        assertEquals(file.absolutePath, runBlocking { backgroundOf("p1") })
+        assertTrue("nothing is owed: the document is here", store.missingAssetIds().isEmpty())
+    }
+
+    /**
+     * A peer that names a path rather than an asset is one running a build from before backgrounds
+     * travelled. It has said nothing about backgrounds, so it must not be able to replace a working
+     * one with a path that names nothing here.
+     */
+    @Test
+    fun aPeerThatNamesNoAssetDoesNotBlankTheBackgroundThatIsHere() {
+        val file = File(backgrounds, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+        val pageId = CouchDocId.page("p1")
+        store.apply(pageId, CouchDocBody.Page(pdfPage(file)))
+
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 9, by = "ipad")
+                    .copy(background = "/var/mobile/Containers/Data/somebody-else.pdf",
+                        backgroundType = "pdf0")
+            ),
+        )
+
+        assertEquals(file.absolutePath, runBlocking { backgroundOf("p1") })
+    }
+
+    /** A native template is its own value everywhere, and travels untouched. */
+    @Test
+    fun aNativeTemplateIsNotTreatedAsAFile() {
+        val pageId = CouchDocId.page("p1")
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5)
+                    .copy(background = "lined", backgroundType = "native")
+            ),
+        )
+
+        assertEquals("lined", runBlocking { backgroundOf("p1") })
+        assertEquals("lined", (store.load(pageId) as CouchDocBody.Page).page.background)
         assertTrue(store.missingAssetIds().isEmpty())
     }
 
