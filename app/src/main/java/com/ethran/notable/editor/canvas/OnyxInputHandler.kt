@@ -59,6 +59,18 @@ class OnyxInputHandler(
     private val log = ShipBook.getLogger("DrawCanvas")
     private val toolbarState get() = viewModel.toolbarState.value
 
+    /**
+     * Whether the firmware raw-pen path actually came up on this device.
+     *
+     * Being an ONYX device is not enough: [TouchHelper.create] can fail, and a panel that
+     * carries no digitizer of its own (the Palma class, which takes a capacitive stylus
+     * rather than the Tab series' EMR one) may not serve the raw channel at all. Everything
+     * Onyx-side already null-guards the helper, so on those devices the editor would come up
+     * looking fine and simply never record a stroke — [MotionEventStrokeSource] reads the
+     * framework's events instead when this is false.
+     */
+    val usesRawInput: Boolean get() = touchHelper != null
+
     // TODO: As OnyxInput is not done by lazy, which forces evaluation of the touchHelper
     //       lazy during DrawCanvas construction.
     val touchHelper by lazy {
@@ -90,7 +102,7 @@ class OnyxInputHandler(
         }
 
         override fun onRawDrawingTouchPointListReceived(plist: TouchPointList) =
-            onRawDrawingList(plist)
+            onStrokeCollected(plist)
 
 
         // Handle button/eraser tip of the pen:
@@ -230,8 +242,16 @@ class OnyxInputHandler(
             updatePenAndStroke()
         }
     }
-    private fun onRawDrawingList(plist: TouchPointList) {
-        if (touchHelper == null) return
+    /**
+     * Turns one finished stroke into whatever the active tool means by it — ink, a shape, a
+     * selection, an erase.
+     *
+     * The firmware calls this on pen-up with the points it collected; on a device without
+     * the raw channel [MotionEventStrokeSource] calls it with the points it collected from
+     * [android.view.MotionEvent]s instead. Deliberately does not test [touchHelper]: that is
+     * exactly the case the fallback exists for, and the raw callback cannot fire without one.
+     */
+    internal fun onStrokeCollected(plist: TouchPointList) {
         val currentLastStrokeEndTime = lastStrokeEndTime
         lastStrokeEndTime = System.currentTimeMillis()
         val startTime = System.currentTimeMillis()
@@ -334,6 +354,27 @@ class OnyxInputHandler(
                                 toolbarState.pen,
                                 scaledPoints
                             )
+                            // The firmware's live track is already on the panel, so the raw path
+                            // needs no push here — the pen-up refresh swaps it for the real
+                            // stroke. Without it the stroke exists only in the page bitmap, and
+                            // this is what puts it on screen. Measured from the untransformed
+                            // points because a dirty rect is in view coordinates, and padded by
+                            // the pen's width so the stroke's edges are not left clipped.
+                            if (!usesRawInput) {
+                                val padding =
+                                    (toolbarState.activePenSetting.strokeSize * page.zoomLevel.value)
+                                        .toInt() + 10
+                                val box =
+                                    calculateBoundingBox(plist.points) { Pair(it.x, it.y) }.toRect()
+                                drawCanvas.refreshManager.refreshUi(
+                                    Rect(
+                                        box.left - padding,
+                                        box.top - padding,
+                                        box.right + padding,
+                                        box.bottom + padding
+                                    )
+                                )
+                            }
                         } else {
                             log.d("Erased by scribble, $erasedByScribbleDirtyRect")
                             // Union the scribble track (firmware screen coords) with the erased
