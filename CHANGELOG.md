@@ -4,6 +4,7 @@
 
 A long notebook could only be crossed a page at a time. QuickNav now shows every page, a table of
 contents you write yourself, and the pages you starred — and starring travels to your other device.
+The writing screen also gets a title bar of its own, so the notebook you are in has a name on it.
 
 ### Getting around a notebook
 
@@ -27,6 +28,20 @@ contents you write yourself, and the pages you starred — and starring travels 
   page is about this device** — a jump list spanning every notebook — so it stays here. Merging
   the two would have had to give up one of those.
 - Deleting a page takes its bookmark and its outline entries with it, on both devices.
+
+### The writing screen says where you are
+
+- **Which notebook you had open was not on screen anywhere**, and your place in it was a number in
+  the tool rail. A title bar now sits above the page carrying both, with a back arrow out to the
+  notebook's pages — or to the Library, if what you have open is a loose page.
+- **The paper template and the menu moved into the bar.** Those act on the page; everything else in
+  the rail acts on the hand. The rail keeps its own menu button, so a layout you have arranged is
+  unchanged.
+- **Beside a rail docked left or right, the bar starts where the rail ends** rather than running
+  over the top of it.
+- **It is hidden with the toolbar.** A two-finger swipe, or the eye button at the head of the rail,
+  still gives you the whole sheet. While the bar is shown it covers the top of the page and the pen
+  cannot write underneath it, the same way the rail always has.
 
 ## 0.17.0
 
