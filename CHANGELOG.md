@@ -2,8 +2,32 @@
 
 ## 0.15.0
 
-The notebooks you deleted before 0.13.0 are still in your iPad's library. This release finally
-tells it about them.
+Notable runs on the Palma Pro 2. And the notebooks you deleted before 0.13.0, which are still
+sitting in your iPad's library, are finally sent on their way.
+
+### The pen could move without anything being written down
+
+- **On a BOOX without the raw-pen channel, no stroke was ever recorded.** Notable draws through
+  ONYX's firmware pen path, and being a BOOX was taken as proof that path was available. It is
+  not — the Palma takes a capacitive stylus rather than the digitizer built into the Tab series,
+  and the channel can be absent or fail to open. Nothing reported this: the editor opened, the
+  page was there, the pen moved, and every stroke was dropped.
+- Notable now checks whether the channel actually opened, and falls back to reading the pen
+  through Android when it did not. Ink, shapes, selection and erase all work on that path,
+  because it feeds the same place the firmware does.
+- **On the fallback, a stroke appears when you lift the pen** rather than under the tip as you
+  write. The under-the-tip ink is drawn by the firmware itself, and nothing outside it can match
+  that on e-ink. Where the firmware is available — every Tab, Note and Air — nothing changes.
+
+### One hand, on a screen the size of a phone
+
+- **The tool rail starts at the bottom** on a pocket-sized device, where a thumb already is,
+  instead of the top. Only on a new install: if you have already put the rail somewhere, it stays
+  there.
+- **The pen's colour is now visible on a rail docked top or bottom.** It never was — the strip of
+  inks only fitted down the side of a vertical rail, so on a horizontal one the colour in hand was
+  simply not on screen. A single swatch now shows it, and tapping opens the rest over the page.
+- The library already dropped to one column with the shelf as a list on a screen this size.
 
 ### Deletions from before 0.13.0 were stranded on this device
 
