@@ -52,13 +52,20 @@ suspend fun importPdf(
     log.v("Importing PDF from")
 
     val numberOfPages = getPdfPageCount(fileToSave.toString())
+    // Each page is laid out on the sheet the document says it is, so the ink written over it is in
+    // the same place on every device — see [getPdfPageSizes]. A page the renderer will not measure
+    // declares nothing, which is the old behaviour and no worse than it.
+    val sheets = getPdfPageSizes(fileToSave.toString())
 
     for (i in 0 until numberOfPages) {
+        val sheet = sheets.getOrNull(i)
         val page = Page(
             notebookId = options.saveToBookId,
             background = fileToSave.toString(),
             backgroundType = if (options.linkToExternalFile) BackgroundType.AutoPdf.key
-            else BackgroundType.Pdf(i).key
+            else BackgroundType.Pdf(i).key,
+            pageWidth = sheet?.width,
+            pageHeight = sheet?.height,
         )
         savePageToDatabase(PageWithData(page, emptyList(), emptyList()))
     }

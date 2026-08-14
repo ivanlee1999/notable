@@ -44,6 +44,30 @@ class PageSizesTest {
         assertEquals(841.89f, PageSizePreset.A4.size.heightInPoints, 0.5f)
     }
 
+    /**
+     * The way back, which is how an imported PDF gets a sheet. A4 has to land exactly on the A4 a
+     * user would have picked, or a document and a chosen paper size of the same dimensions would be
+     * two different sheets — and pages of each would not line up.
+     */
+    @Test
+    fun a_pdf_page_measured_in_points_lands_on_the_paper_size_it_is() {
+        assertEquals(PageSizePreset.A4.size, measured(595.276f, 841.89f))
+        assertEquals(PageSizePreset.A5.size, measured(419.528f, 595.276f))
+        // US Letter, which a great many scanned PDFs are.
+        assertEquals(PageSizePreset.LETTER.size, measured(612f, 792f))
+    }
+
+    /** A landscape page is stored as it is: a document's geometry is not up for interpretation. */
+    @Test
+    fun a_landscape_pdf_page_keeps_its_shape() {
+        assertEquals(PageSize(1980, 1400), measured(841.89f, 595.276f))
+    }
+
+    private fun measured(widthPt: Float, heightPt: Float) = PageSize(
+        PageUnits.unitsFromPoints(widthPt),
+        PageUnits.unitsFromPoints(heightPt),
+    )
+
     // --- The preset table ---
 
     @Test

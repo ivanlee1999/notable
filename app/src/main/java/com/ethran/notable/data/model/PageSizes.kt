@@ -35,6 +35,13 @@ object PageUnits {
 
     fun pointsFromUnits(units: Float): Float = (units * POINTS_PER_UNIT).toFloat()
 
+    /**
+     * The inverse, rounded rather than truncated — an imported A4 PDF should land on A4's 1400 x
+     * 1980 rather than a unit short of it, so a document and a chosen paper size of the same
+     * dimensions come out the same sheet.
+     */
+    fun unitsFromPoints(points: Float): Int = Math.round(points / POINTS_PER_UNIT).toInt()
+
     fun millimetresFromUnits(units: Int): Double = units * MILLIMETRES_PER_UNIT
 }
 
