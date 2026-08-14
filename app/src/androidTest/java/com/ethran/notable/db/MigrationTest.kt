@@ -525,4 +525,107 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 45 -> 46 rescues the trashings that were never published. Before 0.13.0 the Trash was local
+     * bookkeeping — `deletedAt` was written without stamping `updatedAt` or queueing the outbox —
+     * so an item thrown away here stayed in the peer's library, and shipping the fix alone would
+     * not have moved it: the document is already in the engine's `revs`, which is exactly what
+     * `neverSent` cannot see, and a hidden notebook cannot be edited back into the outbox.
+     *
+     * Both halves matter. Queueing without stamping would push a `deletedAt` carrying its original
+     * `updatedAt`, which ties with or loses to the peer's live copy under §5.5 and leaves the
+     * notebook in the library it was supposed to leave.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate45To46_queuesAndStampsTrashedItemsSoTheTrashingIsPublished() {
+        val dbName = "migration-test-46"
+        val before = System.currentTimeMillis()
+
+        val oldDb = helper.createDatabase(dbName, 45)
+        // One trashed folder and one trashed notebook, both stamped long ago and neither queued —
+        // the state a device is left in by trashing on 0.11.0 or 0.12.0.
+        oldDb.execSQL(
+            """
+            INSERT INTO folder (id, title, parentFolderId, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('folder1', 'Research', NULL, 1000, 1000, 2000, 'boox')
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                linkedExternalUri, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('notebook1', 'Field Notes', NULL, '[]', NULL, 'blank', 'native', NULL, NULL,
+                NULL, 1000, 1000, 2000, 'boox')
+            """.trimIndent()
+        )
+        // And one of each still in the library, which must be left completely alone.
+        oldDb.execSQL(
+            """
+            INSERT INTO folder (id, title, parentFolderId, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('folder2', 'Live', NULL, 1000, 1000, NULL, 'boox')
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                linkedExternalUri, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('notebook2', 'Live Notes', NULL, '[]', NULL, 'blank', 'native', NULL, NULL,
+                NULL, 1000, 1000, NULL, 'boox')
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // Queued, so the flush has something to send.
+        migratedDb.query("SELECT docId FROM couch_outbox ORDER BY docId").use {
+            assertEquals(2, it.count)
+            assertTrue(it.moveToFirst())
+            assertEquals("folder:folder1", it.getString(0))
+            assertTrue(it.moveToNext())
+            assertEquals("notebook:notebook1", it.getString(0))
+        }
+
+        // Stamped, so the trashing outranks the peer's live copy instead of tying with it.
+        for (table in listOf("folder", "notebook")) {
+            migratedDb.query(
+                "SELECT updatedAt, updatedBy, deletedAt FROM $table WHERE id = '${table}1'"
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertTrue(
+                    "a trashing that was never published must be re-stamped to win §5.5",
+                    it.getLong(it.getColumnIndexOrThrow("updatedAt")) >= before,
+                )
+                assertTrue(
+                    "the re-stamp happened on this device, so it owns the write",
+                    it.isNull(it.getColumnIndexOrThrow("updatedBy")),
+                )
+                assertEquals(
+                    "the item stays in the Trash — this republishes it, it does not restore it",
+                    2000L, it.getLong(it.getColumnIndexOrThrow("deletedAt")),
+                )
+            }
+
+            // The library is untouched: no stamp, no queue, no lost authorship.
+            migratedDb.query(
+                "SELECT updatedAt, updatedBy FROM $table WHERE id = '${table}2'"
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertEquals(
+                    "a live item is not republished by an upgrade",
+                    1000L, it.getLong(it.getColumnIndexOrThrow("updatedAt")),
+                )
+                assertEquals("boox", it.getString(it.getColumnIndexOrThrow("updatedBy")))
+            }
+        }
+
+        roomDb.close()
+    }
 }
