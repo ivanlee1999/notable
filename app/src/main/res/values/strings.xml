@@ -388,4 +388,6 @@
     <string name="toolbar_element_menu">Menu</string>
     <string name="toolbar_element_divider">Divider</string>
 
+    <string name="editor_title_bar_back">Back</string>
+
 </resources>

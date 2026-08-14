@@ -11,6 +11,7 @@ import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.state.History
+import com.ethran.notable.editor.ui.editorTitleBarHeight
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
@@ -226,14 +227,25 @@ class OnyxInputHandler(
             onSurfaceInit(drawCanvas)
             // Across the rail's short edge: its height when docked top/bottom, its width
             // when docked left/right. setupSurface reads the position itself.
+            val open = toolbarState.isToolbarOpen
             val toolbarThickness =
-                if (toolbarState.isToolbarOpen)
-                    convertDpToPixel(TOOLBAR_THICKNESS.dp, drawCanvas.context).toInt()
+                if (open) convertDpToPixel(TOOLBAR_THICKNESS.dp, drawCanvas.context).toInt()
+                else 0
+            // The title bar is shown and hidden with the rail, and sizes itself off the same
+            // screen width the composition reads — so both arrive at the same band.
+            val titleBarHeight =
+                if (open) convertDpToPixel(
+                    editorTitleBarHeight(
+                        drawCanvas.context.resources.configuration.screenWidthDp
+                    ),
+                    drawCanvas.context
+                ).toInt()
                 else 0
             setupSurface(
                 drawCanvas,
                 touchHelper,
-                toolbarThickness
+                toolbarThickness,
+                titleBarHeight
             )
             // setupSurface resets the framework stroke style to firmware defaults. Re-send the
             // pen style here, inside the same coroutine and after the surface is armed: a caller
