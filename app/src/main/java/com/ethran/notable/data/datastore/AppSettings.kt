@@ -2,10 +2,13 @@ package com.ethran.notable.data.datastore
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.unit.Dp
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.PageSizePreset
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarLayout
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.ui.theme.KALEIDO_WIDE_BREAKPOINT
+import com.ethran.notable.ui.theme.kaleidoMetrics
 import kotlinx.serialization.Serializable
 
 
@@ -150,3 +153,18 @@ data class AppSettings(
         val isVertical: Boolean get() = this == Left || this == Right
     }
 }
+
+/**
+ * The edge a fresh install docks the tool rail to, given the display it is being installed on.
+ *
+ * On a one-handed device — a Palma-class panel, the same step [kaleidoMetrics] drops the
+ * Library to a single column at — the rail belongs at the bottom, where a thumb already is.
+ * A vertical rail would spend a fifth of a 6" screen's width on chrome, and a top one puts
+ * every tool at the far end of the reach.
+ *
+ * Only the starting point. Once a position is stored it is the user's, and this is never
+ * consulted again — including on an install that predates it.
+ */
+fun defaultToolbarPosition(screenWidth: Dp): AppSettings.Position =
+    if (screenWidth < KALEIDO_WIDE_BREAKPOINT) AppSettings.Position.Bottom
+    else AppSettings.Position.Top

@@ -5,6 +5,8 @@ import android.content.Context
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.compose.ui.unit.dp
+import com.ethran.notable.data.datastore.TOOLBAR_THICKNESS
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.drawing.OpenGLRenderer
@@ -13,6 +15,8 @@ import com.ethran.notable.editor.state.Operation
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.onSurfaceChanged
 import com.ethran.notable.editor.utils.onSurfaceDestroy
+import com.ethran.notable.editor.utils.toolbarBands
+import com.ethran.notable.ui.convertDpToPixel
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 
@@ -59,6 +63,8 @@ class DrawCanvas(
             // if (!DeviceCompat.isOnyxDevice || inputHandler.isErasing) {
             if (!DeviceCompat.isOnyxDevice) {
                 glRenderer.onTouchListener.onTouch(this, event)
+            } else if (!inputHandler.usesRawInput) {
+                collectStrokeWithoutFirmware(event)
             }
 
             // Consume completely. This prevents Compose underneath from ever
@@ -66,6 +72,25 @@ class DrawCanvas(
             return true
         }
         return super.dispatchTouchEvent(event)
+    }
+
+    /**
+     * The stroke path for an ONYX device whose raw channel never opened — see
+     * [OnyxInputHandler.usesRawInput]. Reproduces the two things the firmware would be
+     * enforcing on our behalf: strokes only while the editor is actually in drawing mode,
+     * and only outside the docked rail's band.
+     */
+    private fun collectStrokeWithoutFirmware(event: MotionEvent) {
+        if (!viewModel.toolbarState.value.isDrawing) {
+            fallbackStrokeSource.cancel()
+            return
+        }
+        val toolbarThickness =
+            if (viewModel.toolbarState.value.isToolbarOpen)
+                convertDpToPixel(TOOLBAR_THICKNESS.dp, context).toInt()
+            else 0
+        val (_, limitRect) = toolbarBands(width, height, toolbarThickness)
+        fallbackStrokeSource.onTouchEvent(event, limitRect)
     }
 
     @Suppress("RedundantOverride")
@@ -91,6 +116,10 @@ class DrawCanvas(
     val inputHandler =
         OnyxInputHandler(this, page, viewModel, history, coroutineScope, strokeHistoryBatch)
     val refreshManager = CanvasRefreshManager(this, page, viewModel, inputHandler.touchHelper)
+
+    /** Only ever used when the firmware raw channel is absent; see [collectStrokeWithoutFirmware]. */
+    private val fallbackStrokeSource =
+        MotionEventStrokeSource(onStrokeFinished = inputHandler::onStrokeCollected)
 
 
     private val observers = CanvasObserverRegistry(

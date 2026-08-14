@@ -21,12 +21,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.BUTTON_SIZE
 import com.ethran.notable.data.datastore.GlobalAppSettings
@@ -53,7 +58,9 @@ import com.ethran.notable.ui.theme.Kaleido
  * The rail is docked to one of the four edges — never floating, never draggable, because a
  * moving overlay costs a full-screen e-ink refresh. Docked left or right it becomes the
  * tablet arrangement: a vertical rail within thumb reach of the bezel, ending in the ink
- * strip for the pen currently in hand.
+ * strip for the pen currently in hand. Docked top or bottom — where a one-handed device
+ * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the strip has no
+ * room to lie down, so the same choice becomes a single [InkSwatch] and a popover.
  */
 @Composable
 fun ToolbarContent(
@@ -174,8 +181,98 @@ private fun HorizontalRail(
             Row {
                 renderZone(layout.pinned)
             }
+
+            InkSwatch(uiState = uiState, onAction = onAction)
         }
         if (position == AppSettings.Position.Top) ToolbarEdgeRule(vertical = false)
+    }
+}
+
+/**
+ * The inks the pen in hand can take, and which one it is holding.
+ *
+ * The ink in hand always leads, so the strip shows a selection and the pen's real colour is
+ * never the one that got cut. Four fits the rail without scrolling; a pen offering more keeps
+ * the rest in its stroke menu. Empty when there is nothing to choose between.
+ */
+@Composable
+private fun inkOptions(uiState: ToolbarUiState): Pair<PenSetting, List<Int>>? {
+    val presetId = uiState.penPresetId
+    val preset = GlobalAppSettings.current.toolbarPens.find { it.id == presetId } ?: return null
+    val current = uiState.penSettings[presetId] ?: preset.setting()
+    val inks = (listOf(current.color) + preset.effectiveColorOptions()).distinct().take(4)
+    return if (inks.size < 2) null else current to inks
+}
+
+/**
+ * One square of colour: what the pen is holding, and the way to change it.
+ *
+ * The vertical rail can afford to lay the inks out down its foot ([InkStrip]); across the
+ * bottom of a horizontal one there is no room that is not already a tool, so the same choice
+ * is spent on a single swatch and the alternatives open over the canvas. Which keeps the
+ * one-handed arrangement honest: the ink in hand is visible at a glance without a menu, and
+ * changing it is still one tap deeper than on the tablet rather than buried in the pen's
+ * stroke menu.
+ */
+@Composable
+private fun InkSwatch(
+    uiState: ToolbarUiState,
+    onAction: (ToolbarAction) -> Unit,
+) {
+    val (current, inks) = inkOptions(uiState) ?: return
+    var isOpen by remember { mutableStateOf(false) }
+    val placement = toolbarPopupPlacement()
+
+    ToolbarDivider()
+    Box(
+        Modifier
+            .size(BUTTON_SIZE.dp)
+            .noRippleClickable { isOpen = !isOpen },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(25.dp)
+                .background(Color(current.color))
+                .border(1.dp, Kaleido.Ink)
+        )
+    }
+
+    if (isOpen) Popup(
+        offset = placement.offset,
+        onDismissRequest = { isOpen = false },
+        properties = PopupProperties(focusable = true),
+        alignment = placement.alignment,
+    ) {
+        Row(
+            Modifier
+                .padding(placement.padding)
+                .background(Kaleido.Rail)
+                .border(Kaleido.SectionRule, Kaleido.Ink)
+                .padding(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            inks.forEach { ink ->
+                val selected = ink == current.color
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .background(Color(ink))
+                        .border(
+                            width = if (selected) 2.dp else 1.dp,
+                            color = if (selected) Kaleido.Ink else Kaleido.Edge
+                        )
+                        .noRippleClickable {
+                            onAction(
+                                ToolbarAction.ChangePenSetting(
+                                    uiState.penPresetId, PenSetting(current.strokeSize, ink)
+                                )
+                            )
+                            isOpen = false
+                        }
+                )
+            }
+        }
     }
 }
 
@@ -232,23 +329,16 @@ private fun VerticalRail(
  *
  * Saturated squares are the one thing a Kaleido panel prints cleanly, and this is the only
  * place in the editor colour is spent. Tapping one writes to the active preset — the same
- * edit the pen's stroke menu makes, one tap deep instead of two. Only shown on a vertical
- * rail: across the bottom of a horizontal one there is no room that is not already a tool.
+ * edit the pen's stroke menu makes, one tap deep instead of two. The vertical rail has the
+ * room to show them all at once; a horizontal one spends the same choice on [InkSwatch].
  */
 @Composable
 private fun InkStrip(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
 ) {
+    val (current, inks) = inkOptions(uiState) ?: return
     val presetId = uiState.penPresetId
-    val preset = GlobalAppSettings.current.toolbarPens.find { it.id == presetId } ?: return
-    val current = uiState.penSettings[presetId] ?: preset.setting()
-
-    // The ink in hand always leads, so the strip shows a selection and the pen's real colour
-    // is never the one that got cut. Four fits the rail without scrolling; a pen offering
-    // more keeps the rest in its stroke menu.
-    val inks = (listOf(current.color) + preset.effectiveColorOptions()).distinct().take(4)
-    if (inks.size < 2) return
 
     ToolbarDivider()
     Column(

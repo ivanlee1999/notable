@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -34,6 +35,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.datastore.AppSettings
+import com.ethran.notable.data.datastore.defaultToolbarPosition
 import com.ethran.notable.data.datastore.EditorSettingCacheManager
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.KvProxy
@@ -150,11 +152,20 @@ class MainActivity : ComponentActivity() {
                 if (hasUsableStorage(this@MainActivity)) {
                     withContext(Dispatchers.IO) {
                         // Init app settings, also do migration
+                        // The default is only reached on a first run, so the rail's starting
+                        // edge can follow the display it is starting on — see
+                        // defaultToolbarPosition. An install that already has settings keeps
+                        // whatever it stored.
                         val savedSettings =
                             kvProxy.get().getOrDefault(
                                 APP_SETTINGS_KEY,
                                 AppSettings.serializer(),
-                                AppSettings(version = 1)
+                                AppSettings(
+                                    version = 1,
+                                    toolbarPosition = defaultToolbarPosition(
+                                        with(resources.displayMetrics) { (widthPixels / density).dp }
+                                    ),
+                                )
                             )
 
                         GlobalAppSettings.update(savedSettings)

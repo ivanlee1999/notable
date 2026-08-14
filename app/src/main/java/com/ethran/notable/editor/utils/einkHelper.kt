@@ -137,6 +137,30 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
 
 
 /**
+ * The band the docked rail occupies, and everything else — the pen may draw on the latter
+ * only. [toolbarThickness] is the rail's height when it is docked top/bottom and its width
+ * when docked left/right; pass 0 while the rail is collapsed.
+ *
+ * Shared so the two input paths cannot drift apart: the firmware is handed these as its
+ * exclude/limit rects, and the [com.ethran.notable.editor.canvas.MotionEventStrokeSource]
+ * fallback — which the firmware is not there to gate — tests the same limit rect itself.
+ */
+fun toolbarBands(viewWidth: Int, viewHeight: Int, toolbarThickness: Int): Pair<Rect, Rect> =
+    when (GlobalAppSettings.current.toolbarPosition) {
+        AppSettings.Position.Top -> Rect(0, 0, viewWidth, toolbarThickness) to
+                Rect(0, toolbarThickness, viewWidth, viewHeight)
+
+        AppSettings.Position.Bottom -> Rect(0, viewHeight - toolbarThickness, viewWidth, viewHeight) to
+                Rect(0, 0, viewWidth, viewHeight - toolbarThickness)
+
+        AppSettings.Position.Left -> Rect(0, 0, toolbarThickness, viewHeight) to
+                Rect(toolbarThickness, 0, viewWidth, viewHeight)
+
+        AppSettings.Position.Right -> Rect(viewWidth - toolbarThickness, 0, viewWidth, viewHeight) to
+                Rect(0, 0, viewWidth - toolbarThickness, viewHeight)
+    }
+
+/**
  * Arms raw drawing over everything but the docked tool rail.
  *
  * [toolbarThickness] is the rail's height when it is docked top/bottom and its width when
@@ -155,20 +179,7 @@ fun setupSurface(view: View, touchHelper: TouchHelper?, toolbarThickness: Int) {
     val viewWidth = view.width
     val viewHeight = view.height
 
-    // The band the rail occupies, and everything else — the pen may draw on the latter only.
-    val (excludeRect, limitRect) = when (GlobalAppSettings.current.toolbarPosition) {
-        AppSettings.Position.Top -> Rect(0, 0, viewWidth, toolbarThickness) to
-                Rect(0, toolbarThickness, viewWidth, viewHeight)
-
-        AppSettings.Position.Bottom -> Rect(0, viewHeight - toolbarThickness, viewWidth, viewHeight) to
-                Rect(0, 0, viewWidth, viewHeight - toolbarThickness)
-
-        AppSettings.Position.Left -> Rect(0, 0, toolbarThickness, viewHeight) to
-                Rect(toolbarThickness, 0, viewWidth, viewHeight)
-
-        AppSettings.Position.Right -> Rect(viewWidth - toolbarThickness, 0, viewWidth, viewHeight) to
-                Rect(0, 0, viewWidth - toolbarThickness, viewHeight)
-    }
+    val (excludeRect, limitRect) = toolbarBands(viewWidth, viewHeight, toolbarThickness)
 
     touchHelper.setLimitRect(mutableListOf(limitRect)).setExcludeRect(listOf(excludeRect))
         .openRawDrawing()
