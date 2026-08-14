@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.15.0
+## 0.16.0
 
-Notable runs on the Palma Pro 2. And the notebooks you deleted before 0.13.0, which are still
-sitting in your iPad's library, are finally sent on their way.
+Notable runs on the Palma Pro 2. A pocket-sized panel is not a small tablet, so the editor is
+arranged for one hand — and drawing no longer quietly depends on hardware that device may not
+have.
 
 ### The pen could move without anything being written down
 
@@ -28,6 +29,13 @@ sitting in your iPad's library, are finally sent on their way.
   inks only fitted down the side of a vertical rail, so on a horizontal one the colour in hand was
   simply not on screen. A single swatch now shows it, and tapping opens the rest over the page.
 - The library already dropped to one column with the shelf as a list on a screen this size.
+
+No database change.
+
+## 0.15.0
+
+The notebooks you deleted before 0.13.0 are still in your iPad's library. This release finally
+tells it about them.
 
 ### Deletions from before 0.13.0 were stranded on this device
 
