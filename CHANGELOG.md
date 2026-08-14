@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.15.0
+
+The notebooks you deleted before 0.13.0 are still in your iPad's library. This release finally
+tells it about them.
+
+### Deletions from before 0.13.0 were stranded on this device
+
+- **Until 0.13.0, throwing a notebook away here only hid it here.** The Trash was this device's own
+  bookkeeping and was never sent anywhere, so the notebook left your library on the BOOX and stayed
+  in the iPad's. 0.13.0 fixed that for anything deleted from then on.
+- **It did not fix the ones already thrown away, and nothing was ever going to.** The iPad had
+  already been told about those notebooks once, and the safety net that catches unsent work only
+  looks for things the other device has never seen at all. A notebook in the Trash is also hidden
+  from your library, so there was no way to open it and change something to nudge it along. It
+  would have sat there, deleted on one device and listed on the other, indefinitely — the only way
+  out was to restore it and delete it a second time.
+- Updating now sends those deletions, once. Anything sitting in your Trash leaves the iPad's
+  library shortly after you open the app, and can still be restored from either device.
+
+A note on what this can get wrong: these deletions are sent as though you made them just now,
+because that is what it takes for them to take effect on a device that has been treating the
+notebook as live ever since. If you have been writing in one of these notebooks on the iPad —
+precisely because it never disappeared — that writing is not lost, but the notebook does go to the
+Trash. Restore it from either device and it comes back everywhere, ink and all.
+
+Database version 46. It changes no tables, only which notebooks are marked as needing to be sent.
+
 ## 0.14.0
 
 Sync could skip a change from the other device and never mention it again. Nothing here is a
