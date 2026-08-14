@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.17.0
+
+Import a PDF on one device and the book reached the other one without the PDF. Every page, every
+stroke, in the right order — drawn on nothing. This release is that, and the second half of it: the
+ink landing where you put it.
+
+### The PDF itself never crossed
+
+- **A page remembered its background as a place on this device**, not as a document. Sync copied
+  that down to the letter and carried none of the file, so the other device received a complete
+  book of annotations over blank paper — and nothing reported a problem, because as far as sync was
+  concerned it had sent everything it was asked to.
+- The document now travels with the pages drawn on it, the same way a picture pasted into a page
+  already does, and arrives before them, so a page is never left waiting on something that is not
+  coming.
+- Importing the same PDF on both devices costs one copy between them rather than two, so a book you
+  already have on both is cheap to start syncing.
+- A PDF that arrives while you are looking at the book now appears when it lands, instead of after
+  closing and reopening the notebook.
+
+### Annotations arrived in the wrong place
+
+- **An imported PDF had no page size of its own**, so each device fitted it to its own screen. The
+  same document was a different size on a BOOX and on an iPad, and the writing over it moved with
+  it: notes synced faithfully and landed off the line they were written on. Writing that arrives in
+  the wrong place is worse than writing that does not arrive.
+- An imported book is now laid out on the size the document says it is, measured page by page — so
+  a fold-out or a landscape table keeps its own shape — and a page added to the book later matches
+  the ones that came with it.
+- Books already imported are left exactly as they are. Their ink was written against the old
+  layout, and moving the page under it would move every stroke on it.
+
+### Worth knowing
+
+- A PDF larger than your server accepts in a single document is refused rather than sent. Sync says
+  so and stops trying, as it does for any note the server will not take. CouchDB's own default
+  ceiling is 8 MB.
+- The iPad app carries the reference safely but does not fetch the document yet, so a PDF imported
+  here still shows blank there. Nothing about it got worse; it is the next piece of the same work.
+
+No database change.
+
 ## 0.16.0
 
 Notable runs on the Palma Pro 2. A pocket-sized panel is not a small tablet, so the editor is
