@@ -185,6 +185,61 @@ val MIGRATION_44_45 = object : Migration(44, 45) {
 }
 
 /**
+ * Republishes the trashings that were only ever local, so the two libraries can agree again.
+ *
+ * Until 0.13.0 the Trash was this device's own bookkeeping: `trashNotebook`/`trashFolder` wrote
+ * `deletedAt` with `setDeletedAt`, which stamps no `updatedAt` and queues no outbox row. Nothing
+ * was published, so a notebook thrown away here stayed in the iPad's library.
+ *
+ * Shipping the fix does not rescue those rows. The document has been through the server already,
+ * so it is in the engine's `revs` map and `CouchSyncEngine.neverSent` — the scan that catches a
+ * mutation site which forgot to queue — deliberately cannot see it. And nothing else will queue
+ * it either: a trashed notebook is hidden from the library, so there is no way to edit it into
+ * the outbox. Without this the item stays hidden here and visible there, permanently, with no
+ * in-app way back short of restoring it and throwing it away a second time.
+ *
+ * So each trashed row is queued, and its `updatedAt` stamped to the moment of the upgrade. The
+ * stamp is the point, not the queueing: `deletedAt` merges as an ordinary scalar (§5.5), decided
+ * by `updatedAt`, and the original trashing never advanced it. Left alone it would tie with — or
+ * lose to — the peer's live copy, and the notebook would come straight back out of the Trash.
+ *
+ * `updatedBy` is set to NULL for the same reason [BookRepository.update] does: this write happened
+ * on this device, whatever the last peer to touch the row was.
+ *
+ * Stamping *now* rather than replaying `deletedAt` is deliberate. The instant the user threw the
+ * item away is long past, and a peer that has been editing the notebook ever since — because it
+ * never left its library — would win every comparison against it, which is precisely the state
+ * this migration exists to end. The user's deletion is the intent being honoured, and the Trash is
+ * recoverable from either device, so the cost of being wrong is one restore rather than lost ink.
+ */
+val MIGRATION_45_46 = object : Migration(45, 46) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val now = System.currentTimeMillis()
+
+        db.execSQL("UPDATE `Notebook` SET `updatedAt` = ?, `updatedBy` = NULL WHERE `deletedAt` IS NOT NULL", arrayOf<Any>(now))
+        db.execSQL("UPDATE `Folder` SET `updatedAt` = ?, `updatedBy` = NULL WHERE `deletedAt` IS NOT NULL", arrayOf<Any>(now))
+
+        // INSERT OR IGNORE, and `queuedAt` left alone on a row that already exists: the outbox
+        // measures how long the *oldest* unsent change has waited, and an item trashed on a build
+        // that already published is legitimately queued already.
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `couch_outbox` (`docId`, `queuedAt`)
+            SELECT 'notebook:' || `id`, ? FROM `Notebook` WHERE `deletedAt` IS NOT NULL
+            """.trimIndent(),
+            arrayOf<Any>(now),
+        )
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `couch_outbox` (`docId`, `queuedAt`)
+            SELECT 'folder:' || `id`, ? FROM `Folder` WHERE `deletedAt` IS NOT NULL
+            """.trimIndent(),
+            arrayOf<Any>(now),
+        )
+    }
+}
+
+/**
  * Every hand-written migration, in one list, because opening the database at the current version
  * needs *all* of them — the auto-migrations Room generates only cover the gaps between these.
  *
@@ -202,4 +257,5 @@ val APP_MIGRATIONS = arrayOf(
     MIGRATION_37_38,
     MIGRATION_41_42,
     MIGRATION_44_45,
+    MIGRATION_45_46,
 )

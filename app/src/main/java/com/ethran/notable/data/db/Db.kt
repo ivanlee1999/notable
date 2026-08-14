@@ -55,7 +55,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 45,
+    version = 46,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
