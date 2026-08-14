@@ -276,13 +276,25 @@ class BookRepository @Inject constructor(
     suspend fun removePage(id: String, pageId: String) {
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val now = Date()
             val updatedNotebook = notebook.copy(
                 // remove the page
                 pageIds = notebook.pageIds.filterNot { it == pageId },
                 // remove the "open page" if it's the one
                 openPageId = if (notebook.openPageId == pageId) null else notebook.openPageId,
+                // The bookmark can simply go — the merge filters starred pages by the page
+                // tombstone too. The outline entries have to be *marked* removed instead, because
+                // the merge deliberately does not filter those (protocol §5.2.2) and a peer still
+                // holding them would otherwise add them straight back. Doing it here, as an
+                // ordinary stamped edit, is what makes the removal travel.
+                bookmarks = notebook.bookmarks.filterNot { it.pageId == pageId },
+                outline = notebook.outline.map {
+                    if (it.pageId == pageId) {
+                        it.copy(removed = true, updatedAt = now.toInstant().toString())
+                    } else it
+                },
                 // a structural change marks the notebook dirty for sync
-                updatedAt = Date(),
+                updatedAt = now,
                 // and it was made here, whoever wrote the manifest last
                 updatedBy = null
             )
@@ -294,6 +306,119 @@ class BookRepository @Inject constructor(
         }
         log.i("Cleaned $id $pageId")
     }
+
+    // region Bookmarks and outline
+
+    /**
+     * Star or un-star a page — protocol §3.2.1.
+     *
+     * Un-starring writes a `removed` entry rather than dropping the bookmark, so the un-starring
+     * reaches a peer that still holds the star instead of being undone by it. The list is kept
+     * sorted by page id, matching what the merge produces, so a document written here and one
+     * written by a merge are byte-identical.
+     */
+    suspend fun setBookmark(id: String, pageId: String, bookmarked: Boolean) {
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val now = Date()
+            val entry = CouchBookmark(
+                pageId = pageId,
+                updatedAt = now.toInstant().toString(),
+                removed = !bookmarked,
+            )
+            val bookmarks = (notebook.bookmarks.filterNot { it.pageId == pageId } + entry)
+                .sortedBy { it.pageId }
+            notebookDao.update(
+                notebook.copy(bookmarks = bookmarks, updatedAt = now, updatedBy = null)
+            )
+            outbox.queue(CouchDocId.notebook(id))
+        }
+    }
+
+    /**
+     * Add an entry to the table of contents — protocol §3.2.2.
+     *
+     * Placed at the page's own position rather than at the end: an outline is read against the
+     * notebook, so a new entry belongs beside the pages it sits between.
+     */
+    suspend fun addOutlineEntry(id: String, pageId: String, title: String, depth: Int = 0) {
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val now = Date()
+            val entry = CouchOutlineEntry(
+                id = UUID.randomUUID().toString(),
+                pageId = pageId,
+                title = title,
+                depth = depth,
+                updatedAt = now.toInstant().toString(),
+            )
+            val order = notebook.pageIds.withIndex().associate { (index, it) -> it to index }
+            val position = order[pageId] ?: Int.MAX_VALUE
+            val insertion = notebook.outline
+                .indexOfFirst { (order[it.pageId] ?: Int.MAX_VALUE) > position }
+                .let { if (it < 0) notebook.outline.size else it }
+            val outline = notebook.outline.toMutableList().apply { add(insertion, entry) }
+            notebookDao.update(notebook.copy(outline = outline, updatedAt = now, updatedBy = null))
+            outbox.queue(CouchDocId.notebook(id))
+        }
+    }
+
+    /** Rename an entry, change its nesting depth, or both. Depth is clamped, matching the decoder. */
+    suspend fun updateOutlineEntry(
+        id: String, entryId: String, title: String? = null, depth: Int? = null,
+    ) = editOutline(id, entryId) { entry, now ->
+        entry.copy(
+            title = title ?: entry.title,
+            depth = (depth ?: entry.depth).coerceIn(0, CouchOutlineEntry.MAX_DEPTH),
+            updatedAt = now,
+        )
+    }
+
+    /**
+     * Delete an entry by marking it removed — an ordinary edit the merge carries, rather than a
+     * drop the peer would undo.
+     */
+    suspend fun removeOutlineEntry(id: String, entryId: String) =
+        editOutline(id, entryId) { entry, now -> entry.copy(removed = true, updatedAt = now) }
+
+    /**
+     * Reorder the outline, addressing positions in the *live* list the reader can see rather than
+     * in the stored one, which also holds removed entries they cannot.
+     */
+    suspend fun moveOutlineEntry(id: String, from: Int, to: Int) {
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            val live = notebook.outline.withIndex().filterNot { it.value.removed }
+            val source = live.getOrNull(from) ?: return@withTransaction
+            val outline = notebook.outline.toMutableList()
+            val entry = outline.removeAt(source.index)
+            val target = live.getOrNull(to)
+                ?.let { it.index - if (it.index > source.index) 1 else 0 }
+                ?: outline.size
+            outline.add(target.coerceIn(0, outline.size), entry)
+            notebookDao.update(
+                notebook.copy(outline = outline, updatedAt = Date(), updatedBy = null)
+            )
+            outbox.queue(CouchDocId.notebook(id))
+        }
+    }
+
+    private suspend fun editOutline(
+        id: String, entryId: String, edit: (CouchOutlineEntry, String) -> CouchOutlineEntry,
+    ) {
+        database.withTransaction {
+            val notebook = notebookDao.getById(id) ?: return@withTransaction
+            if (notebook.outline.none { it.id == entryId }) return@withTransaction
+            val now = Date()
+            val outline = notebook.outline.map {
+                if (it.id == entryId) edit(it, now.toInstant().toString()) else it
+            }
+            notebookDao.update(notebook.copy(outline = outline, updatedAt = now, updatedBy = null))
+            outbox.queue(CouchDocId.notebook(id))
+        }
+    }
+
+    // endregion
 
     suspend fun changePageIndex(id: String, pageId: String, index: Int) {
         database.withTransaction {

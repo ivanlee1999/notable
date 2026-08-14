@@ -628,4 +628,42 @@ class MigrationTest {
 
         roomDb.close()
     }
+
+    /**
+     * 47 adds `notebook.bookmarks` and `notebook.outline`: starred pages and the table of contents.
+     *
+     * A notebook that predates both reads as having neither — an empty list, not null. The columns
+     * are NOT NULL with a `'[]'` default precisely so that every existing row decodes; a null would
+     * throw in the type converter the first time the library was opened after upgrading.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate46To47_addsEmptyBookmarksAndOutlineToEveryNotebook() {
+        val dbName = "migration-test-47"
+
+        val oldDb = helper.createDatabase(dbName, 46)
+        oldDb.execSQL(
+            """
+            INSERT INTO notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                linkedExternalUri, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('notebook1', 'Field Notes', NULL, '[]', NULL, 'blank', 'native', NULL, NULL,
+                NULL, 1000, 1000, NULL, NULL)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        migratedDb.query("SELECT bookmarks, outline FROM notebook WHERE id = 'notebook1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("[]", it.getString(it.getColumnIndexOrThrow("bookmarks")))
+            assertEquals("[]", it.getString(it.getColumnIndexOrThrow("outline")))
+        }
+
+        roomDb.close()
+    }
 }
