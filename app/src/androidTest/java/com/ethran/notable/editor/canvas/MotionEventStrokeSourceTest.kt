@@ -29,22 +29,40 @@ class MotionEventStrokeSourceTest {
     private var collected: TouchPointList? = null
     private val source = MotionEventStrokeSource { collected = it }
 
-    private fun event(action: Int, x: Float, y: Float, pressure: Float = 0.5f): MotionEvent {
-        val properties = MotionEvent.PointerProperties().apply {
-            id = 0
-            toolType = MotionEvent.TOOL_TYPE_STYLUS
+    private data class Pointer(
+        val id: Int,
+        val x: Float,
+        val y: Float,
+        val toolType: Int = MotionEvent.TOOL_TYPE_STYLUS,
+        val pressure: Float = 0.5f,
+    )
+
+    /** [actionIndex] names which pointer the action is about, for the POINTER_ variants. */
+    private fun event(action: Int, pointers: List<Pointer>, actionIndex: Int = 0): MotionEvent {
+        val properties = pointers.map {
+            MotionEvent.PointerProperties().apply {
+                id = it.id
+                toolType = it.toolType
+            }
         }
-        val coords = MotionEvent.PointerCoords().apply {
-            this.x = x
-            this.y = y
-            this.pressure = pressure
-            size = 1f
+        val coords = pointers.map {
+            MotionEvent.PointerCoords().apply {
+                x = it.x
+                y = it.y
+                pressure = it.pressure
+                size = 1f
+            }
         }
         return MotionEvent.obtain(
-            0L, 0L, action, 1, arrayOf(properties), arrayOf(coords),
+            0L, 0L,
+            action or (actionIndex shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+            pointers.size, properties.toTypedArray(), coords.toTypedArray(),
             0, 0, 1f, 1f, 0, 0, 0, 0
         )
     }
+
+    private fun event(action: Int, x: Float, y: Float, pressure: Float = 0.5f): MotionEvent =
+        event(action, listOf(Pointer(id = 0, x = x, y = y, pressure = pressure)))
 
     private fun stroke(vararg points: Pair<Float, Float>, pressure: Float = 0.5f) {
         points.forEachIndexed { index, (x, y) ->
@@ -135,6 +153,72 @@ class MotionEventStrokeSourceTest {
     @Test
     fun a_move_with_no_stroke_open_is_ignored() {
         assertTrue(!source.onTouchEvent(event(MotionEvent.ACTION_MOVE, 10f, 10f), canvas))
+        assertNull(collected)
+    }
+
+    // A hand resting on a screen this size is the ordinary case, and the framework gives no
+    // promise about which index a pointer keeps. These are the cases that separate following
+    // the pen by id from reading whatever happens to be first.
+
+    private val palm = Pointer(id = 7, x = 800f, y = 800f, toolType = MotionEvent.TOOL_TYPE_FINGER)
+    private fun pen(x: Float, y: Float) = Pointer(id = 3, x = x, y = y)
+
+    @Test
+    fun a_palm_already_down_does_not_open_a_stroke() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        assertNull(collected)
+
+        // The pen lands beside it, so it arrives as the second pointer.
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(palm, pen(10f, 10f)), actionIndex = 1),
+            canvas
+        )
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, listOf(palm, pen(20f, 20f))), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_UP, listOf(palm, pen(30f, 30f)), actionIndex = 1),
+            canvas
+        )
+
+        // Every point is the pen's, never the palm's — which never moved from 800,800.
+        val points = collected!!.points
+        assertEquals(3, points.size)
+        points.forEach { assertTrue("palm leaked into the stroke", it.x <= 30f) }
+    }
+
+    @Test
+    fun the_palm_lifting_first_does_not_cut_the_stroke_short() {
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f), palm)), canvas
+        )
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, listOf(pen(20f, 20f), palm)), canvas)
+        // The palm leaves; the pen is still writing.
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_UP, listOf(pen(30f, 30f), palm), actionIndex = 1),
+            canvas
+        )
+        assertNull("the palm's lift ended the stroke", collected)
+
+        // The pen's index shifted to 0 when the palm left, so following it by index would
+        // have lost it here.
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, listOf(pen(40f, 40f))), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, listOf(pen(50f, 50f))), canvas)
+
+        val points = collected!!.points
+        assertEquals(4, points.size)
+        assertEquals(50f, points.last().x, 0.01f)
+    }
+
+    @Test
+    fun a_finger_alone_never_draws() {
+        // One finger is a gesture — scroll, tap — and belongs to the gesture receiver.
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_MOVE, listOf(palm.copy(x = 400f, y = 400f))), canvas
+        )
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_UP, listOf(palm.copy(x = 200f, y = 200f))), canvas
+        )
+
         assertNull(collected)
     }
 }
