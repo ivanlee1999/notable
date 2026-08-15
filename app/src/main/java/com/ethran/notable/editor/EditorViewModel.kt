@@ -147,6 +147,7 @@ sealed class ToolbarAction {
     object NavigateToLibrary : ToolbarAction()
     object NavigateToBugReport : ToolbarAction()
     object NavigateToPages : ToolbarAction()
+    object OpenQuickNav : ToolbarAction()
     object NavigateToHome : ToolbarAction()
 
     object CloseAllMenus : ToolbarAction()
@@ -175,6 +176,7 @@ sealed class CanvasCommand {
 sealed class EditorUiEvent {
     data class NavigateToLibrary(val folderId: String?) : EditorUiEvent()
     data class NavigateToPages(val bookId: String) : EditorUiEvent()
+    object OpenQuickNav : EditorUiEvent()
     object NavigateToBugReport : EditorUiEvent()
 }
 
@@ -355,6 +357,7 @@ class EditorViewModel @Inject constructor(
             ToolbarAction.NavigateToLibrary -> handleNavigateToLibrary()
             ToolbarAction.NavigateToBugReport -> sendUiEvent(EditorUiEvent.NavigateToBugReport)
             ToolbarAction.NavigateToPages -> handleNavigateToPages()
+            ToolbarAction.OpenQuickNav -> sendUiEvent(EditorUiEvent.OpenQuickNav)
             ToolbarAction.NavigateToHome -> sendUiEvent(EditorUiEvent.NavigateToLibrary(null))
 
             ToolbarAction.CloseAllMenus -> handleCloseAllMenus()

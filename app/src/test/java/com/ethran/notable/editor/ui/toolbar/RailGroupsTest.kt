@@ -40,6 +40,23 @@ class RailGroupsTest {
         assertEquals(ToolbarElementId.MENU, groups.pinned.last().id)
     }
 
+    /**
+     * The panel of previews, outline and bookmarks was reachable only by a three-finger swipe up —
+     * a gesture nothing on screen mentions — so to a reader who did not know it, the feature was
+     * not there at all. Its button is what makes it exist; losing it from the rail would be the
+     * same regression, silently.
+     */
+    @Test
+    fun `the navigation panel has a button, beside the page counter`() {
+        val pinned = RailGroups.of(pens).pinned.map { it.id }
+
+        assertTrue(ToolbarElementId.QUICK_NAV in pinned)
+        assertEquals(
+            pinned.indexOf(ToolbarElementId.PAGE_NAV) + 1,
+            pinned.indexOf(ToolbarElementId.QUICK_NAV),
+        )
+    }
+
     @Test
     fun `the arrangement does not depend on which presets the user has`() {
         val mine = listOf(ToolbarPen("mine", Pen.CALLIGRAPHY, android.graphics.Color.BLACK, 5f))

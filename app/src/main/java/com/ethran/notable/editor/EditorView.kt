@@ -74,6 +74,7 @@ fun EditorView(
     onPageChange: (String) -> Unit,
     goToLibrary: (folderId: String?) -> Unit,
     goToPages: (bookId: String) -> Unit,
+    openQuickNav: () -> Unit,
     goToBugReport: () -> Unit,
 
     viewModel: EditorViewModel = hiltViewModel()
@@ -150,6 +151,10 @@ fun EditorView(
 
                     is EditorUiEvent.NavigateToPages -> {
                         goToPages(event.bookId)
+                    }
+
+                    EditorUiEvent.OpenQuickNav -> {
+                        openQuickNav()
                     }
 
                     EditorUiEvent.NavigateToBugReport -> {

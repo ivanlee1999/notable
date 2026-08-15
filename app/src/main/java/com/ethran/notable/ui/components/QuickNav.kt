@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Favorite
@@ -179,6 +180,8 @@ fun QuickNavContent(
     onReturnClick: () -> Unit,
     goToPage: (String) -> Unit,
 ) {
+    var namingOutlineEntry by remember { mutableStateOf(false) }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -212,8 +215,10 @@ fun QuickNavContent(
                 isBookmarked = uiState.isCurrentPageBookmarked,
                 canToggleBookmark = uiState.currentPageId != null && uiState.bookId != null,
                 canGeneratePreviews = uiState.bookPageIds.isNotEmpty(),
+                canAddOutlineEntry = uiState.currentPageId != null && uiState.bookId != null,
                 onNavigateBreadcrumb = onNavigateBreadcrumb,
                 onToggleBookmark = onToggleBookmark,
+                onAddOutlineEntry = { namingOutlineEntry = true },
                 onGenerateBookPreviews = onGenerateBookPreviews
             )
 
@@ -286,6 +291,24 @@ fun QuickNavContent(
             }
         }
     }
+
+    if (namingOutlineEntry) {
+        val pageId = uiState.currentPageId
+        NamePromptDialog(
+            title = "Add to outline",
+            initialValue = "",
+            onConfirm = { title ->
+                if (pageId != null && title.isNotBlank()) {
+                    onAddOutlineEntry(pageId, title.trim())
+                    // Straight to the tab it landed in, so the entry is visibly somewhere rather
+                    // than the dialog just closing on the page you were already looking at.
+                    onSelectTab(QuickNavTab.OUTLINE)
+                }
+                namingOutlineEntry = false
+            },
+            onDismiss = { namingOutlineEntry = false },
+        )
+    }
 }
 
 @Composable
@@ -294,8 +317,10 @@ private fun QuickNavHeaderRow(
     isBookmarked: Boolean,
     canToggleBookmark: Boolean,
     canGeneratePreviews: Boolean,
+    canAddOutlineEntry: Boolean,
     onNavigateBreadcrumb: (String?) -> Unit,
     onToggleBookmark: () -> Unit,
+    onAddOutlineEntry: () -> Unit,
     onGenerateBookPreviews: () -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
@@ -313,6 +338,19 @@ private fun QuickNavHeaderRow(
                 } else {
                     // A loose page belongs to no notebook, and a bookmark is a fact about one.
                     logQuickNav.w("bookmark toggle ignored, page is not in a notebook")
+                }
+            })
+
+        // Naming a section used to be reachable only by holding a page thumbnail, which is to say
+        // it was not reachable: nothing said the long-press was there. It sits beside the bookmark
+        // toggle now — the two things you do to the page you are looking at.
+        ToolbarButton(
+            imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+            onSelect = {
+                if (canAddOutlineEntry) {
+                    onAddOutlineEntry()
+                } else {
+                    logQuickNav.w("outline entry ignored, page is not in a notebook")
                 }
             })
 
@@ -443,7 +481,10 @@ private fun OutlineTab(
     onMove: (Int, Int) -> Unit,
 ) {
     if (entries.isEmpty()) {
-        QuickNavEmpty("No outline yet. Hold a page in the Pages tab to name a section here.")
+        QuickNavEmpty(
+            "No outline yet. Name a section with the list button above, or hold a page in "
+                + "the Pages tab."
+        )
         return
     }
 

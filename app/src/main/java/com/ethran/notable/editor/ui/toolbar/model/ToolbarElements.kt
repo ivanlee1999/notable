@@ -9,6 +9,7 @@ import com.ethran.notable.editor.state.Shape
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.EyeOff
 import compose.icons.feathericons.RefreshCcw
@@ -89,6 +90,17 @@ object ToolbarElements {
             contentDescription = "page navigation",
             visibleWhen = { state, _ -> state.notebookId != null },
             kind = CustomKind.PAGE_NAV,
+        ),
+        // The panel had no button of its own and opened only on a three-finger swipe up — a
+        // gesture nothing on screen mentions, and an awkward one to make with a pen in hand. The
+        // page counter beside it goes to the Pages *screen*, which is for reordering and deleting;
+        // this is the way to the previews, the outline and the bookmarks.
+        ActionElement(
+            id = ToolbarElementId.QUICK_NAV,
+            icon = IconRef.Vector(FeatherIcons.BookOpen),
+            contentDescription = "pages, outline and bookmarks",
+            visibleWhen = { state, _ -> state.notebookId != null },
+            action = ToolbarAction.OpenQuickNav,
         ),
         ActionElement(
             id = ToolbarElementId.HOME,

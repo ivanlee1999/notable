@@ -180,6 +180,7 @@ data class RailGroups(
             ),
             pinned = listOf(
                 ToolbarElements.of(ToolbarElementId.PAGE_NAV),
+                ToolbarElements.of(ToolbarElementId.QUICK_NAV),
                 ToolbarElements.of(ToolbarElementId.HOME),
                 ToolbarElements.of(ToolbarElementId.MENU),
             ),

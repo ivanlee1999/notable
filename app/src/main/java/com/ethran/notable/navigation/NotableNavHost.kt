@@ -103,6 +103,7 @@ fun NotableNavHost(
                 EditorView(
                     goToLibrary = {appNavigator.goToLibrary(it)},
                     goToPages = { bookId -> appNavigator.goToPages(bookId) },
+                    openQuickNav = { appNavigator.openQuickNav() },
                     goToBugReport = { appNavigator.goToBugReport() },
                     bookId = bookId,
                     initialPageId = currentPageId,
