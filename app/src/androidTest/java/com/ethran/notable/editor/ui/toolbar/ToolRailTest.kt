@@ -3,11 +3,15 @@ package com.ethran.notable.editor.ui.toolbar
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -47,11 +51,11 @@ class ToolRailTest {
     private val ballpen = ToolbarPen.DEFAULT_PENS.first { it.id == "ball" }
 
     companion object {
-        /** A Palma-class panel measures about this far across — the narrowest we target. */
-        private val PALMA_WIDTH = 412.dp
-
-        /** A tablet, where the whole rail fits at once and nothing has to be scrolled to. */
-        private val TABLET_WIDTH = 900.dp
+        /**
+         * Narrower than a Palma-class panel (~412dp), and so narrower than any device this
+         * runs on — which is the point: [rail] may only ever narrow the window, never widen it.
+         */
+        private val NARROW_WIDTH = 320.dp
     }
 
     private fun state(mode: Mode = Mode.Draw, eraser: Eraser = Eraser.PEN) = ToolbarUiState(
@@ -67,15 +71,24 @@ class ToolRailTest {
     /**
      * Renders the rail against the default settings, collecting what it asks for.
      *
-     * [width] is pinned rather than left to the device, so a run on the 10" AVD and a run on a
-     * CI emulator assert the same thing. It defaults to a tablet, where the whole rail is on
-     * screen; the tests that care about a one-handed panel ask for [PALMA_WIDTH] explicitly.
+     * [width] narrows the rail *below* the window when a test is about a one-handed panel;
+     * `null` lets it take the window as it is. It can only ever narrow — forcing a width wider
+     * than the device puts the rail's tail outside the window, where every assertion about
+     * being displayed fails for a reason that has nothing to do with the rail. That is a real
+     * mistake this file made: pinned at a tablet's 900dp, it passed on the 10" AVD and failed
+     * on a CI emulator half that wide.
+     *
+     * So the two kinds of assertion here mean different things, and are not interchangeable:
+     * [assertExists] for "the rail offers this", which is true at any size because what does
+     * not fit is scrolled to; `assertIsDisplayed` only where being *on screen* is the actual
+     * guarantee, which is the pinned group.
      */
-    private fun rail(uiState: ToolbarUiState, width: Dp = TABLET_WIDTH): MutableList<ToolbarAction> {
+    private fun rail(uiState: ToolbarUiState, width: Dp? = null): MutableList<ToolbarAction> {
         val actions = mutableListOf<ToolbarAction>()
         GlobalAppSettings.update(AppSettings(version = 1))
         composeRule.setContent {
-            Box(Modifier.width(width)) {
+            val modifier = if (width == null) Modifier else Modifier.width(width)
+            Box(modifier) {
                 ToolbarContent(
                     uiState = uiState,
                     onAction = { actions.add(it) },
@@ -90,11 +103,15 @@ class ToolRailTest {
     @Test
     fun nibDotsShowThePensOwnSizes() {
         rail(state())
-        // The ballpen's configured sizes, each a dot. The rail is fixed, so these are always
-        // on screen rather than behind the pen's stroke menu.
+        // The ballpen's configured sizes, each a dot — in the rail, not behind the pen's
+        // stroke menu. One per size, and no more.
         ballpen.nibChoices(ballpen.size).forEach { size ->
-            composeRule.onNodeWithContentDescription("nib ${sizeLabel(size)}").assertIsDisplayed()
+            composeRule.onNodeWithContentDescription("nib ${sizeLabel(size)}").assertExists()
         }
+        assertEquals(
+            ballpen.nibChoices(ballpen.size).size,
+            countMatching { it.startsWith("nib ") },
+        )
     }
 
     @Test
@@ -102,7 +119,8 @@ class ToolRailTest {
         val actions = rail(state())
         val target = ballpen.nibChoices(ballpen.size).last { it != ballpen.size }
 
-        composeRule.onNodeWithContentDescription("nib ${sizeLabel(target)}").performClick()
+        composeRule.onNodeWithContentDescription("nib ${sizeLabel(target)}")
+            .performScrollTo().performClick()
         composeRule.waitForIdle()
 
         val change = actions.filterIsInstance<ToolbarAction.ChangePenSetting>().single()
@@ -116,8 +134,8 @@ class ToolRailTest {
     fun erasingReplacesTheNibsWithTheErasersTwoKinds() {
         rail(state(mode = Mode.Erase))
 
-        composeRule.onNodeWithContentDescription("rub out").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("erase whole strokes").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("rub out").assertExists()
+        composeRule.onNodeWithContentDescription("erase whole strokes").assertExists()
 
         // A nib width means nothing to an eraser, so the dots are gone while it is in hand.
         ballpen.nibChoices(ballpen.size).forEach { size ->
@@ -133,7 +151,8 @@ class ToolRailTest {
     fun tappingAnEraserKindSelectsIt() {
         val actions = rail(state(mode = Mode.Erase))
 
-        composeRule.onNodeWithContentDescription("erase whole strokes").performClick()
+        composeRule.onNodeWithContentDescription("erase whole strokes")
+            .performScrollTo().performClick()
         composeRule.waitForIdle()
 
         assertEquals(
@@ -150,8 +169,8 @@ class ToolRailTest {
         ToolbarPen.RAIL_TYPES.forEach { type ->
             assertTrue("No button for $type", count(type.penName) >= 1)
         }
-        composeRule.onNodeWithContentDescription("eraser").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("lasso").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("eraser").assertExists()
+        composeRule.onNodeWithContentDescription("lasso").assertExists()
     }
 
     @Test
@@ -170,24 +189,30 @@ class ToolRailTest {
     }
 
     /**
-     * On a one-handed panel the rail cannot hold everything at once, and what it drops must be
-     * the overflow — not the way out of the editor.
+     * On a one-handed panel the rail cannot hold everything at once, and what it gives up must
+     * be room in the scroller — never the way out of the editor.
      *
      * The menu is the only route to the page's own actions, so a rail that pushes it off the
-     * edge strands the user. This is the case the tablet AVD cannot see: at 800dp everything
-     * fits and every arrangement looks correct.
+     * edge strands the user. 0.19.0 did exactly that: with the tools, the nibs and the history
+     * outside the scroller, their fixed width left the weighted overflow nothing, and the menu,
+     * the library and the inks were clipped away. A tablet never sees it — at 800dp across,
+     * every arrangement fits and looks correct.
      */
     @Test
     fun theMenuSurvivesARailTooNarrowToHoldEverything() {
-        rail(state(), width = PALMA_WIDTH)
+        rail(state(), width = NARROW_WIDTH)
         composeRule.onNodeWithContentDescription("menu").assertIsDisplayed()
     }
 
-    /** The nib in hand is the one dot that has to be on screen, however little room there is. */
+    /**
+     * And what the narrow rail does give up is only *room*: the tools are still reachable by
+     * scrolling to them, not clipped out of existence.
+     */
     @Test
-    fun theNibInHandIsShownOnANarrowRail() {
-        rail(state(), width = PALMA_WIDTH)
+    fun theToolsAreScrollableToOnARailTooNarrowToHoldThem() {
+        rail(state(), width = NARROW_WIDTH)
         composeRule.onNodeWithContentDescription("nib ${sizeLabel(ballpen.size)}")
+            .performScrollTo()
             .assertIsDisplayed()
     }
 
@@ -195,6 +220,15 @@ class ToolRailTest {
     private fun count(description: String): Int =
         composeRule.onAllNodesWithContentDescription(description)
             .fetchSemanticsNodes(atLeastOneRootRequired = false).size
+
+    /** How many nodes carry a content description matching [predicate]. */
+    private fun countMatching(predicate: (String) -> Boolean): Int =
+        composeRule.onAllNodes(
+            SemanticsMatcher("content description matches") { node ->
+                node.config.getOrNull(SemanticsProperties.ContentDescription)
+                    .orEmpty().any(predicate)
+            }
+        ).fetchSemanticsNodes(atLeastOneRootRequired = false).size
 
     private fun sizeLabel(size: Float): String = ToolbarElements.sizeLabel(size)
 }
