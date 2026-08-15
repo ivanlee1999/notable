@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.19.0
+
+The tool rail now works the way the iPad's does. How broad the nib is sits in the rail, next to
+the tool it applies to, and the rail's groups are always in the same order — so a tool is where
+your hand left it rather than where you last dragged it.
+
+### The nib is in the rail
+
+- **Stroke size is one tap.** Three or four dots below the tools set how broad the nib is. They
+  are the sizes that pen is set up with, so a highlighter's dots mean 25/40/60 and a ballpoint's
+  mean 3/5/10 — each implement keeps its character, and the one you are writing with is always
+  the filled dot. Before, size lived two taps into a popup over the page, which is a lot of
+  ceremony for the thing a pen changes most.
+- **While you are erasing, those dots become the eraser's two kinds** — rub part of a stroke out,
+  or take the whole stroke away. A nib width means nothing to an eraser, and that choice was
+  itself buried in a popup. The eraser's popup keeps the scribble-to-erase switch, which is a
+  setting rather than a choice about the next stroke.
+
+### The rail is fixed, and the pens are still yours
+
+- **The order no longer changes:** the four implements — a pen, a fountain pen, a pencil and a
+  highlighter — then the nib, then undo and redo, then everything else, ending in the inks. That
+  sequence is one stroke's worth of decisions, left where the hand already is. A rail whose
+  buttons move is one you have to read before every tap.
+- **What each pen writes with is still yours to set.** The Toolbar settings tab now shows the
+  pens in the two roles the rail gives them — the four it writes with, and the rest — and editing
+  a pen's colours and sizes is what feeds the dots and the ink strip.
+- **Pens the four do not stand for keep a button**, in the group that scrolls: your red, blue and
+  green pens, a brush, a calligraphy nib. Nothing you made becomes unreachable.
+- **Arranging the rail by hand is gone**, and with it the layout's JSON export and import. Your
+  pens are untouched — only the ordering goes. Everything else you had set stays as it was.
+
 ## 0.18.0
 
 A long notebook could only be crossed a page at a time. QuickNav now shows every page, a table of
