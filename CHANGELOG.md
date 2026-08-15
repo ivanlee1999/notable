@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.0
+
+The pages, outline and bookmarks panel had no button. It opened only on a three-finger swipe up,
+which nothing on screen mentions — so unless you knew the gesture, the panel added in 0.18.0 was
+not there at all.
+
+- **A button for it, in the rail below the page number.** It opens the same panel: page previews,
+  the outline, the bookmarks, and the pinned pages. The three-finger swipe still works.
+- The page number next to it is unchanged and still goes to the Pages screen, which is where
+  pages are reordered, duplicated and deleted. The panel is for getting somewhere; that screen is
+  for changing what is there.
+- **Naming a section is a button too.** It was reachable only by holding a page thumbnail, which
+  had the same problem in miniature. It now sits in the panel's header beside the bookmark
+  toggle, and acts on the page you have open.
+
 ## 0.19.1
 
 Fixes a rail that could strand you on a small screen.
