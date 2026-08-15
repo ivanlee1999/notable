@@ -216,22 +216,24 @@ private fun HorizontalRail(
             )
             ToolbarDivider()
 
-            renderGroup(groups.tools)
-            NibGroup(uiState = uiState, onAction = onAction)
-            ToolbarDivider()
-            renderGroup(groups.history)
-
-            // The overflow takes the slack, and scrolls when there is none — so the fixed
-            // groups either side of it keep their places on a narrow screen.
-            ToolbarDivider()
+            // Everything the hand reaches for, in rail order, inside one scroller. The groups
+            // are fixed relative to each other, not to the screen: a one-handed panel is not
+            // wide enough for all of them, and whatever will not fit has to be reachable by
+            // scrolling rather than clipped off the edge.
             Row(
                 Modifier
                     .weight(1f)
                     .horizontalScroll(rememberScrollState())
             ) {
+                renderGroup(groups.tools)
+                NibGroup(uiState = uiState, onAction = onAction)
+                ToolbarDivider()
+                renderGroup(groups.history)
+                ToolbarDivider()
                 renderGroup(groups.overflow)
             }
 
+            // Outside the scroller, so the way out of the editor is always at the trailing edge.
             ToolbarDivider()
             renderGroup(groups.pinned)
 
@@ -360,22 +362,22 @@ private fun VerticalRail(
             )
             ToolbarDivider()
 
-            renderGroup(groups.tools)
-            NibGroup(uiState = uiState, onAction = onAction)
-            ToolbarDivider()
-            renderGroup(groups.history)
-
-            // The overflow takes the slack, and scrolls when there is none — so the four
-            // implements at the head and the inks at the foot never move down a short screen.
-            ToolbarDivider()
+            // As on the horizontal rail: one scroller holding the groups in rail order, so a
+            // short screen scrolls rather than clipping whatever falls past its bottom edge.
             Column(
                 Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
             ) {
+                renderGroup(groups.tools)
+                NibGroup(uiState = uiState, onAction = onAction)
+                ToolbarDivider()
+                renderGroup(groups.history)
+                ToolbarDivider()
                 renderGroup(groups.overflow)
             }
 
+            // Outside the scroller: the way out, and the inks at the foot.
             ToolbarDivider()
             Column { renderGroup(groups.pinned) }
 

@@ -1,10 +1,15 @@
 package com.ethran.notable.editor.ui.toolbar
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.GlobalAppSettings
@@ -41,6 +46,14 @@ class ToolRailTest {
 
     private val ballpen = ToolbarPen.DEFAULT_PENS.first { it.id == "ball" }
 
+    companion object {
+        /** A Palma-class panel measures about this far across — the narrowest we target. */
+        private val PALMA_WIDTH = 412.dp
+
+        /** A tablet, where the whole rail fits at once and nothing has to be scrolled to. */
+        private val TABLET_WIDTH = 900.dp
+    }
+
     private fun state(mode: Mode = Mode.Draw, eraser: Eraser = Eraser.PEN) = ToolbarUiState(
         isToolbarOpen = true,
         mode = mode,
@@ -51,16 +64,24 @@ class ToolRailTest {
         pageNumberInfo = "1/1",
     )
 
-    /** Renders the rail against the default settings, collecting what it asks for. */
-    private fun rail(uiState: ToolbarUiState): MutableList<ToolbarAction> {
+    /**
+     * Renders the rail against the default settings, collecting what it asks for.
+     *
+     * [width] is pinned rather than left to the device, so a run on the 10" AVD and a run on a
+     * CI emulator assert the same thing. It defaults to a tablet, where the whole rail is on
+     * screen; the tests that care about a one-handed panel ask for [PALMA_WIDTH] explicitly.
+     */
+    private fun rail(uiState: ToolbarUiState, width: Dp = TABLET_WIDTH): MutableList<ToolbarAction> {
         val actions = mutableListOf<ToolbarAction>()
         GlobalAppSettings.update(AppSettings(version = 1))
         composeRule.setContent {
-            ToolbarContent(
-                uiState = uiState,
-                onAction = { actions.add(it) },
-                onDrawingStateCheck = {},
-            )
+            Box(Modifier.width(width)) {
+                ToolbarContent(
+                    uiState = uiState,
+                    onAction = { actions.add(it) },
+                    onDrawingStateCheck = {},
+                )
+            }
         }
         composeRule.waitForIdle()
         return actions
@@ -146,6 +167,28 @@ class ToolRailTest {
             ToolbarPen.DEFAULT_PENS.count { it.pen == Pen.BALLPEN },
             count(Pen.BALLPEN.penName),
         )
+    }
+
+    /**
+     * On a one-handed panel the rail cannot hold everything at once, and what it drops must be
+     * the overflow — not the way out of the editor.
+     *
+     * The menu is the only route to the page's own actions, so a rail that pushes it off the
+     * edge strands the user. This is the case the tablet AVD cannot see: at 800dp everything
+     * fits and every arrangement looks correct.
+     */
+    @Test
+    fun theMenuSurvivesARailTooNarrowToHoldEverything() {
+        rail(state(), width = PALMA_WIDTH)
+        composeRule.onNodeWithContentDescription("menu").assertIsDisplayed()
+    }
+
+    /** The nib in hand is the one dot that has to be on screen, however little room there is. */
+    @Test
+    fun theNibInHandIsShownOnANarrowRail() {
+        rail(state(), width = PALMA_WIDTH)
+        composeRule.onNodeWithContentDescription("nib ${sizeLabel(ballpen.size)}")
+            .assertIsDisplayed()
     }
 
     /** How many nodes carry [description] — the overflow puts several behind the same one. */
