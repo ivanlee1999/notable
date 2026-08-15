@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.19.1
+
+Fixes a rail that could strand you on a small screen.
+
+- **On a phone-sized display the rail ran out of room and cut off its own end** — the page
+  number, the Library and the **menu** among it, which is the only way to the page's template
+  and export. 0.19.0 pinned the tools, the nib dots and undo/redo in place, and together they
+  are wider than a one-handed panel. They now share the rail's scrolling section, so what does
+  not fit is scrolled to rather than cut off, and the menu keeps its place at the end. Nothing
+  moves on a tablet, where it all fit already.
+
 ## 0.19.0
 
 The tool rail now works the way the iPad's does. How broad the nib is sits in the rail, next to
