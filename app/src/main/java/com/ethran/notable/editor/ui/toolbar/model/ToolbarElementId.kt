@@ -1,31 +1,21 @@
 package com.ethran.notable.editor.ui.toolbar.model
 
 /**
- * Stable identifiers for toolbar elements. Layouts persist these **by name** (see
- * [ToolbarLayout]), so renaming an entry is a breaking change for saved layouts;
- * reordering the enum is safe.
+ * Identifiers for the rail's static elements — the key each is registered under in
+ * [ToolbarElements], and how `RailGroups` names the ones it places.
  */
 enum class ToolbarElementId {
-    /** The toolbar's own open/close control — always rendered first, never part of a layout. */
+    /** The toolbar's own open/close control — always rendered first, outside the groups. */
     TOGGLE,
 
     /**
-     * Shared by every pen instance ([PenElement] built from a [ToolbarPen] preset).
-     * Pens are identified by preset id and appear in layouts as `"PEN:<id>"` entries —
-     * a bare "PEN" name is invalid and dropped by the validator.
+     * Shared by every pen instance ([PenElement] built from a [ToolbarPen] preset). Pens are
+     * identified by preset id, not by this — it is a kind, not a slot, so no pen is
+     * registered under it.
      */
     PEN,
 
     SHAPE, ERASER, SELECT, IMAGE, PASTE, RESET_VIEW,
-    UNDO, REDO, PAGE_NAV, HOME, MENU,
-
-    /** Placeable pseudo-element: a vertical divider. May appear multiple times in a layout. */
-    DIVIDER;
+    UNDO, REDO, PAGE_NAV, HOME, MENU;
     // future: TEXT
-
-    companion object {
-        /** Resolve a persisted name, or null for unknown names (dropped on layout load). */
-        fun fromString(name: String): ToolbarElementId? =
-            entries.find { it.name == name }
-    }
 }

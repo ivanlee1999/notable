@@ -14,11 +14,12 @@ import compose.icons.feathericons.EyeOff
 import compose.icons.feathericons.RefreshCcw
 
 /**
- * The registry: every placeable **static** toolbar element, keyed by id. Pen buttons are
- * not here — they are user-created [ToolbarPen] presets, resolved into [PenElement]s by
- * [ToolbarElements.resolve]. Adding a static tool = adding one entry here (plus, for
- * stroke-producing pens, a StrokeStyleRegistry entry — step 2). A unit test asserts every
- * [ToolbarElementId] except the pen sentinel resolves.
+ * The registry: every **static** toolbar element, keyed by id. Pen buttons are not here —
+ * they are user-created [ToolbarPen] presets, turned into [PenElement]s by [penElement].
+ * Adding a static tool = adding one entry here (plus, for stroke-producing pens, a
+ * StrokeStyleRegistry entry — step 2), and a place for it in the rail's fixed groups
+ * (`RailGroups`). A unit test asserts every [ToolbarElementId] except the pen sentinel
+ * is registered.
  */
 object ToolbarElements {
 
@@ -101,7 +102,6 @@ object ToolbarElements {
             contentDescription = "menu",
             kind = CustomKind.MENU,
         ),
-        DividerElement,
     ).associateBy { it.id }
 
     fun of(id: ToolbarElementId): ToolbarElement =
@@ -139,20 +139,6 @@ object ToolbarElements {
     /** "3", "5", "10" — numeric labels; custom option sets have no natural S/M/L names. */
     fun sizeLabel(size: Float): String =
         if (size == size.toInt().toFloat()) size.toInt().toString() else size.toString()
-
-    /**
-     * Resolves a persisted layout entry: `"PEN:<id>"` against the preset list, anything
-     * else against the static registry. Null for unknown names and deleted presets —
-     * callers skip those entries.
-     */
-    fun resolve(name: String, pens: List<ToolbarPen>): ToolbarElement? {
-        if (name.startsWith(ToolbarPen.LAYOUT_PREFIX)) {
-            val presetId = name.removePrefix(ToolbarPen.LAYOUT_PREFIX)
-            return pens.find { it.id == presetId }?.let(::penElement)
-        }
-        val id = ToolbarElementId.fromString(name) ?: return null
-        return all[id]
-    }
 
     /**
      * Collapsed-toolbar icon: the mode tool if one is selected (shape/eraser/select —

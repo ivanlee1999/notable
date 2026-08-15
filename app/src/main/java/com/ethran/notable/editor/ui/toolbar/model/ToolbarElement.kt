@@ -42,7 +42,7 @@ private val ALWAYS: VisibleWhen = { _, _ -> true }
 sealed interface ToolbarElement {
     val id: ToolbarElementId
 
-    /** Null only for structural elements ([DividerElement]) that render no button. */
+    /** Null only for elements that draw something other than a button ([CustomKind.PAGE_NAV]). */
     val icon: IconRef?
     val contentDescription: String
     val visibleWhen: VisibleWhen
@@ -121,12 +121,4 @@ data class CustomElement(
 
 enum class CustomKind {
     PAGE_NAV, MENU, IMAGE_PICKER
-}
-
-/** Placeable vertical divider — lets users control grouping with the ordering mechanism. */
-data object DividerElement : ToolbarElement {
-    override val id = ToolbarElementId.DIVIDER
-    override val icon: IconRef? = null
-    override val contentDescription = "divider"
-    override val visibleWhen: VisibleWhen = ALWAYS
 }
