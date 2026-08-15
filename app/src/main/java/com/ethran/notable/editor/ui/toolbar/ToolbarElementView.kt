@@ -39,7 +39,6 @@ import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.ui.toolbar.model.ActionElement
 import com.ethran.notable.editor.ui.toolbar.model.CustomElement
 import com.ethran.notable.editor.ui.toolbar.model.CustomKind
-import com.ethran.notable.editor.ui.toolbar.model.DividerElement
 import com.ethran.notable.editor.ui.toolbar.model.EraserSubmenuSpec
 import com.ethran.notable.editor.ui.toolbar.model.IconRef
 import com.ethran.notable.editor.ui.toolbar.model.ModeElement
@@ -70,8 +69,6 @@ fun ToolbarElementView(
     onPickImage: () -> Unit,
 ) {
     when (element) {
-        is DividerElement -> ToolbarDivider()
-
         is PenElement -> PenElementView(element, uiState, onAction)
 
         is ShapeElement -> ShapeElementView(element, uiState, onAction)
@@ -288,28 +285,33 @@ private fun ModeElementView(
         )
 
         if (submenu is EraserSubmenuSpec && uiState.isStrokeSelectionOpen) {
-            EraserSubmenu(
-                spec = submenu,
-                uiState = uiState,
-                onAction = onAction,
-            )
+            EraserSubmenu(onAction = onAction)
         }
     }
 }
 
-private fun eraserIcon(eraser: Eraser): Int =
+internal fun eraserIcon(eraser: Eraser): Int =
     when (eraser) {
         Eraser.PEN -> R.drawable.eraser
         Eraser.SELECT -> R.drawable.eraser_select
     }
 
-/** The eraser popup: eraser-type picker plus the global scribble-to-erase toggle. */
+/** What each eraser does, for the rail cell that selects it. */
+internal fun eraserDescription(eraser: Eraser): String =
+    when (eraser) {
+        Eraser.PEN -> "rub out"
+        Eraser.SELECT -> "erase whole strokes"
+    }
+
+/**
+ * The eraser popup: the global scribble-to-erase toggle.
+ *
+ * Which eraser is in hand used to be picked here too; it is now two cells in the rail, where
+ * the nib widths sit for every other tool. What is left is a setting rather than a choice
+ * about the stroke you are about to make, so it stays behind the second tap.
+ */
 @Composable
-private fun EraserSubmenu(
-    spec: EraserSubmenuSpec,
-    uiState: ToolbarUiState,
-    onAction: (ToolbarAction) -> Unit,
-) {
+private fun EraserSubmenu(onAction: (ToolbarAction) -> Unit) {
     val placement = toolbarPopupPlacement()
 
     Popup(
@@ -325,20 +327,6 @@ private fun EraserSubmenu(
                 .border(1.dp, Color.Black)
                 .height(IntrinsicSize.Max)
         ) {
-            Row(
-                Modifier
-                    .height(IntrinsicSize.Max)
-                    .border(1.dp, Color.Black)
-            ) {
-                spec.erasers.forEach { eraser ->
-                    ToolbarButton(
-                        iconId = eraserIcon(eraser),
-                        isSelected = uiState.eraser == eraser,
-                        onSelect = { onAction(ToolbarAction.ChangeEraser(eraser)) },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                }
-            }
             Row(
                 modifier = Modifier
                     .padding(4.dp)

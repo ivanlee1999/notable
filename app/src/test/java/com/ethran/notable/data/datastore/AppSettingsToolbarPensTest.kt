@@ -1,13 +1,11 @@
 package com.ethran.notable.data.datastore
 
-import com.ethran.notable.editor.ui.toolbar.model.ToolbarLayout
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
-class AppSettingsToolbarLayoutTest {
+class AppSettingsToolbarPensTest {
 
     // Same configuration as KvProxy's Json instance.
     private val json = Json {
@@ -16,9 +14,8 @@ class AppSettingsToolbarLayoutTest {
     }
 
     @Test
-    fun `settings persisted before the field decode with a null layout and default pens`() {
+    fun `settings persisted before the field decode with the default pens`() {
         val decoded = json.decodeFromString(AppSettings.serializer(), """{"version":1}""")
-        assertNull(decoded.toolbarLayout)
         assertEquals(ToolbarPen.DEFAULT_PENS, decoded.toolbarPens)
     }
 
@@ -40,19 +37,19 @@ class AppSettingsToolbarLayoutTest {
         assertEquals(settings.toolbarPens, decoded.toolbarPens)
     }
 
+    /**
+     * The rail used to be user-ordered, and that order was persisted as `toolbarLayout`.
+     * A device upgrading across that change still has the key in its stored blob; decoding
+     * must drop it rather than throw, or the user loses every other setting with it.
+     */
     @Test
-    fun `toolbarLayout round-trips through AppSettings serialization`() {
-        val settings = AppSettings(
-            version = 1,
-            toolbarLayout = ToolbarLayout(
-                scrollable = listOf("PEN:ball", "DIVIDER", "ERASER"),
-                pinned = listOf("UNDO", "MENU"),
-            ),
-        )
+    fun `a settings blob still carrying the old toolbar layout decodes`() {
         val decoded = json.decodeFromString(
             AppSettings.serializer(),
-            json.encodeToString(AppSettings.serializer(), settings),
+            """{"version":1,"toolbarLayout":{"scrollable":["PEN:ball","DIVIDER"],""" +
+                """"pinned":["UNDO","MENU"]},"smoothScroll":false}""",
         )
-        assertEquals(settings.toolbarLayout, decoded.toolbarLayout)
+        assertEquals(ToolbarPen.DEFAULT_PENS, decoded.toolbarPens)
+        assertEquals(false, decoded.smoothScroll)
     }
 }

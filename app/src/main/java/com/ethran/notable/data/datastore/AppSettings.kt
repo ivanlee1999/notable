@@ -5,7 +5,6 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.unit.Dp
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.PageSizePreset
-import com.ethran.notable.editor.ui.toolbar.model.ToolbarLayout
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.ui.theme.KALEIDO_WIDE_BREAKPOINT
 import com.ethran.notable.ui.theme.kaleidoMetrics
@@ -68,16 +67,15 @@ data class AppSettings(
     // handwriting comes out cut in half. Showing where the breaks fall costs one hairline per
     // sheet; not showing them costs the user a reprint.
     val visualizePdfPagination: Boolean = true,
-    // null → ToolbarLayout.DEFAULT. Sanitize with ToolbarLayout.validated() when reading:
-    // persisted layouts may predate elements or omit the mandatory MENU entry.
     // How the library is arranged. A preference about the library rather than about this visit to
     // it: coming back to a differently-ordered shelf is its own small confusion. Stored as the
     // enum's name so an unknown value from a newer build falls back rather than crashing.
     val librarySortOrder: String = "UPDATED",
     val librarySortDescending: Boolean = true,
-    val toolbarLayout: ToolbarLayout? = null,
-    // User-created pen instances; layouts reference them as "PEN:<id>". The preset is the
-    // single source of truth for a pen's color/size — StrokeMenu edits write back here.
+    // User-created pen instances. The preset is the single source of truth for a pen's
+    // color/size — the rail's nib dots, its ink strip and StrokeMenu all write back here.
+    // A settings blob written before the rail became fixed still carries a "toolbarLayout"
+    // key; KvProxy decodes with ignoreUnknownKeys, so it is simply dropped on read.
     val toolbarPens: List<ToolbarPen> = ToolbarPen.DEFAULT_PENS,
 
     // Gestures

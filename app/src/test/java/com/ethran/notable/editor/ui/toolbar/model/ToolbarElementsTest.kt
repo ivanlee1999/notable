@@ -35,28 +35,12 @@ class ToolbarElementsTest {
     }
 
     @Test
-    fun `only structural divider lacks an icon among placeable buttons`() {
+    fun `only the page number lacks an icon, because it draws text instead`() {
         ToolbarElements.all.values.forEach { element ->
-            if (element.id != ToolbarElementId.DIVIDER && element.id != ToolbarElementId.PAGE_NAV) {
+            if (element.id != ToolbarElementId.PAGE_NAV) {
                 assertNotNull("${element.id} has no icon", element.icon)
             }
         }
-    }
-
-    @Test
-    fun `layout entries resolve pens by preset and statics by name`() {
-        val ball = ToolbarElements.resolve("PEN:ball", pens)
-        assertTrue(ball is PenElement)
-        assertEquals("ball", (ball as PenElement).presetId)
-        assertEquals(Pen.BALLPEN, ball.pen)
-
-        assertEquals(
-            ToolbarElements.of(ToolbarElementId.ERASER),
-            ToolbarElements.resolve("ERASER", pens),
-        )
-        assertNull("Deleted preset must not resolve", ToolbarElements.resolve("PEN:gone", pens))
-        assertNull("Bare PEN sentinel must not resolve", ToolbarElements.resolve("PEN", pens))
-        assertNull(ToolbarElements.resolve("FROM_THE_FUTURE", pens))
     }
 
     @Test
@@ -92,16 +76,39 @@ class ToolbarElementsTest {
     }
 
     @Test
-    fun `default preset ids are unique and match the default layout references`() {
+    fun `default preset ids are unique`() {
         assertEquals(pens.size, pens.map { it.id }.distinct().size)
-        val penEntries = (ToolbarLayout.DEFAULT.scrollable + ToolbarLayout.DEFAULT.pinned)
-            .filter { it.startsWith(ToolbarPen.LAYOUT_PREFIX) }
-        assertEquals(
-            "DEFAULT layout must place every default preset exactly once",
-            pens.map { it.layoutEntry }.toSet(),
-            penEntries.toSet(),
-        )
-        assertEquals(penEntries.size, penEntries.distinct().size)
+    }
+
+    @Test
+    fun `the rail resolves one preset per implement, and reaches the rest through overflow`() {
+        val rail = ToolbarPen.railPresets(pens)
+        assertEquals(ToolbarPen.RAIL_TYPES, rail.map { it.pen })
+        // Seeded from the user's own presets, not from a private copy.
+        assertTrue(rail.all { it in pens })
+
+        // Every preset has exactly one home: on the rail, or in the overflow behind it.
+        val overflow = ToolbarPen.extraPresets(pens)
+        assertEquals(pens.size, rail.size + overflow.size)
+        assertTrue((rail + overflow).map { it.id }.containsAll(pens.map { it.id }))
+        assertTrue("A rail preset must not repeat in the overflow", rail.none { it in overflow })
+    }
+
+    @Test
+    fun `a user's own preset wins the rail slot over the seed`() {
+        val mine = ToolbarPen("mine", Pen.FOUNTAIN, android.graphics.Color.MAGENTA, 8f)
+        val rail = ToolbarPen.railPresets(listOf(mine))
+        assertEquals("mine", rail.first { it.pen == Pen.FOUNTAIN }.id)
+        // The types the user has no preset for still resolve, so the rail is never short.
+        assertEquals(ToolbarPen.RAIL_TYPES.size, rail.size)
+        assertEquals(ToolbarPen.RAIL_TYPES, rail.map { it.pen })
+    }
+
+    @Test
+    fun `every rail implement has a seed preset to fall back on`() {
+        val fromNothing = ToolbarPen.railPresets(emptyList())
+        assertEquals(ToolbarPen.RAIL_TYPES, fromNothing.map { it.pen })
+        assertTrue(fromNothing.all { it in ToolbarPen.DEFAULT_PENS })
     }
 
     @Test

@@ -12,8 +12,8 @@ import android.graphics.Color as AndroidColor
  * toolbar button. The preset *is* the pen's setting — StrokeMenu edits write back to it,
  * persisted in `AppSettings.toolbarPens`.
  *
- * Presets are referenced from [ToolbarLayout] lists as `"PEN:<id>"` entries; all other
- * elements keep their [ToolbarElementId] names.
+ * The rail's own four implements are resolved from this list by [railPresets]; anything
+ * left over is reached through [extraPresets].
  */
 @Serializable
 data class ToolbarPen(
@@ -34,17 +34,25 @@ data class ToolbarPen(
     /** The preset's color/size as a fresh [PenSetting] (its fields are mutable). */
     fun setting(): PenSetting = PenSetting(size, color)
 
-    /** How this preset is referenced from [ToolbarLayout] lists. */
-    val layoutEntry: String get() = "$LAYOUT_PREFIX$id"
-
     fun effectiveColorOptions(): List<Int> = colorOptions ?: DEFAULT_COLOR_OPTIONS
 
     fun effectiveSizeOptions(): List<Float> =
         sizeOptions ?: if (pen == Pen.MARKER) DEFAULT_MARKER_SIZES else DEFAULT_STROKE_SIZES
 
-    companion object {
-        const val LAYOUT_PREFIX = "PEN:"
+    /**
+     * The nibs the rail offers for this pen, given the size it is currently writing at.
+     *
+     * [currentSize] leads the list before the cut to four and only then is the result sorted,
+     * so the size in hand cannot be the one that got dropped — a rail showing four dots and no
+     * selection would be worse than showing none. Fewer than two means there is nothing to
+     * choose between, and the rail draws no dots at all.
+     */
+    fun nibChoices(currentSize: Float): List<Float> {
+        val sizes = (listOf(currentSize) + effectiveSizeOptions()).distinct().take(4).sorted()
+        return if (sizes.size < 2) emptyList() else sizes
+    }
 
+    companion object {
         /** Matches the historical hardcoded StrokeMenu palette (compose defaults). */
         val DEFAULT_COLOR_OPTIONS: List<Int> = listOf(
             AndroidColor.RED, AndroidColor.GREEN, AndroidColor.BLUE, AndroidColor.CYAN,
@@ -78,10 +86,13 @@ data class ToolbarPen(
         )
 
         /**
-         * Reproduces the historical eight pen buttons. Seed ids are stable so
-         * [ToolbarLayout.DEFAULT] can reference them by name. The old red/blue/green
-         * pens were separate [Pen] values; as presets they are plain ballpens with a
-         * color — new strokes persist `pen = BALLPEN` and render identically.
+         * The presets a fresh install starts with. Seed ids are stable, so a preset
+         * survives an upgrade. The old red/blue/green pens were separate [Pen] values;
+         * as presets they are plain ballpens with a color — new strokes persist
+         * `pen = BALLPEN` and render identically.
+         *
+         * Only one of each [RAIL_TYPES] entry reaches the rail's tool group; the rest are
+         * the user's own and live in the rail's overflow (see [extraPresets]).
          */
         val DEFAULT_PENS = listOf(
             ToolbarPen("ball", Pen.BALLPEN, AndroidColor.BLACK, 5f),
@@ -101,5 +112,37 @@ data class ToolbarPen(
          */
         val defaultPenSettings: Map<String, PenSetting> =
             DEFAULT_PENS.associate { it.id to it.setting() }
+
+        /**
+         * The four implements the rail writes with, in rail order: a plain pen, a fountain
+         * pen, a pencil and a highlighter.
+         *
+         * Fixed, so a writing tool is always in the same place under the hand — the rail is
+         * furniture, not a list. What each one *writes like* is still the user's to set; that
+         * lives in the preset behind it, not in which buttons exist.
+         */
+        val RAIL_TYPES = listOf(Pen.BALLPEN, Pen.FOUNTAIN, Pen.PENCIL, Pen.MARKER)
+
+        /**
+         * The preset behind each rail implement: the user's first preset of that base type,
+         * so the colours and sizes they configured are what the button writes with, and the
+         * seed preset when they have none of that type left.
+         */
+        fun railPresets(pens: List<ToolbarPen>): List<ToolbarPen> = RAIL_TYPES.map { type ->
+            pens.firstOrNull { it.pen == type } ?: DEFAULT_PENS.first { it.pen == type }
+        }
+
+        /**
+         * Presets the four fixed implements do not already stand for — a second ballpen in
+         * another colour, a brush, a calligraphy nib.
+         *
+         * They keep a button rather than becoming unreachable: the rail is fixed, but a pen
+         * the user made is still theirs. It just sits in the overflow rather than in the
+         * group your thumb finds without looking.
+         */
+        fun extraPresets(pens: List<ToolbarPen>): List<ToolbarPen> {
+            val onRail = railPresets(pens).mapTo(mutableSetOf()) { it.id }
+            return pens.filterNot { it.id in onRail }
+        }
     }
 }
