@@ -85,6 +85,16 @@ class EditorControlTower(
     override fun requestScroll(delta: Offset) {
         if (delta == Offset.Zero) return
         if (!page.isTransformationAllowed) return
+        // Dragging on when the page has no more to give is how you turn it, when that is the
+        // direction the reader chose. Asked before the scroll is queued: once it is in the
+        // accumulator it has been coalesced with other movement and the edge is no longer legible.
+        if (GlobalAppSettings.current.pageTurn.isVertical &&
+            delta.x == 0f && page.isAtVerticalEdge(-delta.y)
+        ) {
+            // A drag up asks for what is below, which is the next page.
+            if (delta.y < 0) viewModel.goToNextPage() else viewModel.goToPreviousPage()
+            return
+        }
         pendingScroll.update { it + delta }
     }
 
@@ -97,6 +107,13 @@ class EditorControlTower(
         if (!page.isTransformationAllowed) return
         val delta = pagedScrollDelta(page.viewHeight, direction)
         if (delta == 0f) return
+        // Paged vertical navigation steps a screen at a time and comes through here rather than
+        // requestScroll, so the page turn has to be offered on this path too — otherwise the
+        // setting would work in continuous scrolling and silently do nothing in paged.
+        if (GlobalAppSettings.current.pageTurn.isVertical && page.isAtVerticalEdge(-delta)) {
+            if (direction > 0) viewModel.goToNextPage() else viewModel.goToPreviousPage()
+            return
+        }
         logEditorControlTower.i("Paged step, direction: $direction")
         pendingScroll.update { it + Offset(0f, delta) }
     }

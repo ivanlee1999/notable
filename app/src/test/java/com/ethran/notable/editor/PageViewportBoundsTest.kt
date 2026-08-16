@@ -174,4 +174,99 @@ class PageViewportBoundsTest {
     }
 
     private fun fit(viewWidth: Int) = PageViewportBounds.fitToWidthZoom(a4.width, viewWidth)
+
+    // MARK: Turning the page at the edge
+
+    /**
+     * "Past the end of the page" is a scroll the bound swallows whole. This is the arithmetic
+     * `PageView.isAtVerticalEdge` asks, and the whole vertical page turn rests on it: get it wrong
+     * in one direction and the notebook cannot be left, in the other and every drag turns a page.
+     */
+    @Test
+    fun `a drag the bound swallows whole is a page turn, one that moves is not`() {
+        val sheet = PageSizePreset.A4.size
+        val viewHeight = 1000
+        val zoom = 1f
+        val maxScroll = PageViewportBounds.maxScroll(sheet.height.toFloat(), viewHeight, zoom)
+
+        // At the top, dragging down (positive delta scrolls toward the start) has nowhere to go.
+        val atTop = Offset(0f, 0f)
+        assertEquals(
+            atTop,
+            PageViewportBounds.boundScroll(
+                atTop + Offset(0f, -200f), sheet.width.toFloat(), 800, zoom,
+                sheet.height.toFloat(), viewHeight))
+
+        // At the bottom, dragging further down is swallowed too.
+        val atBottom = Offset(0f, maxScroll)
+        assertEquals(
+            atBottom,
+            PageViewportBounds.boundScroll(
+                atBottom + Offset(0f, 200f), sheet.width.toFloat(), 800, zoom,
+                sheet.height.toFloat(), viewHeight))
+
+        // In the middle it moves, so it is a scroll and not a turn.
+        val middle = Offset(0f, maxScroll / 2)
+        assertTrue(
+            PageViewportBounds.boundScroll(
+                middle + Offset(0f, 100f), sheet.width.toFloat(), 800, zoom,
+                sheet.height.toFloat(), viewHeight).y > middle.y)
+    }
+
+    /**
+     * Turning sideways shows a whole page; turning downward fits the width and lets the page run
+     * off the bottom. A sideways fit that cut the page off would be the worst of both — you could
+     * neither see the page nor scroll to the rest of it, because sideways turning is the one mode
+     * where nothing scrolls.
+     */
+    @Test
+    fun `the sideways fit shows the whole sheet, the downward fit only its width`() {
+        val sheet = PageSizePreset.A4.size
+        val viewWidth = 1400
+        val viewHeight = 1000
+
+        val widthFit = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
+        val wholeFit = PageViewportBounds.fitWholePageZoom(
+            sheet.width, sheet.height, viewWidth, viewHeight)
+
+        assertTrue("the whole page must fit within the view", sheet.height * wholeFit <= viewHeight + 1)
+        assertTrue("the whole-page fit is never larger than the width fit", wholeFit <= widthFit)
+        assertTrue("the width fit overflows a view shorter than the sheet", sheet.height * widthFit > viewHeight)
+    }
+
+    /** A view taller than the sheet needs no shrinking: the width fit already shows all of it. */
+    @Test
+    fun `a view taller than the sheet fits the same either way`() {
+        val sheet = PageSizePreset.A4.size
+        assertEquals(
+            PageViewportBounds.fitToWidthZoom(sheet.width, 700),
+            PageViewportBounds.fitWholePageZoom(sheet.width, sheet.height, 700, 4000),
+            0.0001f)
+    }
+
+    /**
+     * The sign convention the vertical page turn rests on, pinned because it is invisible and was
+     * wrong once: the scroll consumer negates a gesture delta before the page applies it
+     * (`EditorControlTower.onPageScroll(-delta)`), so a drag up — a negative gesture delta — is a
+     * positive page delta and asks for what is *below*. Testing the raw gesture delta instead
+     * checks the opposite edge, which turns the page at the top and never turns it at the bottom.
+     */
+    @Test
+    fun `a drag up is a positive page delta and is blocked only at the bottom`() {
+        val sheet = PageSizePreset.A4.size
+        val viewHeight = 1000
+        val zoom = 1f
+        val maxScroll = PageViewportBounds.maxScroll(sheet.height.toFloat(), viewHeight, zoom)
+        val gestureDeltaDraggingUp = -200f
+        val pageDelta = -gestureDeltaDraggingUp
+
+        fun blocked(from: Offset) = PageViewportBounds.boundScroll(
+            from + Offset(0f, pageDelta), sheet.width.toFloat(), 800, zoom,
+            sheet.height.toFloat(), viewHeight) == from
+
+        assertTrue("at the bottom there is nothing below, so this turns the page",
+            blocked(Offset(0f, maxScroll)))
+        assertTrue("at the top there is plenty below, so this must only scroll",
+            !blocked(Offset(0f, 0f)))
+    }
 }

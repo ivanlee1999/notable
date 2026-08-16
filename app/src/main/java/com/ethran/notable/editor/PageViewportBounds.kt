@@ -46,6 +46,22 @@ object PageViewportBounds {
     fun fitToWidthZoom(sheetWidth: Int, viewWidth: Int): Float =
         if (sheetWidth <= 0 || viewWidth <= 0) 1f else viewWidth.toFloat() / sheetWidth
 
+    /**
+     * The zoom at which the *whole* sheet is on screen, both dimensions.
+     *
+     * What "the page fits" means depends on which way you turn it, and this is the answer
+     * reMarkable, the Kindle Scribe and GoodNotes all land on for sideways turning: one whole page
+     * at a time, because a page you cannot see all of is not one you can turn past. Scrolling down
+     * keeps [fitToWidthZoom] instead and lets the page run off the bottom — the direction you are
+     * about to travel in.
+     */
+    fun fitWholePageZoom(sheetWidth: Int, sheetHeight: Int, viewWidth: Int, viewHeight: Int): Float {
+        val widthFit = fitToWidthZoom(sheetWidth, viewWidth)
+        if (sheetHeight <= 0 || viewHeight <= 0) return widthFit
+        // The smaller of the two, so neither edge is cut off.
+        return minOf(widthFit, viewHeight.toFloat() / sheetHeight)
+    }
+
     /** The lowest zoom allowed: the fit on a bounded page, the global floor on any other. */
     fun minZoom(fitZoom: Float, bounded: Boolean): Float =
         if (bounded) fitZoom.coerceIn(MIN_ZOOM, MAX_ZOOM) else MIN_ZOOM

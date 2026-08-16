@@ -58,6 +58,7 @@ data class AppSettings(
     val toolbarPosition: Position = Position.Top,
     val smoothScroll: Boolean = true,
     val verticalNavigation: VerticalNavigation = VerticalNavigation.Continuous,
+    val pageTurn: PageTurn = PageTurn.Vertical,
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
     val paginatePdf: Boolean = true,
@@ -116,6 +117,22 @@ data class AppSettings(
 
     enum class GestureAction {
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
+    }
+
+    /**
+     * Which way you move from one page to the next.
+     *
+     * A page ends at its sheet, so it has an end — and the gesture that carries you over that end
+     * is a preference, not a fact. Reading down a long document wants the next page below this one;
+     * working through a notebook the way you would a paper one wants it to the side.
+     */
+    enum class PageTurn {
+        /** Drag on past the bottom of a page for the next one, past the top for the previous. */
+        Vertical,
+        /** Swipe sideways; vertical dragging only moves within the page. */
+        Horizontal;
+
+        val isVertical: Boolean get() = this == Vertical
     }
 
     /**

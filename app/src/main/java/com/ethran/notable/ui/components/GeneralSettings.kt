@@ -50,6 +50,16 @@ fun GeneralSettings(
                 onSettingsChange(settings.copy(scribbleToEraseEnabled = isChecked))
             })
 
+        // Which way a page turn goes. A page ends at its sheet now, so the gesture that carries
+        // you over that end is a choice: down the notebook, or across it.
+        SelectorRow(
+            label = stringResource(R.string.page_turn), options = listOf(
+                AppSettings.PageTurn.Vertical to stringResource(R.string.page_turn_vertical),
+                AppSettings.PageTurn.Horizontal to stringResource(R.string.page_turn_horizontal),
+            ), value = settings.pageTurn, onValueChange = { mode ->
+                onSettingsChange(settings.copy(pageTurn = mode))
+            })
+
         // Paged turns by a whole screen at a time, so a turn is one clean refresh rather
         // than a run of partial ones. It supersedes smooth scrolling, which is why that
         // toggle drops away below when it is selected.
