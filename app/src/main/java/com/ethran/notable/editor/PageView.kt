@@ -726,9 +726,10 @@ class PageView(
     private fun maxHorizontalScroll(zoom: Float = zoomLevel.value): Float =
         PageViewportBounds.maxHorizontalScroll(pannableWidth(), viewWidth, zoom)
 
-    /** [scroll] clamped into the page: never before its left edge, never past its right one. */
+    /** [scroll] clamped into the page: never before an edge, never past the opposite one. */
     private fun boundScroll(scroll: Offset, zoom: Float = zoomLevel.value): Offset =
-        PageViewportBounds.boundScroll(scroll, pannableWidth(), viewWidth, zoom)
+        PageViewportBounds.boundScroll(
+            scroll, pannableWidth(), viewWidth, zoom, height.toFloat(), viewHeight)
 
     /**
      * Pulls the current scroll back inside the page. Needed wherever the bounds move rather than

@@ -21,8 +21,16 @@ import kotlin.math.ceil
  * A page that declares nothing is not bounded. Its "sheet" is only whatever screen it happened to
  * be written on, so enforcing it on a wider device would hide ink rather than keep ink on the page.
  *
- * The vertical direction is deliberately not bounded here: the canvas scrolls past the bottom of
- * the sheet onto the next subpage, which is how the page grows as you write.
+ * The vertical direction is bounded by the same rule, against the page's content extent rather
+ * than the sheet. It used not to be: the canvas scrolled past the bottom of the sheet onto blank
+ * space, and writing there made the *page* taller. That is where "subpages" came from — screenfuls
+ * of notes that were not pages, invisible to the overview, to bookmarks and to reordering, because
+ * as far as the file was concerned they were all one page. A page ends at its sheet now, and the
+ * way to keep writing is the next page.
+ *
+ * Bounding against the *content* extent rather than the sheet is what keeps that safe: a page
+ * written before this, holding ink below its sheet, still scrolls far enough to reach all of it
+ * until the split moves that ink onto pages of its own.
  */
 object PageViewportBounds {
 
@@ -43,18 +51,28 @@ object PageViewportBounds {
         if (bounded) fitZoom.coerceIn(MIN_ZOOM, MAX_ZOOM) else MIN_ZOOM
 
     /**
-     * How far right the view may pan: enough to bring [pageWidth]'s far edge to the right edge of
-     * the view, and never negative — a page narrower than the view does not pan at all.
+     * How far the view may pan along one axis: enough to bring [pageExtent]'s far edge to the far
+     * edge of the view, and never negative — a page smaller than the view does not pan at all.
      */
-    fun maxHorizontalScroll(pageWidth: Float, viewWidth: Int, zoom: Float): Float {
-        val visibleWidth = viewWidth / zoom.coerceAtLeast(SMALLEST_USABLE_ZOOM)
-        return (pageWidth - visibleWidth).coerceAtLeast(0f)
+    fun maxScroll(pageExtent: Float, viewExtent: Int, zoom: Float): Float {
+        val visible = viewExtent / zoom.coerceAtLeast(SMALLEST_USABLE_ZOOM)
+        return (pageExtent - visible).coerceAtLeast(0f)
     }
 
-    /** [scroll] pulled inside the page: never before its left edge, never past its right one. */
-    fun boundScroll(scroll: Offset, pageWidth: Float, viewWidth: Int, zoom: Float): Offset = Offset(
-        scroll.x.coerceIn(0f, maxHorizontalScroll(pageWidth, viewWidth, zoom)),
-        scroll.y.coerceAtLeast(0f)
+    fun maxHorizontalScroll(pageWidth: Float, viewWidth: Int, zoom: Float): Float =
+        maxScroll(pageWidth, viewWidth, zoom)
+
+    /** [scroll] pulled inside the page: never before an edge, never past the opposite one. */
+    fun boundScroll(
+        scroll: Offset,
+        pageWidth: Float,
+        viewWidth: Int,
+        zoom: Float,
+        pageHeight: Float,
+        viewHeight: Int,
+    ): Offset = Offset(
+        scroll.x.coerceIn(0f, maxScroll(pageWidth, viewWidth, zoom)),
+        scroll.y.coerceIn(0f, maxScroll(pageHeight, viewHeight, zoom))
     )
 
     /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */

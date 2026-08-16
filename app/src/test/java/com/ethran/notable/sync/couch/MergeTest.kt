@@ -1,7 +1,10 @@
 package com.ethran.notable.sync.couch
 
+import com.ethran.notable.data.model.PageSize
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -27,10 +30,39 @@ class MergeTest {
         val name: String,
         val kind: String,
         val why: String? = null,
-        val a: JsonObject,
-        val b: JsonObject,
-        val expected: JsonObject,
+        // Merge vectors take two documents; a `split` vector takes one page and a sheet, so these
+        // are absent there rather than optional in spirit.
+        val a: JsonObject? = null,
+        val b: JsonObject? = null,
+        val expected: JsonElement,
+        val page: JsonObject? = null,
+        val sheet: Sheet? = null,
+        val now: String? = null,
     )
+
+    @Serializable
+    private data class Sheet(val width: Int, val height: Int)
+
+    /** What a `split` vector asserts about each page produced. */
+    @Serializable
+    private data class ExpectedPage(
+        val id: String,
+        val strokes: List<ExpectedStroke>,
+        val images: List<ExpectedImage>,
+        val pageWidth: Int,
+        val pageHeight: Int,
+    )
+
+    @Serializable
+    private data class ExpectedStroke(
+        val id: String,
+        val top: Float,
+        val bottom: Float,
+        val pointsData: String,
+    )
+
+    @Serializable
+    private data class ExpectedImage(val id: String, val y: Int)
 
     private fun loadVectors(): List<Vector> {
         val stream = requireNotNull(
@@ -45,7 +77,8 @@ class MergeTest {
         val vectors = loadVectors()
         assertTrue("vector file is empty", vectors.isNotEmpty())
         // Every merge rule with a branch of its own should have at least one vector.
-        assertEquals(setOf("page", "notebook", "folder"), vectors.map { it.kind }.toSet())
+        assertEquals(
+            setOf("page", "notebook", "folder", "split"), vectors.map { it.kind }.toSet())
     }
 
     @Test
@@ -55,6 +88,7 @@ class MergeTest {
                 "page" -> check(vector, CouchPage.serializer(), CouchMerge::mergePage)
                 "notebook" -> check(vector, CouchNotebook.serializer(), CouchMerge::mergeNotebook)
                 "folder" -> check(vector, CouchFolder.serializer(), CouchMerge::mergeFolder)
+                "split" -> checkSplit(vector)
                 else -> throw AssertionError("vector ${vector.name}: unknown kind ${vector.kind}")
             }
         }
@@ -69,8 +103,8 @@ class MergeTest {
         serializer: kotlinx.serialization.KSerializer<T>,
         merge: (T, T) -> T,
     ) {
-        val a = couchJson.decodeFromJsonElement(serializer, vector.a)
-        val b = couchJson.decodeFromJsonElement(serializer, vector.b)
+        val a = couchJson.decodeFromJsonElement(serializer, requireNotNull(vector.a))
+        val b = couchJson.decodeFromJsonElement(serializer, requireNotNull(vector.b))
         val expected = couchJson.decodeFromJsonElement(serializer, vector.expected)
 
         assertEquals("${vector.name}: merge(a,b)", expected, merge(a, b))
@@ -367,4 +401,60 @@ class MergeTest {
     }
 
     // endregion
+
+    /**
+     * Runs a `split` vector: divides the page and checks, page by page, that the same pages come
+     * out — with the same ids, carrying the same ink, moved to the same place.
+     *
+     * Also splits the output again and requires nothing to change. A split that is not idempotent
+     * files a fresh page every time a notebook is opened, and this is the cheapest place to catch
+     * it.
+     */
+    private fun checkSplit(vector: Vector) {
+        val sheetSpec = requireNotNull(vector.sheet) { "${vector.name}: split vector needs a sheet" }
+        val sheet = PageSize(sheetSpec.width, sheetSpec.height)
+        val now = requireNotNull(vector.now)
+        val source = couchJson.decodeFromJsonElement(
+            CouchPage.serializer(), requireNotNull(vector.page))
+        val sourceId = requireNotNull(vector.page)["id"]!!.jsonPrimitive.content
+        val expected = couchJson.decodeFromJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(ExpectedPage.serializer()),
+            vector.expected)
+
+        val produced = PageSplit.split(source, sourceId, sheet, now, "boox")
+
+        assertEquals(
+            "${vector.name}: pages produced", expected.map { it.id }, produced.map { it.id })
+        for ((made, want) in produced.zip(expected)) {
+            assertEquals(
+                "${vector.name}: strokes on ${want.id}",
+                want.strokes.map { it.id }, made.page.strokes.map { it.id })
+            for ((stroke, wantStroke) in made.page.strokes.zip(want.strokes)) {
+                assertEquals(
+                    "${vector.name}: ${stroke.id} top on ${want.id}",
+                    wantStroke.top, stroke.top, 0.01f)
+                assertEquals(
+                    "${vector.name}: ${stroke.id} bottom on ${want.id}",
+                    wantStroke.bottom, stroke.bottom, 0.01f)
+                assertEquals(
+                    "${vector.name}: ${stroke.id} points on ${want.id} — the ink itself moved wrong",
+                    wantStroke.pointsData, stroke.pointsData)
+            }
+            assertEquals(
+                "${vector.name}: images on ${want.id}",
+                want.images.map { it.id }, made.page.images.map { it.id })
+            for ((image, wantImage) in made.page.images.zip(want.images)) {
+                assertEquals(
+                    "${vector.name}: ${image.id} y on ${want.id}", wantImage.y, image.y)
+            }
+            assertEquals("${vector.name}: ${want.id} sheet", want.pageWidth, made.page.pageWidth)
+            assertEquals("${vector.name}: ${want.id} sheet", want.pageHeight, made.page.pageHeight)
+        }
+
+        for ((id, page) in produced.map { it.id to it.page }) {
+            val again = PageSplit.split(page, id, sheet, now, "boox")
+            assertEquals("${vector.name}: splitting $id again divided it further", 1, again.size)
+            assertEquals("${vector.name}: re-splitting $id renamed it", id, again[0].id)
+        }
+    }
 }
