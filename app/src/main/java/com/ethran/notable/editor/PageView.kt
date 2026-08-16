@@ -176,8 +176,17 @@ class PageView(
      * width was the screen width — which is precisely why the same page came out different sizes on
      * the two apps.
      */
+    /**
+     * The zoom a page is shown at when it is fitted: the whole sheet when pages turn sideways, its
+     * width when they turn downward. Named for the width because that is what it has always been
+     * and what every caller means by "the fit"; which fit it is now follows the direction.
+     */
     val fitToWidthZoom: Float
-        get() = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
+        get() = if (GlobalAppSettings.current.pageTurn.isVertical) {
+            PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
+        } else {
+            PageViewportBounds.fitWholePageZoom(sheet.width, sheet.height, viewWidth, viewHeight)
+        }
 
     /**
      * Whether the sheet is a hard edge — true for any page that declares its own size.
@@ -730,6 +739,26 @@ class PageView(
     private fun boundScroll(scroll: Offset, zoom: Float = zoomLevel.value): Offset =
         PageViewportBounds.boundScroll(
             scroll, pannableWidth(), viewWidth, zoom, height.toFloat(), viewHeight)
+
+    /**
+     * Whether a scroll of [pageDelta] has nowhere left to go on this page — the page is already
+     * against that edge and the bound would swallow the whole movement.
+     *
+     * [pageDelta] is the movement **as this page will apply it**, not as the finger made it. The
+     * two have opposite signs: `EditorControlTower`'s scroll consumer negates before calling
+     * `onPageScroll`, so a drag up (a negative gesture delta) arrives here positive, because
+     * dragging up asks to move *down* the page. Callers hold a gesture delta and must negate it —
+     * getting this backwards tests the far edge, which turns the page at the top and never turns it
+     * at the bottom.
+     *
+     * This is what "past the end of the page" means now that a page stops at its sheet. Asking here
+     * keeps the one definition of the page's edge in the place that already owns it.
+     */
+    fun isAtVerticalEdge(pageDelta: Float): Boolean {
+        if (pageDelta == 0f) return false
+        val moved = boundScroll(scroll + Offset(0f, pageDelta / zoomLevel.value)) - scroll
+        return moved.y == 0f
+    }
 
     /**
      * Pulls the current scroll back inside the page. Needed wherever the bounds move rather than
