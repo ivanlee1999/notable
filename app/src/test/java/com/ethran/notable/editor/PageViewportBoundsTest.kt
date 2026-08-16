@@ -57,26 +57,68 @@ class PageViewportBoundsTest {
         assertEquals(0f, max, 1e-6f)
     }
 
+    /**
+     * Bounds a scroll against a page tall enough that only the horizontal rule can bite — the
+     * tests below this are about the sides.
+     */
+    private fun boundHorizontally(
+        scroll: Offset, width: Float, view: Int, zoom: Float
+    ): Offset = PageViewportBounds.boundScroll(
+        scroll, width, view, zoom, pageHeight = 1e6f, viewHeight = 100
+    )
+
     @Test
     fun `scroll is pulled back inside the page from either side`() {
         val zoom = 2f * fit(wideView)
         val width = a4.width.toFloat()
 
-        val pastRight = PageViewportBounds.boundScroll(Offset(9999f, 40f), width, wideView, zoom)
+        val pastRight = boundHorizontally(Offset(9999f, 40f), width, wideView, zoom)
         assertEquals(a4.width / 2f, pastRight.x, 1e-3f)
         assertEquals(40f, pastRight.y, 1e-6f)
 
-        val pastLeft = PageViewportBounds.boundScroll(Offset(-50f, -50f), width, wideView, zoom)
+        val pastLeft = boundHorizontally(Offset(-50f, -50f), width, wideView, zoom)
         assertEquals(Offset.Zero, pastLeft)
     }
 
+    /**
+     * The canvas used to scroll downward for ever, and writing there made the page taller — that is
+     * where "subpages" came from. A page ends at its content now, the same as at its sides.
+     */
     @Test
-    fun `scrolling down past the sheet stays allowed`() {
-        // The canvas grows downward onto the next subpage; only the sides are hard.
+    fun `scrolling down stops at the end of the page`() {
+        val zoom = fit(wideView)
+        val viewHeight = 800
         val far = Offset(0f, a4.height * 10f)
-        val bounded =
-            PageViewportBounds.boundScroll(far, a4.width.toFloat(), wideView, fit(wideView))
-        assertEquals(far.y, bounded.y, 1e-6f)
+
+        val bounded = PageViewportBounds.boundScroll(
+            far, a4.width.toFloat(), wideView, zoom,
+            pageHeight = a4.height.toFloat(), viewHeight = viewHeight
+        )
+
+        assertEquals(
+            PageViewportBounds.maxScroll(a4.height.toFloat(), viewHeight, zoom),
+            bounded.y, 1e-3f
+        )
+        assertTrue("must not scroll past the page", bounded.y < a4.height)
+    }
+
+    /**
+     * A page written before pages were sheets holds ink below its own sheet. Bounding against the
+     * content extent rather than the sheet is what keeps that ink reachable until the split moves
+     * it onto pages of its own — bounding at the sheet would strand it.
+     */
+    @Test
+    fun `a page whose ink runs past its sheet still scrolls to reach it`() {
+        val zoom = fit(wideView)
+        val viewHeight = 800
+        val contentExtent = a4.height * 3f
+
+        val bounded = PageViewportBounds.boundScroll(
+            Offset(0f, contentExtent), a4.width.toFloat(), wideView, zoom,
+            pageHeight = contentExtent, viewHeight = viewHeight
+        )
+
+        assertTrue("ink below the sheet must stay reachable", bounded.y > a4.height)
     }
 
     @Test
@@ -85,8 +127,7 @@ class PageViewportBoundsTest {
         for (view in listOf(narrowView, wideView, 2200)) {
             val floor = PageViewportBounds.minZoom(fit(view), bounded = true)
             for (zoom in listOf(floor, floor * 1.3f, 1f.coerceAtLeast(floor), floor * 4f)) {
-                val scroll =
-                    PageViewportBounds.boundScroll(Offset(1e6f, 0f), width, view, zoom).x
+                val scroll = boundHorizontally(Offset(1e6f, 0f), width, view, zoom).x
                 val rightEdgeOfView = scroll + view / zoom
                 assertTrue(
                     "view=$view zoom=$zoom reaches $rightEdgeOfView, past the sheet's $width",

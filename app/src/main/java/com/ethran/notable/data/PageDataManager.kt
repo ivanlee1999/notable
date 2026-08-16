@@ -991,9 +991,19 @@ class PageDataManager @Inject constructor(
         val sheetHeight = getSheet(pageId).height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
-        val newHeight = synchronized(lock) {
+        val measured = synchronized(lock) {
             PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
         }
+        // Grow-stop: a page never gets taller than its sheet, or than it already was.
+        //
+        // Writing near the bottom used to extend the page, which is how a notebook ended up with
+        // screenfuls of notes that were not pages — invisible to the overview, to bookmarks and to
+        // reordering. The ceiling is `max(sheet, what this page already is)` rather than the sheet
+        // alone because a page written before this holds ink below its sheet, and clamping to the
+        // sheet would not park that ink off-page but strand it, with no scroll that reaches it.
+        // It stays reachable until the split moves it onto pages of its own.
+        val ceiling = maxOf(sheetHeight, getPageHeight(pageId) ?: sheetHeight)
+        val newHeight = minOf(measured, ceiling)
         viewport.setHeight(pageId, newHeight)
         return newHeight
     }
