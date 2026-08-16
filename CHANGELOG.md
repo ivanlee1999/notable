@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.22.0
+
+Writing to the bottom of a page used to make the page taller. It looked like you were moving onto a
+new page, but nothing was: the page grew, and everything below the first screenful was invisible to
+anything that works in pages — it never appeared in the pages panel, a bookmark could only point at
+the whole scroll, and it could not be reordered.
+
+- **A page ends where its paper ends.** The canvas no longer scrolls down onto blank space, and
+  writing near the bottom no longer stretches the page. What was there is still reachable: a page
+  written before this, holding notes below its sheet, still scrolls far enough to reach all of it.
+- **Notes already written below the sheet become pages of their own.** Open such a notebook on the
+  iPad and it is divided there, and the pages arrive here in order, keeping their bookmarks. The
+  same division on the BOOX itself is still to come, so a notebook that has never left this device
+  keeps its long pages for now.
+- Both devices divide a page the same way, down to the identity of the pages produced — so a
+  notebook divided on each of them while they were apart comes back as one set of pages, not two.
+
 ## 0.21.0
 
 The page now takes the room the tool rail leaves, rather than running underneath it.
