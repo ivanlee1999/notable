@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.21.0
+
+The page now takes the room the tool rail leaves, rather than running underneath it.
+
+- **The rail covered the edge of your page, and the title bar the first line.** The page was
+  fitted to the whole screen with the chrome drawn on top, so a rail docked left ate the left
+  margin and one docked right ate the right. Because the pen was already kept off those bands,
+  that strip was not merely hidden — you could not write there, and anything already written
+  there could never be shown. The page is now laid out beside the rail and below the title bar,
+  so all of it is yours.
+- **Hiding the rail gives the page the room back**, and it re-fits to the wider space. Showing
+  it again returns to the page you had.
+- Which edge the rail is docked to is unchanged, in Settings → General → Toolbar Position —
+  Left or Right dock it as a vertical rail, and the page follows it either way.
+
 ## 0.20.0
 
 The pages, outline and bookmarks panel had no button. It opened only on a three-finger swipe up,
