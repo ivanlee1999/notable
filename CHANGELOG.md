@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.23.0
+
+Which way the page turns is now yours to choose, and the page is fitted to match.
+
+- **Turn the page up and down, or side to side** — Settings › General › *Turn the page*. Dragging
+  past the bottom of a page asks for the next one and past the top for the previous; sideways
+  swiping is unchanged if that is how you prefer to read. Running off the end of the last page
+  makes a page, as it always has.
+- **The fit follows the direction.** Turning sideways shows the whole page, because a page you
+  cannot see all of is not one you can turn past — and nothing scrolls in that mode, so anything
+  off screen would be out of reach. Turning up and down fits the width instead and lets the page
+  run off the bottom, which is the way you are about to travel.
+
+This restores the vertical way through a notebook that 0.22.0 took away when a page stopped growing
+as you wrote.
+
 ## 0.22.0
 
 Writing to the bottom of a page used to make the page taller. It looked like you were moving onto a
