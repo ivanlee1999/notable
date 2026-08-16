@@ -2,23 +2,18 @@ package com.ethran.notable.editor.canvas
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import androidx.compose.ui.unit.dp
-import com.ethran.notable.data.datastore.GlobalAppSettings
-import com.ethran.notable.data.datastore.TOOLBAR_THICKNESS
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.drawing.OpenGLRenderer
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Operation
-import com.ethran.notable.editor.ui.editorTitleBarHeight
 import com.ethran.notable.editor.utils.DeviceCompat
-import com.ethran.notable.editor.utils.drawingSurface
 import com.ethran.notable.editor.utils.onSurfaceChanged
 import com.ethran.notable.editor.utils.onSurfaceDestroy
-import com.ethran.notable.ui.convertDpToPixel
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 
@@ -88,23 +83,10 @@ class DrawCanvas(
             fallbackStrokeSource.cancel()
             return
         }
-        val open = viewModel.toolbarState.value.isToolbarOpen
-        val toolbarThickness =
-            if (open) convertDpToPixel(TOOLBAR_THICKNESS.dp, context).toInt() else 0
-        val titleBarHeight =
-            if (open) convertDpToPixel(
-                editorTitleBarHeight(context.resources.configuration.screenWidthDp),
-                context
-            ).toInt()
-            else 0
-        val limitRect = drawingSurface(
-            position = GlobalAppSettings.current.toolbarPosition,
-            viewWidth = width,
-            viewHeight = height,
-            toolbarThickness = toolbarThickness,
-            titleBarHeight = titleBarHeight,
-        ).limit.toRect()
-        fallbackStrokeSource.onTouchEvent(event, limitRect)
+        // This view *is* the paper: the editor lays it out inside the chrome's inset, so there
+        // is no band of it to keep the pen off. Events arrive in view coordinates, so the whole
+        // view is the limit.
+        fallbackStrokeSource.onTouchEvent(event, Rect(0, 0, width, height))
     }
 
     @Suppress("RedundantOverride")

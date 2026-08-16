@@ -142,6 +142,13 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
  * docked left/right. [titleBarHeight] is the editor title bar, which runs along the top of
  * whatever the rail leaves. Both are hidden together, so pass 0 for both while the toolbar
  * is collapsed — the pen then has the whole sheet.
+ *
+ * The bands are measured against the **root** view rather than [view]'s own box, because the
+ * firmware places its rects on the screen, not inside a child. [view] is the writing surface,
+ * which the editor now lays out inside the chrome's inset — so its own width and height are
+ * already the paper's, and measuring them here would subtract the chrome a second time and
+ * arm the pen over a strip of page that is not there. Taking the root keeps the rectangle the
+ * firmware is handed exactly what it has always been.
  */
 fun setupSurface(
     view: View,
@@ -157,10 +164,11 @@ fun setupSurface(
     touchHelper.setRawDrawingEnabled(false)
     touchHelper.closeRawDrawing()
 
+    val screen = view.rootView
     val surface = drawingSurface(
         position = GlobalAppSettings.current.toolbarPosition,
-        viewWidth = view.width,
-        viewHeight = view.height,
+        viewWidth = screen.width,
+        viewHeight = screen.height,
         toolbarThickness = toolbarThickness,
         titleBarHeight = titleBarHeight,
     )

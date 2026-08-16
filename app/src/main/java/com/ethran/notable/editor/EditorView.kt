@@ -252,19 +252,35 @@ fun EditorView(
 
 
         InkaTheme {
-            EditorGestureReceiver(actions = editorControlTower)
-            EditorSurface(
-                viewModel = viewModel,
-                page = page,
-                history = history
-            )
-            SelectedBitmap(
-                context = context, controlTower = editorControlTower
-            )
-            // Both indicators hug an edge, so they are inset by everything the docked chrome
-            // covers — otherwise a left- or right-docked rail, or the title bar, sits on top
-            // of them.
+            // Everything the docked chrome covers: the rail's band, plus the title bar along
+            // the top of what it leaves.
             val chromeInset = editorChromeInset(toolbarState.isToolbarOpen)
+
+            // The page occupies what the chrome leaves, rather than running underneath it.
+            //
+            // The writing surface used to fill the screen with the rail drawn on top, so a page
+            // fitted to the full width had its outer edge permanently hidden — a left-docked
+            // rail ate the left margin, and the title bar the first line. The pen was already
+            // held off those bands, which only made the covered strip unreachable rather than
+            // merely hidden.
+            //
+            // Insetting the surface itself, rather than teaching the page a second origin, is
+            // what keeps the drawing pipeline honest: view coordinates *are* page coordinates
+            // here, so the surface being the paper means every existing conversion, dirty rect
+            // and scroll bound stays true. Resizing it re-fits the page (surfaceChanged →
+            // PageView.updateDimensions), which is why hiding the rail gives the page the room
+            // back.
+            Box(Modifier.padding(chromeInset)) {
+                EditorGestureReceiver(actions = editorControlTower)
+                EditorSurface(
+                    viewModel = viewModel,
+                    page = page,
+                    history = history
+                )
+                SelectedBitmap(
+                    context = context, controlTower = editorControlTower
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
