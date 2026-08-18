@@ -95,29 +95,23 @@ fun copyImageToDatabase(context: Context, fileUri: Uri, subfolder: String? = nul
 }
 
 
-// TODO move this to repository
 suspend fun deletePage(
     appRepository: AppRepository,
     pageId: String,
     filesDir: File,
     couchSync: CouchSyncController,
 ) = withContext(Dispatchers.IO) {
-    val page = appRepository.pageRepository.getById(pageId) ?: return@withContext
-    val proxy = appRepository.kvProxy
-    val settings = proxy.get(APP_SETTINGS_KEY, AppSettings.serializer())
-
-    // remove from book
+    // The database work — manifest, tombstone, outbox, row — is one transaction in the
+    // repository ([AppRepository.deletePageLocally]); what stays here is the device-local
+    // housekeeping around it.
+    val page = appRepository.deletePageLocally(pageId) ?: return@withContext
     if (page.notebookId != null) {
-        appRepository.bookRepository.removePage(page.notebookId, pageId)
-        // A manifest that merely stopped naming the page is not a deletion anyone else can read:
-        // `mergeNotebook` is an add-wins union, so the peer's copy appends it straight back. The
-        // tombstone is the fact that travels (protocol §6.6), and queueing the notebook is what
-        // sends it — nothing else here is going to mark this notebook dirty.
-        appRepository.deletedPageRepository.record(page.notebookId, listOf(pageId))
         couchSync.notePageDeleted(page.notebookId)
     }
 
     // remove from quick nav
+    val proxy = appRepository.kvProxy
+    val settings = proxy.get(APP_SETTINGS_KEY, AppSettings.serializer())
     if (settings != null && settings.quickNavPages.contains(pageId)) {
         proxy.setKv(
             APP_SETTINGS_KEY,
@@ -125,7 +119,6 @@ suspend fun deletePage(
             AppSettings.serializer()
         )
     }
-    appRepository.pageRepository.delete(pageId)
     coroutineScope {
         launch {
             val imgFileThumb = File(filesDir, "pages/previews/thumbs/$pageId")

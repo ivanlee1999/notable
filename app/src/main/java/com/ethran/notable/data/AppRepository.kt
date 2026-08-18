@@ -339,6 +339,37 @@ class AppRepository @Inject constructor(
     }
 
     /**
+     * Delete a page here, whole: the manifest stops naming it, the tombstone that publishes the
+     * removal is recorded, the page row goes, and the outbox entries land — one transaction, all
+     * or nothing.
+     *
+     * This used to live in dbUtils.deletePage (under a `TODO move this to repository`) as three
+     * separate transactions: removePage committed, then the tombstone, then the row delete. A
+     * crash between them silently un-happened the deletion — the page gone from the list with no
+     * tombstone recorded, so the peer's copy appended it straight back on the next merge, or a
+     * tombstone with the page still listed. The repository's own standard is one transaction
+     * ([deleteNotebookLocally]: "One transaction makes both happen or neither").
+     *
+     * Room joins nested transactions, so the repositories' own transactional methods compose here
+     * rather than committing on their own.
+     *
+     * @return the page that was deleted, or null if there was no such page. The caller uses its
+     * notebookId to nudge the sync scheduler — network work that stays outside the transaction.
+     */
+    suspend fun deletePageLocally(pageId: String): Page? = db.withTransaction {
+        val page = pageRepository.getById(pageId) ?: return@withTransaction null
+        if (page.notebookId != null) {
+            bookRepository.removePage(page.notebookId, pageId)
+            // A manifest that merely stopped naming the page is not a deletion anyone else can
+            // read: `mergeNotebook` is an add-wins union, so the peer's copy appends it straight
+            // back. The tombstone is the fact that travels (protocol §6.6).
+            deletedPageRepository.record(page.notebookId, listOf(pageId))
+        }
+        pageRepository.delete(pageId)
+        page
+    }
+
+    /**
      * Delete a notebook here and record the tombstone that will publish the deletion, in one
      * transaction.
      *

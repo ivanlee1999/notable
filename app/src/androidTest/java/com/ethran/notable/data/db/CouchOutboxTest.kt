@@ -428,6 +428,63 @@ class CouchOutboxTest {
         )
     }
 
+    /**
+     * The page-level deletion, whole: dbUtils.deletePage used to spread this over three
+     * transactions (manifest, tombstone, row delete), and a crash between them silently
+     * un-happened the deletion — a page gone from the list with no tombstone to publish the
+     * removal, so the peer's copy appended it straight back. One transaction now, checked in one
+     * shot: the manifest no longer names the page, the tombstone exists, and the outbox offers
+     * the notebook that carries both.
+     */
+    @Test
+    fun deleting_a_page_removes_it_records_its_tombstone_and_queues_the_notebook() = runBlocking {
+        val (notebookId, pageId) = seedNotebook()
+        repository.newPageInBook(notebookId, index = 1)
+        clearQueue()
+
+        val deleted = repository.deletePageLocally(pageId)
+
+        assertEquals(pageId, deleted?.id)
+        val notebook = repository.bookRepository.getById(notebookId)!!
+        assertTrue("the manifest must no longer name the page", pageId !in notebook.pageIds)
+        assertNull("the row must be gone", repository.pageRepository.getById(pageId))
+        assertEquals(
+            "the tombstone is what makes the removal travel",
+            listOf(pageId),
+            repository.deletedPageRepository.getByNotebook(notebookId).map { it.pageId },
+        )
+        // Only the notebook: the removal travels inside its manifest and deletedPageIds
+        // (protocol §6.6), and the page document itself is on its way out.
+        assertEquals(setOf(CouchDocId.notebook(notebookId)), queued())
+    }
+
+    @Test
+    fun deleting_a_page_that_does_not_exist_changes_nothing() = runBlocking {
+        val (notebookId, _) = seedNotebook()
+        clearQueue()
+
+        assertNull(repository.deletePageLocally(UUID.randomUUID().toString()))
+
+        assertEquals(emptySet<String>(), queued())
+        assertEquals(
+            emptyList<DeletedPage>(),
+            repository.deletedPageRepository.getByNotebook(notebookId),
+        )
+    }
+
+    @Test
+    fun deleting_a_quick_page_needs_no_tombstone_and_queues_nothing() = runBlocking {
+        val page = Page(notebookId = null)
+        repository.pageRepository.create(page)
+        clearQueue()
+
+        val deleted = repository.deletePageLocally(page.id)
+
+        assertEquals(page.id, deleted?.id)
+        assertNull(repository.pageRepository.getById(page.id))
+        assertEquals(emptySet<String>(), queued())
+    }
+
     @Test
     fun deleting_a_folder_records_its_tombstone_and_queues_it() = runBlocking {
         val folder = Folder(title = "Work")
