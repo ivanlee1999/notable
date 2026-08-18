@@ -56,6 +56,7 @@ class CouchSyncHost @Inject constructor(
 
     private val mutex = Mutex()
     private var stack: Stack? = null
+    private val tombstonesPruned = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val _documentState = MutableStateFlow<CouchDocumentState?>(null)
     override val documentState: StateFlow<CouchDocumentState?> = _documentState.asStateFlow()
@@ -203,6 +204,7 @@ class CouchSyncHost @Inject constructor(
      * notebook that has never seen a server still needs its tall pages divided on open.
      */
     suspend fun splitOversizedPages(notebookId: String): Set<String> {
+        pruneExpiredTombstonesOnce()
         val store = stack()?.store ?: RoomCouchStore(
             appRepository = appRepository,
             kvDao = kvDao,
@@ -214,6 +216,24 @@ class CouchSyncHost @Inject constructor(
             },
         )
         return store.splitOversizedPages(notebookId)
+    }
+
+    /**
+     * Prunes stroke and image tombstones past the protocol's 30-day horizon (§6.6, "Pruning") —
+     * the rows exist so an erasure can outlive a merge race, not so every page document grows
+     * with each sweep of the eraser for ever.
+     *
+     * Piggybacked on the first notebook open of the process rather than run per open: two
+     * indexed DELETEs are cheap, but hygiene has no business running hundreds of times a
+     * session. Deliberately not an edit — nothing is queued and no clock is bumped; the next
+     * ordinary push of each page carries the shorter list. Page tombstones and outline entries
+     * are never pruned (they hold structural identity the merge needs indefinitely).
+     */
+    private suspend fun pruneExpiredTombstonesOnce() {
+        if (!tombstonesPruned.compareAndSet(false, true)) return
+        appRepository.pruneExpiredTombstones(
+            cutoffMillis = System.currentTimeMillis() - TOMBSTONE_PRUNE_HORIZON_MS
+        )
     }
 
     // region Assembly
@@ -356,6 +376,9 @@ class CouchSyncHost @Inject constructor(
 
     private companion object {
         const val TAG = "CouchSync"
+
+        /** Thirty days, matching bopa's `CouchTombstones.prune` — one horizon per protocol. */
+        const val TOMBSTONE_PRUNE_HORIZON_MS = 30L * 24 * 60 * 60 * 1000
     }
 }
 

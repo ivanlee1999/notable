@@ -407,4 +407,18 @@ class AppRepository @Inject constructor(
         }
     }
 
+    /**
+     * Prunes stroke and image tombstones recorded before [cutoffMillis] — protocol §6.6,
+     * "Pruning". Deliberately not an edit: nothing is queued and no clock is bumped, so the
+     * shorter lists travel with each page's next ordinary push. Page tombstones
+     * ([deletedPageRepository]) and removed outline entries are never pruned — they carry
+     * structural identity the merge needs indefinitely.
+     */
+    suspend fun pruneExpiredTombstones(cutoffMillis: Long) {
+        db.withTransaction {
+            deletedStrokeRepository.deleteOlderThan(cutoffMillis)
+            deletedImageRepository.deleteOlderThan(cutoffMillis)
+        }
+    }
+
 }
