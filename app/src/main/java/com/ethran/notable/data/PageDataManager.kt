@@ -1002,19 +1002,40 @@ class PageDataManager @Inject constructor(
     fun recomputeHeight(pageId: String, sheet: PageSize = getSheet(pageId)): Int {
         val sheetHeight = sheet.height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
-        // snapshot, which must never run with this hot drawing-path lock held.
-        val measured = synchronized(lock) {
-            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
+        // snapshot, which must never run with this hot drawing-path lock held. Both extents are
+        // re-measured together: every trigger for one ("this page's content changed") is a trigger
+        // for the other.
+        val (measuredHeight, measuredWidth) = synchronized(lock) {
+            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId)) to
+                PageViewportBounds.contentExtent(sheet.width, rightEdgesLocked(pageId))
         }
         // Grow-stop: a page never gets taller than its sheet, or than it already was. The rule —
         // and why the first measurement of a session must come through unclamped — lives with its
         // tests in [PageHeightGrowStop].
-        val newHeight = PageHeightGrowStop.clamp(measured, sheetHeight, getPageHeight(pageId))
+        val newHeight = PageHeightGrowStop.clamp(measuredHeight, sheetHeight, getPageHeight(pageId))
         viewport.setHeight(pageId, newHeight)
+        // The horizontal twin, same rule, same reasons: never wider than the sheet or than the
+        // page already was this session — but a page already holding ink past its sheet's right
+        // edge (written on a wider screen before page sizes) keeps that extent reachable. Without
+        // this, PageSplit stamping a sheet onto a formerly-endless page turned its wide ink from
+        // off-page into unreachable: the hard bound clamped the pan at the sheet and the zoom
+        // floor forbade zooming out to it.
+        val newWidth = PageHeightGrowStop.clamp(measuredWidth, sheet.width, getPageWidth(pageId))
+        viewport.setWidth(pageId, newWidth)
         return newHeight
     }
 
-    /** The scrollable width, by the same rule as [recomputeHeight]. */
+    /**
+     * The session's pannable width for [pageId], or null before its first measurement.
+     * Maintained by [recomputeHeight] alongside the height, under the same grow-stop.
+     */
+    fun getPageWidth(pageId: String): Int? = viewport.width(pageId)
+
+    /**
+     * The raw measured width — sheet or ink, whichever reaches further — with no session clamp.
+     * [PageView.pannableWidth] falls back to this before the first [recomputeHeight] of a session
+     * has stored a clamped width.
+     */
     fun computeWidth(pageId: String): Int = synchronized(lock) {
         PageViewportBounds.contentExtent(getSheet(pageId).width, rightEdgesLocked(pageId))
     }
@@ -1818,8 +1839,9 @@ class PageDataManager @Inject constructor(
 }
 
 /**
- * The grow-stop for a page's scrollable height, on its own so the rule is testable without the
- * cache around it.
+ * The grow-stop for a page's scrollable extent, on its own so the rule is testable without the
+ * cache around it. Named for the height it was written for, but the rule is axis-agnostic and
+ * clamps the pannable width the same way (measured width, sheet width, session width).
  *
  * A page never gets taller than its sheet, or than it already was. Writing near the bottom used to
  * extend the page, which is how a notebook ended up with screenfuls of notes that were not pages —

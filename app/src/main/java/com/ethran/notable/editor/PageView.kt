@@ -738,21 +738,28 @@ class PageView(
 
 
     /**
-     * How far right the view may reach, in page units.
+     * How far right the view may reach, in page units: the sheet, or the ink, whichever reaches
+     * further — held by the same grow-stop the vertical extent uses.
      *
-     * On a page that declares a size this is the sheet's own width, full stop — there is no canvas
-     * beyond the paper to pan into, which is what makes the page edge an edge rather than a
-     * suggestion.
+     * This used to be the sheet's width, full stop, for any page that declared a size. But
+     * PageSplit stamps a sheet onto every page it touches without moving or clipping x, so a
+     * formerly-endless page holding ink past the new sheet's right edge became a declared page
+     * whose ink was *unreachable*: the pan clamped at the sheet and the zoom floor forbade zooming
+     * out to it. The vertical axis got its legacy exemption for exactly this (see
+     * [PageDataManager.recomputeHeight]); this is the missing horizontal twin. A declared page
+     * whose content lives within its sheet still clamps at the sheet — the grow-stop means new
+     * writes at the edge cannot ratchet it wider — while one holding wider legacy ink extends far
+     * enough to reach it.
      *
-     * An undeclared page has no such edge, so it keeps the old rule: the sheet or the ink,
-     * whichever reaches further, so ink written past this screen's width stays reachable.
+     * Before the session's first measurement lands, falls back to the raw measured extent, which
+     * is the sheet for any page whose ink is inside it.
      *
      * Not private: the page-cut selection spans exactly this width (see `handleSelect`), and the
      * definition of "how wide the page is" must live in one place.
      */
     fun pannableWidth(): Float =
-        if (hasHardBounds) sheet.width.toFloat()
-        else pageDataManager.computeWidth(currentPageId).toFloat()
+        (pageDataManager.getPageWidth(currentPageId)
+            ?: pageDataManager.computeWidth(currentPageId)).toFloat()
 
     private fun maxHorizontalScroll(zoom: Float = zoomLevel.value): Float =
         PageViewportBounds.maxHorizontalScroll(pannableWidth(), viewWidth, zoom)
