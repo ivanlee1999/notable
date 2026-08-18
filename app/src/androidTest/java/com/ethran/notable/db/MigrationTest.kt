@@ -3,6 +3,7 @@ package com.ethran.notable.db
 import android.content.Context
 import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -15,6 +16,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -293,7 +297,7 @@ class MigrationTest {
     }
 
     /**
-     * 38 -> 39 adds the nullable `title` column to `page`, so quick pages can be named.
+     * 38 -> 39 adds the nullable `title` column to `page`, so a page can be named.
      *
      * The column is nullable rather than defaulted to a string, and every page that predates the
      * feature has to come out the other side as *unnamed* — the library shows the creation date in
@@ -665,5 +669,171 @@ class MigrationTest {
         }
 
         roomDb.close()
+    }
+
+    /**
+     * 47 -> 48 gives every loose page a notebook and takes away the column that let it go without
+     * one — see [com.ethran.notable.data.db.MIGRATION_47_48].
+     *
+     * The three cases that matter are all seeded here, because they diverge:
+     *  - a **named** quick page keeps its own name as the notebook title;
+     *  - an **unnamed** one is titled with its creation date, which is what the library already
+     *    printed under its thumbnail, so the shelf reads afterwards much as the strip read before;
+     *  - a page that **already had a notebook** must come through completely untouched — the
+     *    migration rebuilds the whole table, so "did the other 200 pages survive" is the question
+     *    this half is really asking.
+     *
+     * The outbox assertions are the point of the migration, not a detail. These documents have
+     * never been offered to the server even once, so nothing else will ever queue them; unqueued,
+     * a migrated note would sit in the library looking ordinary and silently never travel.
+     */
+    @Test(timeout = 60000)
+    @Throws(IOException::class)
+    fun migrate47To48_givesEveryLoosePageANotebook() {
+        val dbName = "migration-test-48"
+        // 12 Aug 2026 12:00 UTC — the createdAt the untitled page's notebook is named after.
+        val createdAt = 1786276800000L
+
+        val oldDb = helper.createDatabase(dbName, 47)
+        oldDb.execSQL(
+            """
+            INSERT INTO Folder (id, title, parentFolderId, createdAt, updatedAt)
+            VALUES ('folder1', 'Work', NULL, 1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO Notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight,
+                bookmarks, outline, linkedExternalUri, createdAt, updatedAt, deletedAt, updatedBy)
+            VALUES ('notebook1', 'Kept', NULL, '["page1"]', NULL, 'blank', 'native', NULL, NULL,
+                '[]', '[]', NULL, 1620000000000, 1620000000000, NULL, NULL)
+            """.trimIndent()
+        )
+        // A page that already belongs to a notebook: must survive the table rebuild verbatim.
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType, parentFolderId,
+                title, pageWidth, pageHeight, createdAt, updatedAt, updatedBy)
+            VALUES ('page1', 42, 'notebook1', 'grid', 'native', NULL, 'Chapter 1', 1240, 1754,
+                1620000000000, 1620000000005, 'ipad')
+            """.trimIndent()
+        )
+        // A named quick page, parked in a folder.
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType, parentFolderId,
+                title, pageWidth, pageHeight, createdAt, updatedAt, updatedBy)
+            VALUES ('loose1', 7, NULL, 'dotted', 'native', 'folder1', 'Groceries', 1240, 1754,
+                1620000000000, 1620000000000, NULL)
+            """.trimIndent()
+        )
+        // An unnamed quick page at the library root.
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType, parentFolderId,
+                title, pageWidth, pageHeight, createdAt, updatedAt, updatedBy)
+            VALUES ('loose2', 0, NULL, 'blank', 'native', NULL, NULL, NULL, NULL,
+                $createdAt, $createdAt, NULL)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // The notebook page came through the rebuild with every column intact.
+        migratedDb.query(
+            "SELECT scroll, notebookId, background, title, pageWidth, updatedAt, updatedBy " +
+                "FROM Page WHERE id = 'page1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(42, it.getInt(it.getColumnIndexOrThrow("scroll")))
+            assertEquals("notebook1", it.getString(it.getColumnIndexOrThrow("notebookId")))
+            assertEquals("grid", it.getString(it.getColumnIndexOrThrow("background")))
+            assertEquals("Chapter 1", it.getString(it.getColumnIndexOrThrow("title")))
+            assertEquals(1240, it.getInt(it.getColumnIndexOrThrow("pageWidth")))
+            assertEquals(1620000000005L, it.getLong(it.getColumnIndexOrThrow("updatedAt")))
+            assertEquals("ipad", it.getString(it.getColumnIndexOrThrow("updatedBy")))
+        }
+
+        // Nothing is loose any more — the column cannot even express it.
+        migratedDb.query("SELECT COUNT(*) FROM Page WHERE notebookId IS NULL").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0, it.getInt(0))
+        }
+        migratedDb.query("SELECT COUNT(*) FROM pragma_table_info('Page') WHERE name = 'parentFolderId'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0, it.getInt(0))
+        }
+
+        // The named one kept its name and its folder, and its notebook inherited its sheet and
+        // template so a second page added to it will match the first.
+        val named = notebookOf(migratedDb, "loose1")
+        assertEquals("Groceries", named.title)
+        assertEquals("folder1", named.parentFolderId)
+        assertEquals("dotted", named.defaultBackground)
+        assertEquals(1240, named.defaultPageWidth)
+        assertEquals("[\"loose1\"]", named.pageIds)
+        assertEquals("loose1", named.openPageId)
+
+        // The unnamed one is titled with its creation date, in the device's locale, exactly as
+        // the library used to caption it.
+        val unnamed = notebookOf(migratedDb, "loose2")
+        assertEquals(
+            SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(createdAt)),
+            unnamed.title,
+        )
+        assertEquals(null, unnamed.parentFolderId)
+
+        // Both notebooks and both pages are queued: this is the moment they join sync.
+        val queued = mutableSetOf<String>()
+        migratedDb.query("SELECT docId FROM couch_outbox").use {
+            while (it.moveToNext()) queued += it.getString(0)
+        }
+        assertEquals(
+            setOf(
+                "notebook:${named.id}", "page:loose1",
+                "notebook:${unnamed.id}", "page:loose2",
+            ),
+            queued,
+        )
+
+        roomDb.close()
+    }
+
+    private data class MigratedNotebook(
+        val id: String,
+        val title: String,
+        val parentFolderId: String?,
+        val defaultBackground: String,
+        val defaultPageWidth: Int?,
+        val pageIds: String,
+        val openPageId: String?,
+    )
+
+    /** The notebook 47 -> 48 built around [pageId]. */
+    private fun notebookOf(db: SupportSQLiteDatabase, pageId: String): MigratedNotebook {
+        val notebookId = db.query("SELECT notebookId FROM Page WHERE id = '$pageId'").use {
+            assertTrue("no row for page $pageId", it.moveToFirst())
+            it.getString(0)
+        }
+        return db.query(
+            "SELECT id, title, parentFolderId, defaultBackground, defaultPageWidth, pageIds, " +
+                "openPageId FROM Notebook WHERE id = '$notebookId'"
+        ).use {
+            assertTrue("no notebook for page $pageId", it.moveToFirst())
+            MigratedNotebook(
+                id = it.getString(0),
+                title = it.getString(1),
+                parentFolderId = if (it.isNull(2)) null else it.getString(2),
+                defaultBackground = it.getString(3),
+                defaultPageWidth = if (it.isNull(4)) null else it.getInt(4),
+                pageIds = it.getString(5),
+                openPageId = if (it.isNull(6)) null else it.getString(6),
+            )
+        }
     }
 }

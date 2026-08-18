@@ -50,12 +50,15 @@ class EmptyIdEdgeCaseTest {
 
     @Test(timeout = 30000)
     fun insertAndRead_pageWithEmptyId() = runBlocking {
+        // The page -> notebook foreign key is real, so the owner has to exist first.
+        notebookDao.create(Notebook(id = "notebook-1"))
         val emptyIdPage = Page(
             id = "", // Empty ID
+            notebookId = "notebook-1",
             background = "blank",
             backgroundType = "native"
         )
-        
+
         pageDao.create(emptyIdPage)
         
         val loaded = pageDao.getById("")

@@ -251,7 +251,7 @@ class PageView(
 
     /**
      * The next / previous page of the notebook, as last resolved by the neighbor prefetch.
-     * Null for a quick page, at either end of the book, or before the prefetch has run.
+     * Null at either end of the book, or before the prefetch has run.
      */
     val nextPageId: String? get() = pageDataManager.nextPageIdOf(currentPageId)
     val previousPageId: String? get() = pageDataManager.previousPageIdOf(currentPageId)

@@ -47,6 +47,7 @@ fun handleFileSaving(
 suspend fun importPdf(
     fileToSave: File,
     options: ImportOptions,
+    notebookId: String,
     savePageToDatabase: suspend (PageWithData) -> Unit
 ): String {
     log.v("Importing PDF from")
@@ -60,7 +61,8 @@ suspend fun importPdf(
     for (i in 0 until numberOfPages) {
         val sheet = sheets.getOrNull(i)
         val page = Page(
-            notebookId = options.saveToBookId,
+            // The notebook is created before the import starts; a page has nowhere else to go.
+            notebookId = notebookId,
             background = fileToSave.toString(),
             backgroundType = if (options.linkToExternalFile) BackgroundType.AutoPdf.key
             else BackgroundType.Pdf(i).key,

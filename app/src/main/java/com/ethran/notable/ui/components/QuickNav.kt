@@ -847,7 +847,7 @@ fun QuickNavContentPreview() {
     QuickNavContent(
         appRepository = null,
         uiState = QuickNavUiState(
-            pinnedPages = listOf(Page(id = "page1")),
+            pinnedPages = listOf(Page(id = "page1", notebookId = "book1")),
             isLoading = false,
             currentPageId = "page1",
             folderId = "folder1",

@@ -52,7 +52,7 @@ fun handleDraw(
                                 page, created, strokeSize, color, pen, touchPoints
                             )
                         } else {
-                            // A quick page has no notebook to put a next page in.
+                            // The open page moved on under us, so there is nothing to extend.
                             page.snackManager.showOrUpdateSnack(
                                 SnackConf(text = "The page ends here", duration = 2000)
                             )

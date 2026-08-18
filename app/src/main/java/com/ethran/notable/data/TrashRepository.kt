@@ -47,10 +47,9 @@ import javax.inject.Singleton
  *     what stops a descendant from coming back on the next merge.
  *
  * Pages carry no tombstone of their own: a page has no lifecycle apart from its notebook's
- * `pageIds` (protocol §6.4), so tombstoning the notebook is what removes them everywhere. Quick
- * pages — `notebookId == null` — are not offered for sync at all, so they only ever need the local
- * cascade. Both are still counted in [DeletionScope] because the number the user needs before
- * confirming is "how much writing is this", not "how many documents".
+ * `pageIds` (protocol §6.4), so tombstoning the notebook is what removes them everywhere. They are
+ * still counted in [DeletionScope] because the number the user needs before confirming is "how
+ * much writing is this", not "how many documents".
  */
 @Singleton
 class TrashRepository @Inject constructor(
@@ -74,7 +73,7 @@ class TrashRepository @Inject constructor(
      * Everything a deletion would take, gathered before anything is destroyed.
      *
      * [folders] and [notebooks] include the target itself, so a plain notebook scope is one
-     * notebook and no folders. [pageCount] spans notebook pages and quick pages together.
+     * notebook and no folders. [pageCount] is every page under it.
      */
     data class DeletionScope(
         val folders: List<Folder> = emptyList(),
@@ -119,7 +118,6 @@ class TrashRepository @Inject constructor(
                 notebooks += notebook
                 pages += pageRepository.getPageIdsForNotebook(notebook.id).size
             }
-            pages += pageRepository.getSinglePageIdsInFolder(current).size
         }
 
         return DeletionScope(folders = folders, notebooks = notebooks, pageCount = pages)

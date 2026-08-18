@@ -105,9 +105,7 @@ suspend fun deletePage(
     // repository ([AppRepository.deletePageLocally]); what stays here is the device-local
     // housekeeping around it.
     val page = appRepository.deletePageLocally(pageId) ?: return@withContext
-    if (page.notebookId != null) {
-        couchSync.notePageDeleted(page.notebookId)
-    }
+    couchSync.notePageDeleted(page.notebookId)
 
     // remove from quick nav
     val proxy = appRepository.kvProxy

@@ -724,8 +724,9 @@ class PageDataManager @Inject constructor(
      * The page after [pageId], created if the notebook does not have one yet — the path that
      * makes writing past the last page's end mean "keep writing", the way turning past it
      * already does. Goes through the same transaction the page turn uses, records the new
-     * neighbor so the seam can draw it immediately, and returns null only for a page outside
-     * any notebook (a quick page), for which there is no "next".
+     * neighbor so the seam can draw it immediately, and returns null only when [pageId] is not
+     * the page currently loaded — there is then no row in hand to say which notebook to add to,
+     * and reading one here would race the load that is already on its way.
      */
     suspend fun ensureNextPage(pageId: String): String? {
         val bookId = pageFromDb?.takeIf { it.id == pageId }?.notebookId ?: return null
@@ -1016,7 +1017,8 @@ class PageDataManager @Inject constructor(
             currentPageNumber = -1
             return
         }
-        pageFromDb?.notebookId?.let { notebookId ->
+        pageFromDb?.let { page ->
+            val notebookId = page.notebookId
             currentPageNumber = appRepository.getPageNumber(notebookId, pageId)
             // Known before anything clamps a scroll or draws a seam, not only after the full
             // load: the entry clamp runs against the continuous-scroll bound, and with the

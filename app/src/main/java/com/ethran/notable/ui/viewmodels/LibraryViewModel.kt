@@ -10,7 +10,6 @@ import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
-import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.io.ExportEngine
@@ -53,7 +52,6 @@ data class LibraryUiState(
     val breadcrumbFolders: List<Folder> = emptyList(),
     val folders: List<Folder> = emptyList(),
     val books: List<Notebook> = emptyList(),
-    val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
     /** A sync is running right now, whichever backend is driving it. */
     val isSyncing: Boolean = false,
@@ -88,7 +86,6 @@ private data class LibraryScreenState(
 private data class LibraryDatabaseState(
     val folders: List<Folder> = emptyList(),
     val books: List<Notebook> = emptyList(),
-    val singlePages: List<Page> = emptyList(),
     val syncBadges: Map<String, SyncBadge> = emptyMap(),
     val isSyncing: Boolean = false,
     val folderBookCounts: Map<String, Int> = emptyMap(),
@@ -127,8 +124,6 @@ class LibraryViewModel @Inject constructor(
         _folderId.flatMapLatest { id -> folderRepository.getAllInFolder(id).asFlow() }
     private val _booksFlow =
         _folderId.flatMapLatest { id -> bookRepository.getAllInFolder(id).asFlow() }
-    private val _singlePagesFlow =
-        _folderId.flatMapLatest { id -> pageRepository.getSinglePagesInFolder(id).asFlow() }
 
     // Counted across the whole table rather than per visible folder: one flow covers every
     // folder row on screen, instead of one query each.
@@ -190,23 +185,22 @@ class LibraryViewModel @Inject constructor(
     // 2. Group the database flows (plus per-notebook sync badges) semantically
     /**
      * The folder the user is standing in, or — while a search is running — what the search found
-     * anywhere in the library. Quick pages drop out of a search: they are searched by nothing,
-     * having no title of their own to match.
+     * anywhere in the library.
      */
     private val _listingFlow = combine(
-        _foldersFlow, _booksFlow, _singlePagesFlow, _searchResultsFlow
-    ) { folders, books, pages, found ->
+        _foldersFlow, _booksFlow, _searchResultsFlow
+    ) { folders, books, found ->
         // Null, not empty: a search that found nothing has to show nothing, and falling back to
         // the folder's contents would look like the search had simply been ignored.
-        if (found == null) Triple(folders, books, pages)
-        else Triple(found.folders, found.books, emptyList<Page>())
+        if (found == null) folders to books
+        else found.folders to found.books
     }
 
     private val _dbDataFlow = combine(
         _listingFlow, _syncStatusFlow, _countsFlow
-    ) { (folders, books, pages), (badges, syncing), (folderCounts, trashed, lastEdited) ->
+    ) { (folders, books), (badges, syncing), (folderCounts, trashed, lastEdited) ->
         LibraryDatabaseState(
-            folders, books, pages, badges, syncing, folderCounts, trashed, lastEdited
+            folders, books, badges, syncing, folderCounts, trashed, lastEdited
         )
     }
 
@@ -227,7 +221,6 @@ class LibraryViewModel @Inject constructor(
             breadcrumbFolders = screen.breadcrumbFolders,
             folders = dbData.folders,
             books = dbData.books,
-            singlePages = dbData.singlePages,
             syncBadges = dbData.syncBadges,
             isSyncing = dbData.isSyncing,
             folderBookCounts = dbData.folderBookCounts,

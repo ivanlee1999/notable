@@ -160,6 +160,33 @@ class RoomCouchStoreTest {
         createdAt = stamp(0), updatedAt = stamp(updatedAt), updatedBy = by,
     )
 
+    /**
+     * An orphan: a page document naming no notebook. §6.4 gives pages no lifecycle of their own,
+     * so nothing here will ever name it and nothing could show it — bopa destroys such files on
+     * sight, and this store drops them for the same reason. It is not hypothetical: a stock
+     * upstream Notable's quick pages are exactly this shape on the wire.
+     */
+    @Test
+    fun aPageBelongingToNoNotebookIsDropped() {
+        val pageId = CouchDocId.page("orphan")
+
+        store.apply(
+            pageId,
+            CouchDocBody.Page(
+                CouchPage(
+                    notebookId = null, strokes = listOf(stroke("s1", at = 1)),
+                    createdAt = stamp(0), updatedAt = stamp(5), updatedBy = "boox",
+                )
+            )
+        )
+
+        runBlocking {
+            assertNull(repository.pageRepository.getById("orphan"))
+        }
+        // And no placeholder notebook was invented to hold it.
+        assertEquals(emptyList<Notebook>(), runBlocking { repository.bookRepository.getAll() })
+    }
+
     private val pictureBytes = "PNG-ish bytes, hashed exactly as they are".toByteArray()
     private val pictureAssetId get() = CouchAssetId.forBytes(pictureBytes)
 

@@ -48,7 +48,7 @@ data class AppSettings(
     val version: Int,
     val monitorBgFiles: Boolean = false,
     val defaultNativeTemplate: String = "blank",
-    // The paper size new notebooks and quick pages are created with, as a PageSizePreset key.
+    // The paper size new notebooks are created with, as a PageSizePreset key.
     // Only consulted at creation: from then on the page's own pageWidth/pageHeight decides, on
     // this app and on the iPad alike. Pages created before page sizes existed declare none and
     // keep falling back to the screen width they were written against.

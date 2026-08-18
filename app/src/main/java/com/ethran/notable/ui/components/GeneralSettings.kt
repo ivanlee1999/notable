@@ -23,7 +23,7 @@ fun GeneralSettings(
             ), value = settings.defaultNativeTemplate, onValueChange = {
                 onSettingsChange(settings.copy(defaultNativeTemplate = it))
             })
-        // Applies to notebooks and quick pages created from now on. Existing pages keep the sheet
+        // Applies to notebooks created from now on. Existing pages keep the sheet
         // they were written against — changing a page's size would move its ink relative to the
         // paper — so this is not a way to reflow what already exists.
         SelectorRow(

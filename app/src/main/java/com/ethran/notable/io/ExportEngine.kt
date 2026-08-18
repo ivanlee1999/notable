@@ -256,9 +256,6 @@ class ExportEngine @Inject constructor(
      *      folder: Documents/notable/<folderHierarchy>/BookTitle
      *      file:   BookTitle-p<PageNumber>   (falls back to BookTitle-p? if no number)
      *
-     *  Page export (no book = quick page):
-     *      folder: Documents/notable/<folderHierarchyFromPageParent?>
-     *      file:   quickpage-<timestamp>
      *
      * - If options.saveToUri is provided, it must point to a directory (tree/document folder Uri or file:// directory).
      */
@@ -292,8 +289,7 @@ class ExportEngine @Inject constructor(
      * Rules:
      * - Book (PDF/XOPP): folder hierarchy of the book.
      * - Book (PNG/JPEG): folder hierarchy + a folder for the book itself.
-     * - Page (in a book): folder hierarchy + a folder for the book itself.
-     * - Page (Quick Page): folder hierarchy of the page.
+     * - Page: folder hierarchy + a folder for the book it belongs to.
      *
      * @return A path without leading/trailing slashes, or an empty string.
      */
@@ -328,19 +324,14 @@ class ExportEngine @Inject constructor(
                 val page = pageRepo.getById(target.pageId)
                     ?: run { log.e("Page ID not found"); return "" }
 
-                // Check if the page belongs to a book.
-                val book = page.notebookId?.let { bookRepo.getById(it) }
+                val book = bookRepo.getById(page.notebookId)
+                    ?: run { log.e("Book ID not found"); return "" }
 
-                if (book != null) {
-                    // Page is inside a book: create path from the book's hierarchy + book title.
-                    val basePath = buildFolderPath(book.parentFolderId)
-                    val bookTitleFolder = sanitizeFileName(book.title)
-                    listOfNotNull(basePath.takeIf { it.isNotEmpty() }, bookTitleFolder)
-                        .joinToString("/")
-                } else {
-                    // This is a "Quick Page": use its own folder hierarchy.
-                    buildFolderPath(page.parentFolderId)
-                }
+                // The page's path is the book's: a page is filed wherever its notebook is.
+                val basePath = buildFolderPath(book.parentFolderId)
+                val bookTitleFolder = sanitizeFileName(book.title)
+                listOfNotNull(basePath.takeIf { it.isNotEmpty() }, bookTitleFolder)
+                    .joinToString("/")
             }
         }
     }
@@ -361,8 +352,7 @@ class ExportEngine @Inject constructor(
      * Returns: fileNameWithoutExtension
      *
      * Book export: BookTitle
-     * Page export in book: BookTitle-p<PageNumber> (or p?)
-     * Quick page: quickpage-<timestamp>
+     * Page export: BookTitle-p<PageNumber> (or p?)
      */
     suspend fun createFileName(target: ExportTarget): String {
         return when (target) {
@@ -376,18 +366,13 @@ class ExportEngine @Inject constructor(
                 val page =
                     pageRepo.getById(target.pageId) ?: run { log.e("Page ID not found"); return "" }
 
-                val book = page.notebookId?.let { bookRepo.getById(it) }
+                val book = bookRepo.getById(page.notebookId)
+                    ?: run { log.e("Book ID not found"); return "" }
 
-                if (book != null) {
-                    // Page inside a book
-                    val bookTitle = sanitizeFileName(book.title)
-                    val pageNumber = getPageNumber(book.id, page.id).plus(1)
-                    val pageToken = if (pageNumber >= 1) "p$pageNumber" else "p_"
-                    "$bookTitle-$pageToken"
-                } else {
-                    val timeStamp = getReadableUtcTimestamp()
-                    "quickpage-$timeStamp"
-                }
+                val bookTitle = sanitizeFileName(book.title)
+                val pageNumber = getPageNumber(book.id, page.id).plus(1)
+                val pageToken = if (pageNumber >= 1) "p$pageNumber" else "p_"
+                "$bookTitle-$pageToken"
             }
         }
     }

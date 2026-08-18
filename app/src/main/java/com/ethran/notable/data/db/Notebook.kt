@@ -186,7 +186,8 @@ class BookRepository @Inject constructor(
         return notebookDao.getAllFlow()
     }
 
-    suspend fun create(notebook: Notebook) {
+    /** @return the id of the notebook's first page, so a caller can open straight onto it. */
+    suspend fun create(notebook: Notebook): String {
         val page = Page(
             notebookId = notebook.id,
             background = notebook.defaultBackground,
@@ -205,6 +206,7 @@ class BookRepository @Inject constructor(
             // naming a page the server had never been offered.
             outbox.queue(listOf(CouchDocId.notebook(notebook.id), CouchDocId.page(page.id)))
         }
+        return page.id
     }
 
     suspend fun createEmpty(notebook: Notebook) {

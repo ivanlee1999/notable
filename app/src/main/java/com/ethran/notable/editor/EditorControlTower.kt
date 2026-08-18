@@ -117,8 +117,8 @@ class EditorControlTower(
             if (!edgeTurnTaken) {
                 edgeTurnTaken = true
                 scope.launch(Dispatchers.IO) {
-                    // Null for a quick page (no notebook to add to) — then there is simply
-                    // nothing past the end, as before.
+                    // Null only if the loaded page has moved on under us, in which case this
+                    // drag is about a page that is no longer open and has nothing to extend.
                     if (page.pageDataManager.ensureNextPage(page.currentPageId) != null) {
                         // Redraw so the seam appears under the still-moving finger.
                         CanvasEventBus.forceUpdate.emit(null)

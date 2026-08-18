@@ -328,7 +328,8 @@ class XoppFile @Inject constructor(
      * **Caller contract** (replacing the old single `savePageToDatabase` lambda):
      *
      * 1. [onPageCreated]  — called once when a `<page>` element opens. Insert the [Page]
-     *    record into the database here so strokes (which reference `page.id`) can follow.
+     *    record into the database here so strokes (which reference `page.id`) can follow. It is
+     *    already stamped with [notebookId], which has to exist before the import starts.
      *
      * 2. [onStrokeBatch]  — called one or more times per page with up to
      *    [STROKE_SAVE_BATCH_SIZE] strokes. Use a bulk/batch Room insert here. Each call hands
@@ -355,6 +356,7 @@ class XoppFile @Inject constructor(
      */
     suspend fun importBook(
         uri: Uri,
+        notebookId: String,
         onPageCreated: suspend (Page) -> Unit,
         onStrokeBatch: suspend (List<Stroke>) -> Unit,
         onPageFinalized: suspend (pageId: String, images: List<Image>) -> Unit,
@@ -379,6 +381,7 @@ class XoppFile @Inject constructor(
                             // declare a real sheet instead of inheriting this tablet's screen.
                             val sheet = parsePageSheet(parser)
                             val page = Page(
+                                notebookId = notebookId,
                                 pageWidth = sheet?.width,
                                 pageHeight = sheet?.height
                             )

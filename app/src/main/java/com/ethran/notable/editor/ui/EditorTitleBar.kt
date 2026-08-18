@@ -69,11 +69,8 @@ fun EditorTitleBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Back goes one level out, not all the way home: out of a notebook is its page
-            // list, out of a loose page is the Library it was made in.
-            val backTarget =
-                if (uiState.isBookActive) ToolbarAction.NavigateToPages
-                else ToolbarAction.NavigateToLibrary
+            // Back goes one level out, not all the way home: out of a notebook is its page list.
+            val backTarget = ToolbarAction.NavigateToPages
             Icon(
                 imageVector = FeatherIcons.ChevronLeft,
                 contentDescription = stringResource(R.string.editor_title_bar_back),
@@ -84,8 +81,8 @@ fun EditorTitleBar(
             )
 
             Text(
-                text = uiState.notebookTitle
-                    ?: stringResource(R.string.home_quick_note),
+                // Empty only for the frame before the page has loaded.
+                text = uiState.notebookTitle.orEmpty(),
                 fontSize = metrics.bodySize,
                 fontWeight = FontWeight.Bold,
                 color = Kaleido.Ink,
@@ -94,15 +91,12 @@ fun EditorTitleBar(
                 modifier = Modifier.weight(1f, fill = true),
             )
 
-            // Only a notebook has a position to be at; "1 / 1" on a loose page is noise.
-            if (uiState.isBookActive) {
-                Text(
-                    text = uiState.pageNumberInfo.replace("/", " / "),
-                    fontSize = 11.sp,
-                    color = Kaleido.Muted,
-                    maxLines = 1,
-                )
-            }
+            Text(
+                text = uiState.pageNumberInfo.replace("/", " / "),
+                fontSize = 11.sp,
+                color = Kaleido.Muted,
+                maxLines = 1,
+            )
 
             TitleBarButton(
                 icon = FeatherIcons.FileText,
@@ -160,7 +154,6 @@ private fun EditorTitleBarPreview() {
     EditorTitleBar(
         uiState = ToolbarUiState(
             notebookId = "book1",
-            isBookActive = true,
             notebookTitle = "Field Notes",
             pageNumberInfo = "3/128",
         ),

@@ -74,7 +74,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 47,
+    version = 48,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -96,7 +96,7 @@ class Converters {
         // Adds the nullable `remoteDirEtag` / `remoteDirServerKey` bulk-detection baseline columns.
         AutoMigration(36, 37),
         // 37 -> 38 is hand-written: see MIGRATION_37_38 in Migrations.kt.
-        // Adds the nullable `title` column to `page` — quick pages the user can name.
+        // Adds the nullable `title` column to `page`, so a page can be named.
         AutoMigration(38, 39),
         // Adds the `DeletedPage` / `DeletedImage` tombstone tables.
         AutoMigration(39, 40),
@@ -115,6 +115,7 @@ class Converters {
         // Notebook.bookmarks / Notebook.outline: NOT NULL JSON columns defaulting to `[]`, so Room
         // adds them itself and every existing notebook reads as having neither.
         AutoMigration(46, 47),
+        // 47 -> 48 is hand-written: see MIGRATION_47_48 in Migrations.kt.
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

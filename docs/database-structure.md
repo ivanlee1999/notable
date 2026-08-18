@@ -21,7 +21,8 @@ Contents:
   - Hierarchical container. Fields in code: `id` (String UUID PK), `title`, `parentFolderId` (nullable FK to Folder), `createdAt`, `updatedAt`.
 
 - Page https://github.com/Ethran/notable/blob/main/app/src/main/java/com/ethran/notable/data/db/Page.kt
-  - A document entry with optional notebook grouping. Fields: `id` (String UUID PK), `scroll`, `notebookId` (nullable FK), `background`, `backgroundType`, `parentFolderId` (nullable FK to Folder), `createdAt`, `updatedAt`.
+  - One sheet of a notebook. Every page belongs to one — `notebookId` is NOT NULL and is the only foreign key on the table. A page has no folder of its own; it is filed wherever its notebook is filed. Fields: `id` (String UUID PK), `scroll`, `notebookId` (FK to Notebook), `background`, `backgroundType`, `title` (nullable), `pageWidth`/`pageHeight` (nullable, page units), `createdAt`, `updatedAt`, `updatedBy` (nullable, sync authorship).
+  - Until schema 48 `notebookId` was nullable: a NULL meant a "quick page" parked in a folder through `parentFolderId`. Both are gone — see `MIGRATION_47_48`, which gave each of those pages a notebook of its own.
 - Stroke https://github.com/Ethran/notable/blob/main/app/src/main/java/com/ethran/notable/data/db/Stroke.kt
   - Addressable record containing style and geometry inline. Fields: `id` (String UUID PK), `size` (Float), `pen` (serialized `Pen`), `color` (Int ARGB), bounding box floats (`top`, `bottom`, `left`, `right`), `points` (List<StrokePoint>), `pageId` (FK), timestamps.
 - StrokePoint (geometry payload)  https://github.com/Ethran/notable/blob/1c242de6a005abece5e2d246cdb9e90b34206611/app/src/main/java/com/ethran/notable/data/db/Stroke.kt#L18C12-L18C23
@@ -55,16 +56,18 @@ CREATE INDEX index_folder_parentFolderId ON folder(parentFolderId);
 CREATE TABLE page (
   id             TEXT PRIMARY KEY,
   scroll         INTEGER NOT NULL,
-  notebookId     TEXT REFERENCES notebook(id) ON DELETE CASCADE,
+  notebookId     TEXT NOT NULL REFERENCES notebook(id) ON DELETE CASCADE,
   background     TEXT NOT NULL,
   backgroundType TEXT NOT NULL,
-  parentFolderId TEXT REFERENCES folder(id) ON DELETE CASCADE,
+  title          TEXT,
+  pageWidth      INTEGER,
+  pageHeight     INTEGER,
   createdAt      INTEGER NOT NULL,
-  updatedAt      INTEGER NOT NULL
+  updatedAt      INTEGER NOT NULL,
+  updatedBy      TEXT
 );
 
-CREATE INDEX index_page_notebookId     ON page(notebookId);
-CREATE INDEX index_page_parentFolderId ON page(parentFolderId);
+CREATE INDEX index_page_notebookId ON page(notebookId);
 
 
 -- strokes (Entity: Stroke)

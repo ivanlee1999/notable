@@ -358,9 +358,9 @@ class RoomCouchStore(
     /**
      * Every document this device holds, for the first push after setup.
      *
-     * Pages are taken from their notebook's `pageIds`, as bopa does — a standalone "quick page"
-     * (`notebookId == null`) belongs to no notebook and has nowhere to live on the other app, so it
-     * is not offered for sync.
+     * Pages are taken from their notebook's `pageIds`, as bopa does, rather than from the page
+     * table: the manifest is what names a page on the wire, so a page it does not name has nowhere
+     * to live on the other app.
      */
     override fun allDocumentIds(): List<String> = runBlocking {
         val ids = mutableListOf<String>()
@@ -718,12 +718,16 @@ class RoomCouchStore(
 
     private suspend fun applyPage(id: String, page: CouchPage, basedOn: CouchPage?) {
         val existing = appRepository.pageRepository.getWithDataById(id)
-        val notebookId = page.notebookId ?: existing?.page?.notebookId
+        // A page naming no notebook is an orphan: §6.4 gives pages no lifecycle of their own, so
+        // there is no manifest that will ever name this one and nothing here could show it. bopa
+        // destroys such files on sight; dropping it is the same answer. Falling back to the local
+        // row first, because an incoming edit may simply be omitting a field we already know.
+        val notebookId = page.notebookId ?: existing?.page?.notebookId ?: return
         // Room enforces the page -> notebook foreign key, so a page that arrives before its
         // notebook document needs somewhere to live. The placeholder is overwritten in full the
         // moment the real notebook lands (which the engine pushes *after* its pages, so this is the
         // ordering the protocol expects).
-        if (notebookId != null && appRepository.bookRepository.getById(notebookId) == null) {
+        if (appRepository.bookRepository.getById(notebookId) == null) {
             // Unless that notebook is deleted. Its pages keep no tombstones of their own — protocol
             // §6.4, they live and die with the notebook's `pageIds` — so deleting a notebook leaves
             // its `page:<id>` documents live on the server forever. A device replaying the feed
@@ -771,7 +775,6 @@ class RoomCouchStore(
             backgroundType = page.backgroundType,
             pageWidth = page.pageWidth ?: existing?.page?.pageWidth,
             pageHeight = page.pageHeight ?: existing?.page?.pageHeight,
-            parentFolderId = existing?.page?.parentFolderId,
             createdAt = date(page.createdAt),
             updatedAt = date(page.updatedAt),
             // Who actually wrote this, so the next merge can break a scalar tie on the real author

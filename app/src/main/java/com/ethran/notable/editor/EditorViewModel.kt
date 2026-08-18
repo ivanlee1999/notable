@@ -66,10 +66,11 @@ private val log = ShipBook.getLogger("EditorViewModel")
  */
 data class ToolbarUiState(
     // Document info
+    // Null until the page has loaded — every page belongs to a notebook, so these are "not
+    // known yet", never "there isn't one".
     val notebookId: String? = null,
     val pageId: String? = null,
-    val isBookActive: Boolean = false,
-    /** The open notebook's name, for the editor's title bar. Null for a loose page. */
+    /** The open notebook's name, for the editor's title bar. */
     val notebookTitle: String? = null,
     val pageNumberInfo: String = "1/1",
     val currentPageNumber: Int = 0,
@@ -609,9 +610,8 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 notebookId = bookId,
                 pageId = pageId,
-                isBookActive = bookId != null,
                 notebookTitle = book?.title,
-                pageNumberInfo = if (bookId != null) "${pageIndex + 1}/$totalPages" else "1/1",
+                pageNumberInfo = "${pageIndex + 1}/$totalPages",
                 currentPageNumber = pageIndex,
                 backgroundType = page.backgroundType,
                 backgroundPath = page.background,

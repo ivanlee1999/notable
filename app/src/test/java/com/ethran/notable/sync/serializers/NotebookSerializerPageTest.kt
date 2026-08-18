@@ -53,9 +53,8 @@ class NotebookSerializerPageTest {
 
     private fun samplePage(
         id: String = "page-1",
-        notebookId: String? = "nb-1",
+        notebookId: String = "nb-1",
         scroll: Int = 0,
-        parentFolderId: String? = null,
         title: String? = null,
         createdAt: Date = Date(1_700_000_000_000),
         updatedAt: Date = Date(1_700_000_456_000),
@@ -65,7 +64,6 @@ class NotebookSerializerPageTest {
         notebookId = notebookId,
         background = "blank",
         backgroundType = "native",
-        parentFolderId = parentFolderId,
         title = title,
         createdAt = createdAt,
         updatedAt = updatedAt,
