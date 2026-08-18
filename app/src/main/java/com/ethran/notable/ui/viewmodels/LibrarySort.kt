@@ -3,6 +3,7 @@ package com.ethran.notable.ui.viewmodels
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
 import java.text.Collator
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -39,12 +40,21 @@ object LibrarySort {
         strength = Collator.SECONDARY
     }
 
+    /**
+     * @param lastEdited each notebook's newest *page* clock, keyed by notebook id. "Last edited"
+     *   orders by the later of it and the notebook's own `updatedAt`: ink lands on pages and no
+     *   longer bumps the notebook's envelope (that clock is what the merge decides renames and
+     *   moves by), so recency has to be read from where the ink actually goes.
+     */
     fun notebooks(
-        books: List<Notebook>, order: LibrarySortOrder, descending: Boolean
+        books: List<Notebook>, order: LibrarySortOrder, descending: Boolean,
+        lastEdited: Map<String, Date> = emptyMap()
     ): List<Notebook> {
         val sorted = when (order) {
             LibrarySortOrder.UPDATED -> books.sortedWith(
-                compareBy<Notebook> { it.updatedAt }.thenBy { it.id })
+                compareBy<Notebook> { book ->
+                    maxOf(book.updatedAt, lastEdited[book.id] ?: book.updatedAt)
+                }.thenBy { it.id })
             LibrarySortOrder.CREATED -> books.sortedWith(
                 compareBy<Notebook> { it.createdAt }.thenBy { it.id })
             // The id breaks ties so two notebooks with the same name do not swap places between

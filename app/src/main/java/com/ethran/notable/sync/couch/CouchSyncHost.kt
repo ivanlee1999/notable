@@ -56,6 +56,7 @@ class CouchSyncHost @Inject constructor(
 
     private val mutex = Mutex()
     private var stack: Stack? = null
+    private val tombstonesPruned = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val _documentState = MutableStateFlow<CouchDocumentState?>(null)
     override val documentState: StateFlow<CouchDocumentState?> = _documentState.asStateFlow()
@@ -106,21 +107,20 @@ class CouchSyncHost @Inject constructor(
         stack()?.engine?.pull(longpoll) ?: CouchSyncEngine.PullReport()
 
     /**
-     * Queues the page and the notebook that owns it.
+     * Queues the page — and only the page. An ink save no longer moves anything on the notebook
+     * (see `PageDataManager.bumpEditTimestamps`): its envelope is what the merge decides renames,
+     * moves and page order by, and marking it dirty here pushed an unchanged document — a fresh
+     * server revision per stroke, carrying nothing.
      *
-     * The notebook goes too because its `pageIds` manifest and `updatedAt` both moved: a page
-     * pushed without it lands on the peer as a document no notebook points at.
-     *
-     * A page with no notebook queues nothing — the same rule as `PageRepository.queuePage`,
-     * matching [RoomCouchStore.allDocumentIds]: quick pages are deliberately not offered for
-     * sync, because the protocol has no standalone page lifecycle (§6.4) and pushing one lands a
-     * document no manifest will ever name. A page whose row is already gone also queues nothing:
-     * its removal travels inside the notebook's manifest, not as a page push.
+     * A page with no notebook — a quick page — queues nothing, matching
+     * [RoomCouchStore.allDocumentIds]: the protocol has no standalone page lifecycle (§6.4) and
+     * pushing one lands a document no manifest will ever name. A page whose row is already gone
+     * also queues nothing: its removal travels inside the notebook's manifest.
      */
     override suspend fun markPageDirty(pageId: String) {
         val engine = stack()?.engine ?: return
-        val notebookId = appRepository.pageRepository.getById(pageId)?.notebookId ?: return
-        engine.markDirty(listOf(CouchDocId.page(pageId), CouchDocId.notebook(notebookId)))
+        appRepository.pageRepository.getById(pageId)?.notebookId ?: return
+        engine.markDirty(listOf(CouchDocId.page(pageId)))
     }
 
     override suspend fun markDocumentDirty(documentId: String) {
@@ -203,6 +203,7 @@ class CouchSyncHost @Inject constructor(
      * notebook that has never seen a server still needs its tall pages divided on open.
      */
     suspend fun splitOversizedPages(notebookId: String): Set<String> {
+        pruneExpiredTombstonesOnce()
         val store = stack()?.store ?: RoomCouchStore(
             appRepository = appRepository,
             kvDao = kvDao,
@@ -214,6 +215,24 @@ class CouchSyncHost @Inject constructor(
             },
         )
         return store.splitOversizedPages(notebookId)
+    }
+
+    /**
+     * Prunes stroke and image tombstones past the protocol's 30-day horizon (§6.6, "Pruning") —
+     * the rows exist so an erasure can outlive a merge race, not so every page document grows
+     * with each sweep of the eraser for ever.
+     *
+     * Piggybacked on the first notebook open of the process rather than run per open: two
+     * indexed DELETEs are cheap, but hygiene has no business running hundreds of times a
+     * session. Deliberately not an edit — nothing is queued and no clock is bumped; the next
+     * ordinary push of each page carries the shorter list. Page tombstones and outline entries
+     * are never pruned (they hold structural identity the merge needs indefinitely).
+     */
+    private suspend fun pruneExpiredTombstonesOnce() {
+        if (!tombstonesPruned.compareAndSet(false, true)) return
+        appRepository.pruneExpiredTombstones(
+            cutoffMillis = System.currentTimeMillis() - TOMBSTONE_PRUNE_HORIZON_MS
+        )
     }
 
     // region Assembly
@@ -356,6 +375,9 @@ class CouchSyncHost @Inject constructor(
 
     private companion object {
         const val TAG = "CouchSync"
+
+        /** Thirty days, matching bopa's `CouchTombstones.prune` — one horizon per protocol. */
+        const val TOMBSTONE_PRUNE_HORIZON_MS = 30L * 24 * 60 * 60 * 1000
     }
 }
 

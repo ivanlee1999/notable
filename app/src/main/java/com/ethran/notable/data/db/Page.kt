@@ -18,6 +18,7 @@ import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.Log
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -87,6 +88,12 @@ data class FileBackground(
 )
 
 
+/** One notebook's newest page clock — see [PageDao.lastEditedByNotebookFlow]. */
+data class NotebookLastEdited(
+    val notebookId: String,
+    val lastEdited: Date,
+)
+
 data class PageWithData(
     @Embedded val page: Page,
     @Relation(
@@ -131,6 +138,16 @@ interface PageDao {
     // `updatedBy` is cleared with it, for the reason given above [updateTitle].
     @Query("UPDATE page SET updatedAt=:updatedAt, updatedBy=NULL WHERE id =:pageId")
     suspend fun touchUpdatedAt(pageId: String, updatedAt: Long)
+
+    // The newest page clock per notebook, for the library's "Last edited" order. Ink no longer
+    // bumps the notebook's own envelope (that clock is what the merge decides renames and moves
+    // by, and bumping it on every stroke let ink undo them) — so recency is read from the pages,
+    // where the ink actually lands.
+    @Query(
+        "SELECT notebookId, MAX(updatedAt) AS lastEdited FROM page " +
+            "WHERE notebookId IS NOT NULL GROUP BY notebookId"
+    )
+    fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>>
 
     @Query("SELECT * FROM page WHERE notebookId is null AND parentFolderId is :folderId")
     fun getSinglePagesInFolder(folderId: String? = null): LiveData<List<Page>>
@@ -257,9 +274,19 @@ class PageRepository @Inject constructor(
         if (pageId.isEmpty()) return
         database.withTransaction {
             db.touchUpdatedAt(pageId, updatedAt)
-            queuePage(pageId, db.getNotebookId(pageId))
+            // The page alone — deliberately not [queuePage], whose notebook half exists for
+            // writes that move the manifest. An ink save moves nothing on the notebook any
+            // more (see PageDataManager.bumpEditTimestamps), and queueing it here would push
+            // an unchanged document on every stroke, churning its revision for nothing.
+            // A quick page still queues nothing at all, same as [queuePage].
+            if (db.getNotebookId(pageId) != null) {
+                outbox.queue(listOf(CouchDocId.page(pageId)))
+            }
         }
     }
+
+    /** The newest page clock per notebook — the library's "Last edited" order reads this. */
+    fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>> = db.lastEditedByNotebookFlow()
 
     suspend fun getById(pageId: String): Page? {
         if (pageId.isEmpty())
