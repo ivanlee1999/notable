@@ -53,11 +53,28 @@ class CouchOversizedDocumentTest {
         store.set(notebookId, CouchDocBody.Notebook(notebook(updatedAt = 5)))
     }
 
+    /** CouchDB refusing a document on its merits: the ordinary fields are too big. */
+    private fun refuseAsCouchDb(documentId: String) {
+        server.failingDocumentIds[documentId] = 413
+        server.failingDocumentBodies[documentId] = FakeCouchTransport.COUCHDB_TOO_LARGE
+    }
+
+    /** A proxy refusing the request before CouchDB ever sees it. */
+    private fun refuseAsProxy(documentId: String) {
+        server.failingDocumentIds[documentId] = 413
+        server.failingDocumentBodies[documentId] = FakeCouchTransport.PROXY_TOO_LARGE
+    }
+
+    private fun clearRefusals() {
+        server.failingDocumentIds.clear()
+        server.failingDocumentBodies.clear()
+    }
+
     @Test
     fun `a 413'd page holds its notebook back that pass`() = runBlocking {
         stagePageAndNotebook()
         engine.markDirty(listOf(pageId, notebookId))
-        server.failingDocumentIds[pageId] = 413
+        refuseAsCouchDb(pageId)
 
         val report = engine.flush()
 
@@ -79,12 +96,12 @@ class CouchOversizedDocumentTest {
     fun `the next flush does not re-send an unchanged oversized document`() = runBlocking {
         stagePageAndNotebook()
         engine.markDirty(listOf(pageId, notebookId))
-        server.failingDocumentIds[pageId] = 413
+        refuseAsCouchDb(pageId)
         engine.flush()
 
         // The server is healthy again as far as the transport is concerned; the denylist is what
         // has to stop the re-send now.
-        server.failingDocumentIds.clear()
+        clearRefusals()
         server.forgetRequests()
         val second = engine.flush()
 
@@ -101,13 +118,13 @@ class CouchOversizedDocumentTest {
     fun `an edited oversized document earns one real retry`() = runBlocking {
         stagePageAndNotebook()
         engine.markDirty(listOf(pageId, notebookId))
-        server.failingDocumentIds[pageId] = 413
+        refuseAsCouchDb(pageId)
         engine.flush()
 
         // The user erases half the page; its updatedAt moves.
         store.set(pageId, CouchDocBody.Page(page(updatedAt = 20)))
         engine.markDirty(listOf(pageId))
-        server.failingDocumentIds.clear()
+        clearRefusals()
         server.forgetRequests()
 
         val report = engine.flush()
@@ -142,7 +159,7 @@ class CouchOversizedDocumentTest {
         store.set(notebookId, CouchDocBody.Notebook(notebook(updatedAt = 5)))
         store.set(assetId, CouchDocBody.Asset(CouchAsset.of(picture, at = stamp(1), updatedBy = "boox")))
         engine.markDirty(listOf(pageId, notebookId))
-        server.failingDocumentIds[assetId] = 413
+        refuseAsProxy(assetId)
 
         val report = engine.flush()
 
@@ -159,4 +176,109 @@ class CouchOversizedDocumentTest {
             report.stillDirty.containsAll(listOf(pageId, notebookId, assetId)),
         )
     }
+
+    // region Which hop refused it — protocol §7.2
+
+    private suspend fun refuserFor(documentId: String): CouchError.Refuser {
+        val cause = engine.flush().failureCauses[documentId]
+        return (cause as CouchError.Server).refusedBy
+    }
+
+    @Test
+    fun `CouchDB's own error body names CouchDB as the refuser`() = runBlocking {
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId))
+        refuseAsCouchDb(pageId)
+
+        assertEquals(CouchError.Refuser.COUCHDB, refuserFor(pageId))
+    }
+
+    @Test
+    fun `an HTML error page names an intermediary`() = runBlocking {
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId))
+        refuseAsProxy(pageId)
+
+        assertEquals(CouchError.Refuser.INTERMEDIARY, refuserFor(pageId))
+    }
+
+    @Test
+    fun `a 413 with no body at all is read as an intermediary`() = runBlocking {
+        // The safe default: assuming the proxy means the upload is retried once the server is
+        // fixed. Assuming CouchDB would strand it until an edit that is never coming.
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId))
+        server.failingDocumentIds[pageId] = 413
+
+        assertEquals(CouchError.Refuser.INTERMEDIARY, refuserFor(pageId))
+    }
+
+    @Test
+    fun `editing a document the proxy refused does not earn a retry`() = runBlocking {
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId, notebookId))
+        refuseAsProxy(pageId)
+        engine.flush()
+
+        // The user, told the note is "too large", edits it down. That changes nothing: the cap is
+        // on the request, and a smaller page is still refused by a 1 MB proxy if it exceeds it.
+        // Re-sending on every edit is exactly the megabytes-a-pass waste the denylist prevents.
+        store.set(pageId, CouchDocBody.Page(page(updatedAt = 20)))
+        engine.markDirty(listOf(pageId))
+        clearRefusals()
+        server.forgetRequests()
+
+        val report = engine.flush()
+
+        assertFalse(
+            "an edit is not news about the server's configuration",
+            server.requestLog.any { it.first == "PUT" && it.second.contains("page:p1") },
+        )
+        assertNotNull("and the refusal is still reported", report.failures[pageId])
+    }
+
+    @Test
+    fun `re-arming releases what the proxy refused`() = runBlocking {
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId, notebookId))
+        refuseAsProxy(pageId)
+        engine.flush()
+
+        // The user raises client_max_body_size and presses Sync now.
+        clearRefusals()
+        server.forgetRequests()
+        engine.rearmRefusedRequests()
+
+        val report = engine.flush()
+
+        assertTrue(
+            "the upload must be tried for real once the server may have changed",
+            server.requestLog.any { it.first == "PUT" && it.second.contains("page:p1") },
+        )
+        assertTrue(report.pushed.contains(pageId))
+        assertTrue("and the held notebook goes out with it", report.pushed.contains(notebookId))
+        assertEquals("nothing left waiting", 0, engine.pendingCount)
+    }
+
+    @Test
+    fun `re-arming does not release what CouchDB refused`() = runBlocking {
+        stagePageAndNotebook()
+        engine.markDirty(listOf(pageId, notebookId))
+        refuseAsCouchDb(pageId)
+        engine.flush()
+
+        clearRefusals()
+        server.forgetRequests()
+        engine.rearmRefusedRequests()
+
+        val report = engine.flush()
+
+        assertFalse(
+            "nothing on the server changes what a page with too much ink in it weighs",
+            server.requestLog.any { it.first == "PUT" && it.second.contains("page:p1") },
+        )
+        assertNotNull(report.failures[pageId])
+    }
+
+    // endregion
 }

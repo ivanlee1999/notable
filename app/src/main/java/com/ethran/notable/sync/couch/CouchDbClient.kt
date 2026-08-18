@@ -40,13 +40,31 @@ sealed class CouchError(val detail: String) : Exception(detail) {
      * own answer to "when should I come back", when it sent one. [requestBytes] is how large the
      * request body was, when there was one — for a 413 that *is* the diagnosis, and the number the
      * user needs to hear ("too large" without saying how large sends them guessing).
+     *
+     * [refusedBy] answers §7.2's question for a 413 and is [Refuser.NOT_APPLICABLE] otherwise.
      */
     class Server(
         val status: Int,
         val path: String,
         val retryAfterMs: Long? = null,
         val requestBytes: Long? = null,
+        val refusedBy: Refuser = Refuser.NOT_APPLICABLE,
     ) : CouchError("server($status, $path)")
+
+    /**
+     * Which hop refused an oversized request (protocol §7.2). The two answers call for opposite
+     * handling, and conflating them tells the user to fix the wrong thing.
+     *
+     * [COUCHDB] means the document's *ordinary* fields exceed `max_document_size`. Attachment data
+     * is exempt from that measure, so in practice this can only ever be a page — an asset document
+     * is a couple of hundred bytes plus its blob.
+     *
+     * [INTERMEDIARY] means something in front of CouchDB capped the request body and CouchDB never
+     * saw it. nginx's `client_max_body_size` defaults to 1 MB, which after base64's 4/3 inflation
+     * rejects any asset over roughly 768 KiB — every photograph a phone takes. It is configuration
+     * rather than content, so nothing about the document will ever change to fix it.
+     */
+    enum class Refuser { NOT_APPLICABLE, COUCHDB, INTERMEDIARY }
 
     /** Offline, DNS failure, timeout: keep the work queued and back off. */
     class Transport(val reason: String) : CouchError("transport($reason)")
@@ -544,7 +562,30 @@ class CouchDbClient(
                     ?.value
             ),
             requestBytes = requestBytes,
+            refusedBy = if (response.status == HTTP_PAYLOAD_TOO_LARGE) {
+                refuserOf(response)
+            } else {
+                CouchError.Refuser.NOT_APPLICABLE
+            },
         )
+    }
+
+    /**
+     * Which hop refused an oversized request — protocol §7.2.
+     *
+     * **The test is the body, not the status.** CouchDB answers `application/json` with
+     * `{"error":"document_too_large"}`; nginx answers an HTML error page and never reaches
+     * CouchDB at all. Anything that is not recognisably CouchDB's own error — including a body
+     * that fails to parse, which is what a proxy in an unexpected configuration produces — is
+     * treated as the intermediary case, because that is the assumption whose failure mode is
+     * recoverable: it retries after the server is fixed instead of staying stuck forever.
+     */
+    private fun refuserOf(response: CouchResponse): CouchError.Refuser {
+        val couchSaidSo = runCatching {
+            couchJson.parseToJsonElement(String(response.body, Charsets.UTF_8))
+                .jsonObject["error"]?.jsonPrimitive?.content == "document_too_large"
+        }.getOrDefault(false)
+        return if (couchSaidSo) CouchError.Refuser.COUCHDB else CouchError.Refuser.INTERMEDIARY
     }
 
     // endregion
@@ -573,6 +614,7 @@ class CouchDbClient(
         private const val HTTP_FORBIDDEN = 403
         private const val HTTP_NOT_FOUND = 404
         private const val HTTP_CONFLICT = 409
+        private const val HTTP_PAYLOAD_TOO_LARGE = 413
     }
 }
 
