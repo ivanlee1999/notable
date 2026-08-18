@@ -1070,7 +1070,10 @@ class PageView(
             scroll = scroll,
             resourceBitmap = bgImage,
             scale = scale,
-            repeat = false,
+            // The real flag, matching what export passes (PageContentRenderer): a repeating
+            // background tiles on screen the same way it does in the PDF. This was hardcoded
+            // false, so ImageRepeating pages never tiled on screen at all.
+            repeat = backgroundType is BackgroundType.ImageRepeating,
             clipRect = clipRect
         )
     }

@@ -237,22 +237,22 @@ fun drawBitmapToCanvas(
     val scaleFactor = widthOnCanvas.toFloat() / imageWidth
     val scaledHeight = (imageHeight * scaleFactor).toInt()
 
-    // TODO: It's working, but its not nice -- do it in better style.
-    // Draw the first image, considering the scroll offset
-    val srcTop = Offset(
-        (scroll.x / scaleFactor).coerceAtLeast(0f),
-        ((scroll.y / scaleFactor) % imageHeight).coerceAtLeast(0f)
-    )
-    val rectOnImage = Rect(0, srcTop.y.toInt(), imageWidth, imageHeight)
-    val rectOnCanvas = Rect(
-        -scroll.x.toInt(),
-        0,
-        widthOnCanvas - scroll.x.toInt(),
-        ((imageHeight - srcTop.y) * scaleFactor).toInt()
-    )
+    // Where in the bitmap the visible part starts. For a repeating background the row wraps and
+    // the loop below keeps tiling; for a plain one, null means the scroll is past the last row
+    // and nothing is drawn — the white page ground above stands. The old code wrapped
+    // unconditionally (modulo for both kinds) behind a guard that compared page units to bitmap
+    // pixels, so a scrolled non-repeating background started over from its top.
+    val srcTopY = BackgroundGeometry.sourceTopPx(scroll.y, scaleFactor, imageHeight, repeat)
 
     var filledHeight = 0
-    if (repeat || scroll.y < canvasHeight) {
+    if (srcTopY != null) {
+        val rectOnImage = Rect(0, srcTopY.toInt(), imageWidth, imageHeight)
+        val rectOnCanvas = Rect(
+            -scroll.x.toInt(),
+            0,
+            widthOnCanvas - scroll.x.toInt(),
+            ((imageHeight - srcTopY) * scaleFactor).toInt()
+        )
         canvas.drawBitmap(imageBitmap, rectOnImage, rectOnCanvas, bgBitmapPaint)
         filledHeight = rectOnCanvas.bottom
     }
