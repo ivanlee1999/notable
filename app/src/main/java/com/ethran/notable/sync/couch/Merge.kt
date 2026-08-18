@@ -43,7 +43,7 @@ object CouchMerge {
         val ma = millis(a)
         val mb = millis(b)
         if (ma != mb) return if (ma < mb) a else b
-        return if (a <= b) a else b
+        return if (byteCompare(a, b) <= 0) a else b
     }
 
     /** The source string whose instant is later, with the same spelling tiebreak as [earlier]. */
@@ -51,7 +51,30 @@ object CouchMerge {
         val ma = millis(a)
         val mb = millis(b)
         if (ma != mb) return if (ma > mb) a else b
-        return if (a >= b) a else b
+        return if (byteCompare(a, b) >= 0) a else b
+    }
+
+    /**
+     * Lexicographic comparison over UTF-8 bytes — the protocol's string order (§4), used
+     * wherever the merge breaks a tie on a string.
+     *
+     * Neither language's default is safe here. Kotlin's [String.compareTo] orders by UTF-16 code
+     * unit, which files every supplementary-plane character — a device name with an emoji in it —
+     * below parts of the BMP that UTF-8 files it above. Swift's `<` orders by Unicode canonical
+     * equivalence, which also *equates* spellings (composed and decomposed "é") that differ on
+     * the wire. Two merges that order the same pair differently pick different winners for the
+     * same conflict, and the two apps quietly diverge on identical input. Bytes are the one
+     * reading both languages produce identically; pinned by the `tiebreak-*` vectors.
+     */
+    fun byteCompare(a: String, b: String): Int {
+        val x = a.toByteArray(Charsets.UTF_8)
+        val y = b.toByteArray(Charsets.UTF_8)
+        val n = minOf(x.size, y.size)
+        for (i in 0 until n) {
+            val d = (x[i].toInt() and 0xFF) - (y[i].toInt() and 0xFF)
+            if (d != 0) return d
+        }
+        return x.size - y.size
     }
 
     /**
@@ -68,8 +91,9 @@ object CouchMerge {
         val ma = millis(aUpdatedAt)
         val mb = millis(bUpdatedAt)
         if (ma != mb) return ma > mb
-        if (aUpdatedBy != bUpdatedBy) return aUpdatedBy > bUpdatedBy
-        return aScalarKey >= bScalarKey
+        val d = byteCompare(aUpdatedBy, bUpdatedBy)
+        if (d != 0) return d > 0
+        return byteCompare(aScalarKey, bScalarKey) >= 0
     }
 
     /**
@@ -241,14 +265,14 @@ object CouchMerge {
         val mx = millis(x.updatedAt)
         val my = millis(y.updatedAt)
         if (mx != my) return if (mx > my) x else y
-        return if (strokeTiebreak(x) >= strokeTiebreak(y)) x else y
+        return if (byteCompare(strokeTiebreak(x), strokeTiebreak(y)) >= 0) x else y
     }
 
     private fun preferredImage(x: CouchImage, y: CouchImage): CouchImage {
         val mx = millis(x.updatedAt)
         val my = millis(y.updatedAt)
         if (mx != my) return if (mx > my) x else y
-        return if (imageTiebreak(x) >= imageTiebreak(y)) x else y
+        return if (byteCompare(imageTiebreak(x), imageTiebreak(y)) >= 0) x else y
     }
 
     /**
