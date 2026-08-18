@@ -578,6 +578,52 @@ class CouchSyncControllerTest {
             )
     }
 
+    /**
+     * The feed loop drains the outbox after every successful pull, and a longpoll comes round
+     * forever — so with a retry already waiting out its backoff, an unconditional drain re-sent
+     * the same failing documents at feed pace and made the push backoff a fiction. The drain now
+     * yields to a scheduled retry; fresh push-back content still sends immediately.
+     */
+    @Test
+    fun `the feed drain does not preempt a scheduled push retry`() {
+        val backend = BackendSpy()
+        backend.pending = 1
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "conflict(page:a)"),
+            hasRetriableFailure = true,
+        )
+        val controller = CouchSyncController(
+            scope = scope,
+            backend = backend,
+            clock = CouchSyncClock(
+                editQuietPeriodMs = 3_000,
+                retryFloorMs = 1_000,
+                retryCeilingMs = 60_000,
+                idleFloorMs = 500,
+                // The retry's wait (>= 850ms with jitter) parks forever, so the retry stays
+                // genuinely pending while the feed keeps coming round at test speed.
+                sleep = { ms ->
+                    if (ms >= 800) kotlinx.coroutines.awaitCancellation() else delay(10)
+                },
+            ),
+        )
+
+        controller.start()
+        settle(400)
+        controller.stop()
+
+        assertTrue(
+            "the feed should have come round more than once, got ${backend.pullCalls.size}",
+            backend.pullCalls.size >= 2,
+        )
+        assertEquals(
+            "the drain must wait out the scheduled retry instead of re-flushing at feed pace",
+            1,
+            backend.flushCount,
+        )
+    }
+
     // region Backgrounding
 
     /**

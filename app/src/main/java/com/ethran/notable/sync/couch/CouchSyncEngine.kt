@@ -284,6 +284,14 @@ class CouchSyncEngine(
     state: CouchSyncState = CouchSyncState(),
     private val maxPushAttempts: Int = DEFAULT_MAX_PUSH_ATTEMPTS,
     /**
+     * The pause before conflict retry *n* is `n × this`. A 409 means another device is writing
+     * the same document right now, and retrying in a tight loop mostly re-loses the same race —
+     * five attempts in single-digit milliseconds — while a beat's pause lets the peer's burst of
+     * writes finish. Injectable so tests can observe the pacing instead of paying it.
+     */
+    private val conflictBackoffMs: Long = CONFLICT_BACKOFF_MS,
+    private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /**
      * Whether a database-identity problem stops sync (§1.2 stage 3) or is merely reported.
      *
      * Off by default, and that is the whole point of the staged rollout: a client that *required*
@@ -951,10 +959,15 @@ class CouchSyncEngine(
                     (error as? CouchError.Server)?.retryAfterMs?.let {
                         retryAfterMs = maxOf(retryAfterMs ?: 0L, it)
                     }
-                } else if (error !is CouchError.Unauthorized &&
-                    error !is CouchError.Blocked &&
-                    error !is CouchError.Conflict
-                ) {
+                } else if (error is CouchError.Conflict) {
+                    // Exhausted its conflict retries: the peer is writing this document faster
+                    // than this device can merge. That resolves itself the moment the peer's
+                    // burst ends, so it is retriable-with-backoff — reporting it terminal left
+                    // the controller scheduling nothing while the feed loop re-triggered a push
+                    // for the still-dirty document on every pull, an immediate-retry spin with
+                    // no backoff anywhere.
+                    hasRetriableFailure = true
+                } else if (error !is CouchError.Unauthorized && error !is CouchError.Blocked) {
                     // The server refused this document on its merits and will keep refusing it.
                     // Whatever is queued behind it that *names* it must not push this pass: the
                     // push order exists so a manifest never precedes its documents, and a 413'd
@@ -1081,7 +1094,11 @@ class CouchSyncEngine(
 
     private suspend fun push(documentId: String): PushOutcome {
         var didMerge = false
-        repeat(maxPushAttempts) {
+        repeat(maxPushAttempts) { attempt ->
+            // A growing pause between conflict rounds, not before the first attempt. Immediate
+            // retries mostly re-lose the same race against a peer mid-burst; a beat is usually
+            // enough for its writes to land so the next merge is against a settled document.
+            if (attempt > 0 && conflictBackoffMs > 0) sleep(conflictBackoffMs * attempt)
             val local = store.load(documentId)
             if (local == null) {
                 // Nothing locally: the document was never created, or was cleaned up after being
@@ -1621,6 +1638,9 @@ class CouchSyncEngine(
 
     companion object {
         private const val DEFAULT_MAX_PUSH_ATTEMPTS = 5
+
+        /** See [conflictBackoffMs]: retry *n* of a conflicted push waits `n × this`. */
+        private const val CONFLICT_BACKOFF_MS = 250L
 
         /** Protocol §6.7: below this many notebook tombstones, a flush is never refused. */
         private const val MASS_DELETION_FLOOR = 10

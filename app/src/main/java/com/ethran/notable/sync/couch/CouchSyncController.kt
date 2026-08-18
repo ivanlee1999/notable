@@ -372,7 +372,18 @@ class CouchSyncController @Inject constructor(
                 // `pushBack` left them there until the user wrote something else or tapped Sync
                 // now — reconnecting has to drain the outbox, not merely deliver what the feed
                 // happened to carry. bopa's controller does the same, for the same reason.
-                if (report.pushBack.isNotEmpty() || backend.pendingCount() > 0) pushNow()
+                //
+                // Except while a push retry is already waiting out its backoff. The feed loop
+                // comes round on every longpoll, so draining unconditionally re-flushed the same
+                // failing documents at feed pace and made `pushBackoffMs` a fiction — the very
+                // request flood the backoff exists to prevent. Fresh push-back content still
+                // sends immediately: it is new work, not the retry.
+                val retryPending = synchronized(jobs) { isRetryingPush && pushJob != null }
+                if (report.pushBack.isNotEmpty() ||
+                    (!retryPending && backend.pendingCount() > 0)
+                ) {
+                    pushNow()
+                }
 
                 // A long poll is supposed to block until something happens, so an empty result
                 // should be rare and slow. When it is neither — a proxy that answers immediately, a
