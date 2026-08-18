@@ -136,25 +136,28 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
 
 
 /**
- * Arms raw drawing over everything but the docked chrome.
+ * Arms raw drawing over the whole writing surface.
  *
- * [toolbarThickness] is the rail's height when it is docked top/bottom and its width when
- * docked left/right. [titleBarHeight] is the editor title bar, which runs along the top of
- * whatever the rail leaves. Both are hidden together, so pass 0 for both while the toolbar
- * is collapsed — the pen then has the whole sheet.
+ * The limit rect is **view-local**, because that is the space the SDK works in: TouchHelper
+ * maps every rect it is handed *from the host view's own coordinates* into raw digitizer
+ * space (RawInputReader hands each rect to `EpdController.mapToRawTouchPoint(hostView, …)`),
+ * and the points it delivers back have the host view's screen location already subtracted.
+ * The MotionEvent fallback receives view-local coordinates by construction, so both input
+ * paths now genuinely share one rectangle.
  *
- * The bands are measured against the **root** view rather than [view]'s own box, because the
- * firmware places its rects on the screen, not inside a child. [view] is the writing surface,
- * which the editor now lays out inside the chrome's inset — so its own width and height are
- * already the paper's, and measuring them here would subtract the chrome a second time and
- * arm the pen over a strip of page that is not there. Taking the root keeps the rectangle the
- * firmware is handed exactly what it has always been.
+ * This used to hand the firmware bands measured on the **root** view — screen coordinates —
+ * with the docked chrome excluded, under the belief that "the firmware places its rects on
+ * the screen". That was indistinguishable from view-local for as long as the surface filled
+ * the screen; once the editor laid the surface out *inside* the chrome's inset, the
+ * screen-sized bands were mapped as if view-local and everything shifted by the inset: the
+ * pen went dead over the first rail-width and title-bar-height of the paper — an uneditable
+ * left/top margin — while the chrome itself needed no exclusion at all, being outside the
+ * host view entirely. Which is also why there are no exclude rects any more: the surface
+ * *is* the paper, and everything that is not paper is not this view.
  */
 fun setupSurface(
     view: View,
     touchHelper: TouchHelper?,
-    toolbarThickness: Int,
-    titleBarHeight: Int,
     zoom: Float = 1f,
 ) {
     if (touchHelper == null) return
@@ -165,18 +168,9 @@ fun setupSurface(
     touchHelper.setRawDrawingEnabled(false)
     touchHelper.closeRawDrawing()
 
-    val screen = view.rootView
-    val surface = drawingSurface(
-        position = GlobalAppSettings.current.toolbarPosition,
-        viewWidth = screen.width,
-        viewHeight = screen.height,
-        toolbarThickness = toolbarThickness,
-        titleBarHeight = titleBarHeight,
-    )
-
     touchHelper
-        .setLimitRect(mutableListOf(surface.limit.toRect()))
-        .setExcludeRect(surface.exclude.map { it.toRect() })
+        .setLimitRect(mutableListOf(Rect(0, 0, view.width, view.height)))
+        .setExcludeRect(emptyList())
         .openRawDrawing()
 
     touchHelper.setRawDrawingEnabled(true)
