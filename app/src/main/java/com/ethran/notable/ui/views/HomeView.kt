@@ -264,8 +264,12 @@ fun LibraryContent(
         val sortedFolders = remember(uiState.folders, sortOrder, settings.librarySortDescending) {
             LibrarySort.folders(uiState.folders, sortOrder, settings.librarySortDescending)
         }
-        val sortedBooks = remember(uiState.books, sortOrder, settings.librarySortDescending) {
-            LibrarySort.notebooks(uiState.books, sortOrder, settings.librarySortDescending)
+        val sortedBooks = remember(
+            uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited
+        ) {
+            LibrarySort.notebooks(
+                uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited
+            )
         }
 
         Column(Modifier.fillMaxSize()) {

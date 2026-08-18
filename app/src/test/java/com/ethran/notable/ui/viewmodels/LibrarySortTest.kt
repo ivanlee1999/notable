@@ -42,6 +42,38 @@ class LibrarySortTest {
     // MARK: Sorting
 
     /**
+     * "Last edited" reads the later of the notebook's envelope clock and its newest page clock:
+     * ink lands on pages and deliberately no longer bumps the envelope (the merge decides
+     * renames and moves by it), so a notebook someone just drew in must float on its pages.
+     */
+    @Test
+    fun `last edited reads the page clocks, not only the envelope`() {
+        val stale = book("a", "Older", updated = 1_000)
+        val fresh = book("b", "Newer", updated = 2_000)
+
+        val sorted = LibrarySort.notebooks(
+            listOf(stale, fresh), LibrarySortOrder.UPDATED, descending = true,
+            lastEdited = mapOf("a" to Date(3_000)),
+        )
+
+        assertEquals(listOf("a", "b"), sorted.map { it.id })
+    }
+
+    /** A page clock older than the envelope must not drag a freshly renamed notebook down. */
+    @Test
+    fun `the envelope still counts when it is the later clock`() {
+        val renamed = book("a", "Renamed just now", updated = 5_000)
+        val other = book("b", "Untouched", updated = 2_000)
+
+        val sorted = LibrarySort.notebooks(
+            listOf(renamed, other), LibrarySortOrder.UPDATED, descending = true,
+            lastEdited = mapOf("a" to Date(1_000), "b" to Date(1_000)),
+        )
+
+        assertEquals(listOf("a", "b"), sorted.map { it.id })
+    }
+
+    /**
      * The bug this guards is code-point ordering, which files "Éclair" *after* "zebra" because
      * U+00E9 is greater than 'z'. Asserted as "the accented title does not fall off the end"
      * rather than as one exact sequence: the collator follows the platform's default locale, and

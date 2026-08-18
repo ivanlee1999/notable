@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Date
 import javax.inject.Inject
 
 data class LibraryUiState(
@@ -58,6 +59,8 @@ data class LibraryUiState(
     val isSyncing: Boolean = false,
     /** Notebooks directly inside each folder, keyed by folder id — the count on its row. */
     val folderBookCounts: Map<String, Int> = emptyMap(),
+    /** Each notebook's newest page clock, for the "Last edited" order. */
+    val lastEdited: Map<String, Date> = emptyMap(),
     /** How much is waiting in the Trash; 0 hides the row entirely. */
     val trashedCount: Int = 0,
     /** What the user is looking for. Empty means "show me where I am" rather than "show nothing". */
@@ -90,6 +93,7 @@ private data class LibraryDatabaseState(
     val isSyncing: Boolean = false,
     val folderBookCounts: Map<String, Int> = emptyMap(),
     val trashedCount: Int = 0,
+    val lastEdited: Map<String, Date> = emptyMap(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -155,11 +159,16 @@ class LibraryViewModel @Inject constructor(
         folderRepository.getTrashed().asFlow(), bookRepository.getTrashed().asFlow()
     ) { folders, books -> folders.size + books.size }.distinctUntilChanged()
 
-    // Paired rather than combined as a sixth flow: `combine` has typed overloads up to five, and
-    // one more argument would drop the whole group into the untyped array form.
+    /** Each notebook's newest page clock — what "Last edited" means now that ink lands on pages
+     *  without bumping the notebook's envelope (the merge's clock for renames and moves). */
+    private val _lastEditedFlow = pageRepository.lastEditedByNotebookFlow()
+        .map { rows -> rows.associate { it.notebookId to it.lastEdited } }
+
+    // Grouped rather than combined as sixth/seventh flows: `combine` has typed overloads up to
+    // five, and one more argument would drop the whole group into the untyped array form.
     private val _countsFlow = combine(
-        _folderBookCountsFlow, _trashedCountFlow
-    ) { folderCounts, trashed -> folderCounts to trashed }
+        _folderBookCountsFlow, _trashedCountFlow, _lastEditedFlow
+    ) { folderCounts, trashed, lastEdited -> Triple(folderCounts, trashed, lastEdited) }
 
     // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
     // through different channels, and the header's Sync now button is about the run as a whole.
@@ -195,8 +204,10 @@ class LibraryViewModel @Inject constructor(
 
     private val _dbDataFlow = combine(
         _listingFlow, _syncStatusFlow, _countsFlow
-    ) { (folders, books, pages), (badges, syncing), (folderCounts, trashed) ->
-        LibraryDatabaseState(folders, books, pages, badges, syncing, folderCounts, trashed)
+    ) { (folders, books, pages), (badges, syncing), (folderCounts, trashed, lastEdited) ->
+        LibraryDatabaseState(
+            folders, books, pages, badges, syncing, folderCounts, trashed, lastEdited
+        )
     }
 
     // 3. Expose the final UI State
@@ -221,6 +232,7 @@ class LibraryViewModel @Inject constructor(
             isSyncing = dbData.isSyncing,
             folderBookCounts = dbData.folderBookCounts,
             trashedCount = dbData.trashedCount,
+            lastEdited = dbData.lastEdited,
             query = screen.query
         )
     }.stateIn(

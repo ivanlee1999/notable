@@ -1409,14 +1409,12 @@ class PageDataManager @Inject constructor(
     // one looking clean to sync.
     private suspend fun bumpEditTimestamps(pageId: String? = pageFromDb?.id) {
         if (pageId.isNullOrEmpty()) return
+        // The page alone. This used to bump the notebook's clock too, and that clock is the
+        // envelope the merge decides renames, moves and page order by — so drawing here silently
+        // undid whichever of those arrived from the other device moments earlier, every time the
+        // ink was later. The library's "Last edited" order reads the page clocks instead
+        // (PageDao.lastEditedByNotebookFlow), so recency costs the envelope nothing.
         appRepository.pageRepository.touchUpdatedAt(pageId)
-        val page = if (pageId == pageFromDb?.id) pageFromDb
-        else appRepository.pageRepository.getById(pageId)
-        val notebookId = page?.notebookId ?: return
-        // A single-column bump, not getById-then-update: this runs on every stroke save with
-        // nothing serializing it against the sync engine, and a whole-row write here reverted any
-        // remote change applied to the notebook between the read and the write.
-        appRepository.bookRepository.touchUpdatedAt(notebookId)
     }
 
     // Scroll is device-local and deliberately not synced (see RoomCouchStore.applyPage), so this
