@@ -22,6 +22,21 @@ const val SCRIBBLE_TO_ERASE_GRACE_PERIOD_MS = 150L
 const val SCRIBBLE_INTERSECTION_THRESHOLD = 0.20f
 
 /**
+ * Whether a stroke starting at [firstPointTime] is still inside the grace period after the
+ * previous stroke ended at [lastStrokeEndTime] — too soon after real writing to be read as a
+ * scribble-erase gesture.
+ *
+ * Both stamps must come from the same clock, which is why the caller takes them from the input
+ * path's own point timestamps ([com.ethran.notable.editor.canvas.OnyxInputHandler
+ * .onStrokeCollected]): the check itself is base-agnostic, comparing only their difference.
+ * Mixing bases is the bug this signature pins — an epoch stroke-end stamp against uptime point
+ * timestamps made every stroke of a session look like it started decades "before" the last one
+ * ended, and permanently suppressed scribble-erase on the fallback input path.
+ */
+fun isWithinScribbleGrace(lastStrokeEndTime: Long, firstPointTime: Long): Boolean =
+    firstPointTime < lastStrokeEndTime + SCRIBBLE_TO_ERASE_GRACE_PERIOD_MS
+
+/**
  * Width (px) of the pen-eraser swath: the diameter of the region [handleErase] actually deletes.
  * Shared so the native side-button eraser indicator (see einkHelper.enableNativeEraser) is drawn
  * at exactly the size it erases.
@@ -100,7 +115,7 @@ fun handleScribbleToErase(
     if (pen == Pen.MARKER) return null // do not erase with highlighter
     if (!GlobalAppSettings.current.scribbleToEraseEnabled) return null // scribble to erase is disabled
     if (touchPoints.size < MINIMUM_SCRIBBLE_POINTS) return null
-    if (firstPointTime < currentLastStrokeEndTime + SCRIBBLE_TO_ERASE_GRACE_PERIOD_MS) return null // not enough time has passed since last stroke
+    if (isWithinScribbleGrace(currentLastStrokeEndTime, firstPointTime)) return null // not enough time has passed since last stroke
     if (calculateNumReversals(touchPoints) < 2) return null
 
     val strokeLength = calculateStrokeLength(touchPoints)

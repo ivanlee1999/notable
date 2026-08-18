@@ -56,6 +56,11 @@ class OnyxInputHandler(
     private val strokeHistoryBatch: MutableList<String>,
 ) {
     var isErasing: Boolean = false
+
+    /**
+     * When the previous stroke ended, on the clock of the input path's own point timestamps —
+     * see [onStrokeCollected] for why it is stamped from the points rather than the wall clock.
+     */
     var lastStrokeEndTime: Long = 0
     private val log = ShipBook.getLogger("DrawCanvas")
     private val toolbarState get() = viewModel.toolbarState.value
@@ -265,7 +270,15 @@ class OnyxInputHandler(
      */
     internal fun onStrokeCollected(plist: TouchPointList) {
         val currentLastStrokeEndTime = lastStrokeEndTime
-        lastStrokeEndTime = System.currentTimeMillis()
+        // Stamped from the stroke's own last point, not from System.currentTimeMillis(). The
+        // scribble-to-erase grace check compares this against the *next* stroke's first point
+        // timestamp, so the two must share a clock base — and the base differs by path: the
+        // fallback path stamps points with MotionEvent.eventTime (uptime, ~hours since boot),
+        // while a wall-clock stamp here is epoch (~50 years). Every fallback stroke then read as
+        // astronomically older than the last stroke's "end", and the guard killed scribble-erase
+        // for the rest of the session. Taking the previous stroke's own pen-up timestamp keeps
+        // both sides of the comparison on one clock, whichever clock the path uses.
+        plist.points.lastOrNull()?.let { lastStrokeEndTime = it.timestamp }
         val startTime = System.currentTimeMillis()
 
         when (toolbarState.mode) {
