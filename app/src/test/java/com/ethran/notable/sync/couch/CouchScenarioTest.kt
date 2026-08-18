@@ -219,7 +219,6 @@ private class ScenarioDevice(
                     ),
                 )
                 markDirty(docId(op))
-                bumpOwningNotebook(page, at)
             }
 
             "erase" -> {
@@ -504,26 +503,11 @@ private class ScenarioDevice(
         }
     }
 
-    /**
-     * What the real save path does on every stroke: `PageDataManager.bumpEditTimestamps` advances
-     * the owning notebook's `updatedAt` alongside the page's, and `BookRepository.update` queues the
-     * manifest in the same transaction. bopa's `NotebookStore.savePage` does the same, and protocol
-     * §5.5 makes it a MUST for the runners because a notebook's `updatedAt` doubles as *liveness*:
-     * §6.4 reads it to decide whether a later edit resurrects a deleted notebook.
-     *
-     * A `draw` that wrote only the page would model the app less faithfully than the app behaves,
-     * and would report `ink-only-edit-resurrects` — a stroke made after a deletion, with no rename
-     * to carry the notebook's timestamp for it — as a failure while the product is correct.
-     */
-    private fun bumpOwningNotebook(page: CouchPage, at: String) {
-        val notebookDocId = CouchDocId.notebook(page.notebookId ?: return)
-        val body = store.load(notebookDocId) as? CouchDocBody.Notebook ?: return
-        store.set(
-            notebookDocId,
-            CouchDocBody.Notebook(body.notebook.copy(updatedAt = at, updatedBy = DEVICE_ID)),
-        )
-        markDirty(notebookDocId)
-    }
+    // There is deliberately no notebook bump on a draw any more. The app stopped advancing the
+    // notebook's envelope on ink (the envelope decides renames and moves, and ink used to clobber
+    // them), and the runner must model that faithfully — §6.4's liveness now comes from
+    // [ScenarioStore.contentClock], the newest page clock, exactly as the real store answers it.
+    // `ink-only-edit-resurrects` passes through that mechanism or not at all.
 
     private fun save() {
         persisted = persisted.copy(
@@ -629,6 +613,18 @@ private class ScenarioStore(
     val conflictCopies: List<String> get() = copies.toList()
 
     override fun load(documentId: String): CouchDocBody? = documents[documentId]
+
+    // The same answer the real store computes from its page rows: the newest page clock of the
+    // notebook's pages held here. §6.4's liveness — this is what lets ink drawn after a peer's
+    // purge resurrect the notebook now that ink no longer moves the envelope.
+    override fun contentClock(documentId: String): String? {
+        val (type, id) = CouchDocId.split(documentId) ?: return null
+        if (type != CouchDocType.NOTEBOOK) return null
+        return documents.values
+            .mapNotNull { (it as? CouchDocBody.Page)?.page }
+            .filter { it.notebookId == id }
+            .maxOfOrNull { it.updatedAt }
+    }
 
     // A scenario step is single-threaded — nothing edits between load and apply — so plain
     // replacement honours the contract: everything on disk is exactly what the merge saw.

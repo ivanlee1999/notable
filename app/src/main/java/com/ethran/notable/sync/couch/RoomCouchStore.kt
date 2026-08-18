@@ -103,6 +103,12 @@ class RoomCouchStore(
 
     // region CouchLocalStore
 
+    override fun contentClock(documentId: String): String? = runBlocking {
+        val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking null
+        if (type != CouchDocType.NOTEBOOK) return@runBlocking null
+        appRepository.pageRepository.newestUpdatedAtInNotebook(id)?.let { iso(it) }
+    }
+
     override fun load(documentId: String): CouchDocBody? = runBlocking {
         val (type, id) = CouchDocId.split(documentId) ?: return@runBlocking null
 

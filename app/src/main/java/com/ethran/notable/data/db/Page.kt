@@ -149,6 +149,12 @@ interface PageDao {
     )
     fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>>
 
+    // One notebook's newest page clock — §6.4's liveness signal (see CouchLocalStore.contentClock):
+    // ink no longer moves the notebook's envelope, so "was there work after the deletion" is
+    // answered by the pages, where the work actually lands.
+    @Query("SELECT MAX(updatedAt) FROM page WHERE notebookId = :notebookId")
+    suspend fun newestUpdatedAtInNotebook(notebookId: String): Date?
+
     @Query("SELECT * FROM page WHERE notebookId is null AND parentFolderId is :folderId")
     fun getSinglePagesInFolder(folderId: String? = null): LiveData<List<Page>>
 
@@ -287,6 +293,10 @@ class PageRepository @Inject constructor(
 
     /** The newest page clock per notebook — the library's "Last edited" order reads this. */
     fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>> = db.lastEditedByNotebookFlow()
+
+    /** One notebook's newest page clock, or null with no pages here — §6.4's liveness signal. */
+    suspend fun newestUpdatedAtInNotebook(notebookId: String): Date? =
+        db.newestUpdatedAtInNotebook(notebookId)
 
     suspend fun getById(pageId: String): Page? {
         if (pageId.isEmpty())
