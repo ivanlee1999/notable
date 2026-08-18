@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.27.0
+
+The page fits the width, everything that is not page says so, and "Scrolling" finally scrolls —
+across pages, not only within one.
+
+- **A page always opens fitted to the screen's width.** Turning pages sideways used to fit the
+  whole sheet instead, letterboxing it between dead white margins on any screen shaped
+  differently from the paper — margins that looked like page but took no ink. Whichever way
+  pages turn, the sheet now spans the full width, and the rest of the page is in the direction
+  scrolling already goes.
+- **What lies past the page's end looks past the end.** Below and beside a bounded sheet is
+  gray now instead of page-white, and a stroke started out there is refused with a hint instead
+  of being stored where no scroll can reach it.
+- **"Scrolling" scrolls across pages.** With Vertical Navigation set to Scrolling, dragging past
+  the bottom of a page slides the next one in under a seam line — its ruling and its ink — and
+  the page switch commits only once the seam has left the screen, the moment both pages agree
+  about every pixel, so nothing visibly jumps. Ink that starts below the seam lands on the page
+  it visibly touched. Pagination keeps the discrete, one-clean-refresh turn, and dragging past
+  the last page still creates a fresh one.
+- **A resized surface draws at the right scale again.** Recreating the canvas after a rotation
+  or a chrome change forgot the zoom, so everything drew in screen pixels until the next pinch —
+  invisible on a blank page, wrong for everything at a real position.
+
 ## 0.26.0
 
 Everything now happens where you can see it, in the order you did it, at whatever zoom you read at
