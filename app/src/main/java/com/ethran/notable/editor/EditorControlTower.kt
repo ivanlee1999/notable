@@ -106,12 +106,32 @@ class EditorControlTower(
             }
             return
         }
+        // Scrolling past the end of the last page: the next page is created in place, with no
+        // whole-screen turn — the seam then slides in under the same drag, and the commit below
+        // takes over once it leaves the screen. This is the continuous counterpart of the jump
+        // branch underneath, which used to serve the last page even in Scrolling mode: creating
+        // a page is right, arriving on it by a full-screen flip mid-drag is not.
+        if (page.continuousScrollEnabled && delta.x == 0f && delta.y < 0 &&
+            page.nextPageId == null && page.isAtVerticalEdge(-delta.y)
+        ) {
+            if (!edgeTurnTaken) {
+                edgeTurnTaken = true
+                scope.launch(Dispatchers.IO) {
+                    // Null for a quick page (no notebook to add to) — then there is simply
+                    // nothing past the end, as before.
+                    if (page.pageDataManager.ensureNextPage(page.currentPageId) != null) {
+                        // Redraw so the seam appears under the still-moving finger.
+                        CanvasEventBus.forceUpdate.emit(null)
+                    }
+                }
+            }
+            return
+        }
         // Dragging on when the page has no more to give is how you turn it, when that is the
         // direction the reader chose. Asked before the scroll is queued: once it is in the
         // accumulator it has been coalesced with other movement and the edge is no longer legible.
-        // Under continuous scrolling the downward edge is past the *next page's seam* and the
-        // commit below handles it — this jump remains only for the last page, where dragging past
-        // the end still creates a fresh page to keep writing on.
+        // Under continuous scrolling both directions are handled above, so this discrete turn
+        // now serves Pagination mode (and the upward turn at a page's top).
         if (GlobalAppSettings.current.pageTurn.isVertical &&
             delta.x == 0f && page.isAtVerticalEdge(-delta.y) &&
             !(page.crossPageScrollActive && delta.y < 0)

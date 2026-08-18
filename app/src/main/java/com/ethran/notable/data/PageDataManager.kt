@@ -721,6 +721,23 @@ class PageDataManager @Inject constructor(
     fun previousPageIdOf(pageId: String): String? = neighborPreviousIds[pageId]
 
     /**
+     * The page after [pageId], created if the notebook does not have one yet — the path that
+     * makes writing past the last page's end mean "keep writing", the way turning past it
+     * already does. Goes through the same transaction the page turn uses, records the new
+     * neighbor so the seam can draw it immediately, and returns null only for a page outside
+     * any notebook (a quick page), for which there is no "next".
+     */
+    suspend fun ensureNextPage(pageId: String): String? {
+        val bookId = pageFromDb?.takeIf { it.id == pageId }?.notebookId ?: return null
+        val nextId = appRepository.getNextPageIdFromBookAndPageOrCreate(
+            notebookId = bookId, pageId = pageId
+        )
+        recordNextOf(pageId, nextId)
+        recordNativeBackground(nextId)
+        return nextId
+    }
+
+    /**
      * Warms a neighbor's background only when its page is already resident: in that case its own
      * (prefetch) load short-circuits and won't re-run [preLoadBackground], so if the pool evicted
      * its background we reload it here. A not-yet-loaded neighbor loads its background as part of
@@ -1001,6 +1018,27 @@ class PageDataManager @Inject constructor(
         }
         pageFromDb?.notebookId?.let { notebookId ->
             currentPageNumber = appRepository.getPageNumber(notebookId, pageId)
+            // Known before anything clamps a scroll or draws a seam, not only after the full
+            // load: the entry clamp runs against the continuous-scroll bound, and with the
+            // neighbors still unrecorded it folded a legitimately-overshot scroll (a page left
+            // with the seam on screen) back by a whole view. cacheNeighbors records these again
+            // later; that repeat is free.
+            try {
+                recordNextOf(
+                    pageId,
+                    appRepository.getNextPageIdFromBookAndPage(
+                        pageId = pageId, notebookId = notebookId
+                    )
+                )
+                recordPreviousOf(
+                    pageId,
+                    appRepository.getPreviousPageIdFromBookAndPage(
+                        pageId = pageId, notebookId = notebookId
+                    )
+                )
+            } catch (e: Exception) {
+                log.e("Could not resolve neighbors of $pageId", e)
+            }
         }
         synchronized(lock) { entries[pageId]?.let { touchLocked(it) } }
     }
@@ -1185,9 +1223,16 @@ class PageDataManager @Inject constructor(
                     addAll(existing); addAll(strokes)
                 }
                 recomputeEntrySizeLocked(entry)
+                saveStrokesToDb(strokes)
+                return
             }
         }
+        // Not resident: the row reaches the database either way, but nothing would *draw* it
+        // under the seam until something loads the page — which from the writer's side looks
+        // like ink that vanished. Ask for the load after the write is queued; the redraw that
+        // follows it picks the stroke up from the cache.
         saveStrokesToDb(strokes)
+        requestPageLoad(pageId)
     }
 
     fun getImages(pageId: String): List<Image> = synchronized(lock) {

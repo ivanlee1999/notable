@@ -139,9 +139,10 @@ data class AppSettings(
      * How a one-finger vertical gesture moves the canvas.
      *
      * [Continuous] follows the finger — the notebook is one long surface and you stop
-     * wherever you let go, *including across the seam between two pages*: with vertical page
-     * turns, scrolling runs on into the next page rather than stopping at this one's end
-     * (see PageView.crossPageScrollActive). [Paged] advances exactly one screen per swipe
+     * wherever you let go, *including across the seam between two pages*: scrolling runs on
+     * into the next page rather than stopping at this one's end, whichever way sideways page
+     * turns are configured (see PageView.crossPageScrollActive), and dragging or writing past
+     * the last page's end creates the next one. [Paged] advances exactly one screen per swipe
      * regardless of how far the finger travelled, and turns between pages discretely — so a
      * turn is a single full refresh instead of a run of partial ones. On an e-ink panel that
      * is the difference between reading handwriting back cleanly and watching it smear; it
