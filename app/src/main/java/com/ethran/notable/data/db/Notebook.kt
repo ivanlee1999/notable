@@ -415,20 +415,20 @@ class BookRepository @Inject constructor(
         editOutline(id, entryId) { entry, now -> entry.copy(removed = true, updatedAt = now) }
 
     /**
-     * Reorder the outline, addressing positions in the *live* list the reader can see rather than
-     * in the stored one, which also holds removed entries they cannot.
+     * Move an outline entry one step against its *visible* siblings — the entries the reader can
+     * actually see, which is what the up/down buttons mean.
+     *
+     * Identity-based on purpose. This used to take indices into "the live list" defined as
+     * `filterNot { removed }`, while the UI numbered rows in *its* list, which additionally hides
+     * dangling entries (page id no longer in `pageIds` — deliberately kept in the data for merge
+     * idempotence, see [movedOutline]). One hidden dangling entry shifted every index after it,
+     * and the buttons reordered the wrong row. An entry id cannot go stale that way.
      */
-    suspend fun moveOutlineEntry(id: String, from: Int, to: Int) {
+    suspend fun moveOutlineEntry(id: String, entryId: String, direction: Int) {
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
-            val live = notebook.outline.withIndex().filterNot { it.value.removed }
-            val source = live.getOrNull(from) ?: return@withTransaction
-            val outline = notebook.outline.toMutableList()
-            val entry = outline.removeAt(source.index)
-            val target = live.getOrNull(to)
-                ?.let { it.index - if (it.index > source.index) 1 else 0 }
-                ?: outline.size
-            outline.add(target.coerceIn(0, outline.size), entry)
+            val outline = movedOutline(notebook.outline, notebook.pageIds, entryId, direction)
+                ?: return@withTransaction
             notebookDao.update(
                 notebook.copy(outline = outline, updatedAt = Date(), updatedBy = null)
             )
@@ -515,6 +515,37 @@ class BookRepository @Inject constructor(
 
 }
 
+
+/**
+ * The outline with [entryId] swapped one step ([direction] -1 up, +1 down) against its *visible*
+ * neighbor, or null when there is nothing to do — the entry is not visible, or the move falls off
+ * the end.
+ *
+ * "Visible" is exactly what the outline tab shows: entries neither removed nor dangling. A
+ * dangling entry — one whose page id is no longer in [pageIds] — is deliberately kept in the data
+ * (the merge cannot drop it and stay idempotent, protocol §5.2.2) but hidden from the reader, so a
+ * move must count positions the way the reader does or it reorders the wrong row.
+ *
+ * A swap rather than a remove-and-insert, so the removed and dangling entries between the two
+ * visible neighbors keep their absolute positions: they are not this move's to disturb.
+ */
+internal fun movedOutline(
+    outline: List<CouchOutlineEntry>,
+    pageIds: List<String>,
+    entryId: String,
+    direction: Int,
+): List<CouchOutlineEntry>? {
+    val pages = pageIds.toSet()
+    val visible = outline.withIndex().filter { !it.value.removed && it.value.pageId in pages }
+    val position = visible.indexOfFirst { it.value.id == entryId }
+    if (position < 0) return null
+    val source = visible[position]
+    val target = visible.getOrNull(position + direction) ?: return null
+    val moved = outline.toMutableList()
+    moved[source.index] = target.value
+    moved[target.index] = source.value
+    return moved
+}
 
 fun Notebook.getBackgroundType(): BackgroundType {
     return BackgroundType.fromKey(defaultBackgroundType)

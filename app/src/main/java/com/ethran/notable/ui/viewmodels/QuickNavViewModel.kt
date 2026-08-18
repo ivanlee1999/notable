@@ -169,8 +169,13 @@ class QuickNavViewModel(
         bookRepository.removeOutlineEntry(bookId, entryId)
     }
 
-    fun moveOutlineEntry(from: Int, to: Int) = editOutline { bookId ->
-        bookRepository.moveOutlineEntry(bookId, from, to)
+    /**
+     * By entry id and direction, not by index: the tab's list hides removed *and* dangling
+     * entries, so an index into it named a different row in the stored outline whenever a hidden
+     * entry sat above the tapped one.
+     */
+    fun moveOutlineEntry(entryId: String, direction: Int) = editOutline { bookId ->
+        bookRepository.moveOutlineEntry(bookId, entryId, direction)
     }
 
     private fun editOutline(edit: suspend (String) -> Unit) {

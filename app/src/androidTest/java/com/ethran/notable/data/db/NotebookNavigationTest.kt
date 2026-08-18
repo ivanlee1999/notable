@@ -177,22 +177,55 @@ class NotebookNavigationTest {
     }
 
     /**
-     * Reordering addresses the list the reader can see. The stored list also holds removed
-     * entries, so an index taken from the visible list would move the wrong row.
+     * Reordering moves the entry the reader named, one step against the entries the reader can
+     * see. The stored list also holds removed entries; they keep their positions and are not
+     * counted.
      */
     @Test
-    fun reordering_uses_visible_positions_not_stored_ones() = runBlocking {
+    fun reordering_counts_only_the_entries_the_reader_can_see() = runBlocking {
         addPages(2)
         listOf("A", "B", "C").forEachIndexed { index, title ->
             books.addOutlineEntry(notebookId, pageIds()[index], title)
         }
-        books.removeOutlineEntry(notebookId, notebook().outline.first().id)
+        books.removeOutlineEntry(notebookId, notebook().outline.first().id) // "A"
+        val entryB = notebook().outline.first { it.title == "B" }.id
 
-        // Move the visible first entry ("B") past the end.
-        books.moveOutlineEntry(notebookId, 0, 2)
+        books.moveOutlineEntry(notebookId, entryB, direction = 1)
 
         val visible = notebook().outline.filterNot { it.removed }.map { it.title }
         assertEquals(listOf("C", "B"), visible)
+        // The removed entry stays exactly where it was: a move swaps the visible pair around it.
+        assertEquals(listOf("A", "C", "B"), notebook().outline.map { it.title })
+    }
+
+    /**
+     * The bug this API replaced: the tab hides a dangling entry (its page is gone from
+     * `pageIds`), the repository's index space used to count it, and every index below it named
+     * the wrong row — "move up" swapped with the invisible neighbor instead of the visible one.
+     * Dangling entries are deliberately kept in the data (the merge cannot drop them and stay
+     * idempotent), so the move has to step over them, not the caller.
+     */
+    @Test
+    fun a_move_steps_over_a_dangling_entry_instead_of_swapping_with_it() = runBlocking {
+        addPages(1)
+        val (first, second) = pageIds()
+        books.updateVerbatim(
+            notebook().copy(
+                outline = listOf(
+                    CouchOutlineEntry(id = "a", pageId = first, title = "A"),
+                    CouchOutlineEntry(id = "dangling", pageId = "no-such-page", title = "D"),
+                    CouchOutlineEntry(id = "b", pageId = second, title = "B"),
+                )
+            )
+        )
+
+        books.moveOutlineEntry(notebookId, "b", direction = -1)
+
+        assertEquals(
+            "the lower visible entry must swap with the visible one above, not the dangling one",
+            listOf("b", "dangling", "a"),
+            notebook().outline.map { it.id },
+        )
     }
 
     // endregion
@@ -246,13 +279,14 @@ class NotebookNavigationTest {
     fun every_navigation_edit_queues_the_notebook() = runBlocking {
         val docId = com.ethran.notable.sync.couch.CouchDocId.notebook(notebookId)
         books.addOutlineEntry(notebookId, pageIds()[0], "Intro")
+        books.addOutlineEntry(notebookId, pageIds()[0], "Body")
         val entryId = notebook().outline.first().id
 
         for (edit in listOf<suspend () -> Unit>(
             { books.setBookmark(notebookId, pageIds()[0], true) },
             { books.updateOutlineEntry(notebookId, entryId, title = "Renamed") },
             { books.updateOutlineEntry(notebookId, entryId, depth = 1) },
-            { books.moveOutlineEntry(notebookId, 0, 0) },
+            { books.moveOutlineEntry(notebookId, entryId, direction = 1) },
             { books.removeOutlineEntry(notebookId, entryId) },
         )) {
             outbox.clear(docId)
