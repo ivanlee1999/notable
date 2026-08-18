@@ -301,8 +301,8 @@ class CouchSyncEngine(
         val stillDirty: List<String> = emptyList(),
         val failures: Map<String, String> = emptyMap(),
         /**
-         * The notebook tombstones the mass-deletion guard held back (protocol §6.7) — **which**
-         * ones, not merely how many.
+         * The tombstones the mass-deletion guard held back (protocol §6.7) — notebooks and the
+         * folders deleted with them — **which** ones, not merely how many.
          *
          * A count is enough to warn with and useless to act on: the whole point of the guard is that
          * a human decides, and the two things they can decide — send these deletions after all, or
@@ -334,7 +334,7 @@ class CouchSyncEngine(
         val blockedByDeletionGuard: Boolean get() = heldDeletions.isNotEmpty()
 
         /**
-         * How many notebook tombstones the guard held back — not the size of the whole queue,
+         * How many tombstones the guard held back — not the size of the whole queue,
          * which is what the warning used to report.
          */
         val deletionsHeldBack: Int get() = heldDeletions.size
@@ -659,10 +659,6 @@ class CouchSyncEngine(
         for (documentId in ids) {
             runCatching { store.discardDeletion(documentId) }
             clearDirty(documentId)
-            // Forget the revision as well. It is what makes an incoming row look like this device's
-            // own echo, and a document we are waiting to *receive* must not be suppressed as one we
-            // just sent.
-            revs.remove(documentId)
         }
         // ...and rewind the checkpoint, or the promise made to the user is not kept.
         //
@@ -677,7 +673,20 @@ class CouchSyncEngine(
         // idempotent. Paying it here is fine: this is a deliberate, rare answer to a prompt, not
         // something a drawing can trigger. It also survives being offline, which a targeted re-fetch
         // would not — the replay simply happens whenever the network comes back.
-        if (ids.isNotEmpty()) lastSeq = "0"
+        //
+        // The rev map goes with it — the *whole* map, not the discarded ids' entries. A recorded
+        // revision is what makes a replayed row look like this device's own echo, and the replay
+        // has to re-deliver more than the notebook documents themselves: deleting the notebooks
+        // locally cascaded their PAGE rows away, and nothing tombstoned those pages, so their
+        // server revisions are unchanged and still in the map. Clearing only the notebooks' revs
+        // let the manifests re-apply while every page under them was skipped as an echo — the
+        // notebooks came back as empty shells. With the checkpoint at "0" the map rebuilds itself
+        // over the replay; the cost is the 409-then-merge round trip on the next push of each
+        // still-held document, which resolves to "nothing to send".
+        if (ids.isNotEmpty()) {
+            revs.clear()
+            lastSeq = "0"
+        }
         persist()
     }
 
@@ -760,8 +769,9 @@ class CouchSyncEngine(
         if (exceedsDeletionGuard(queue)) {
             // Approved ids are not held — but they are still counted by the guard above, so a batch
             // that is approved in part still asks about the rest rather than being waved through
-            // wholesale.
-            val held = queue.filter { isNotebookTombstone(it) && it !in approvedDeletions }
+            // wholesale. Folder tombstones wait alongside the notebooks' (they do not trip the
+            // guard, but a tripped guard means the whole deletion is in question).
+            val held = queue.filter { isHeldTombstone(it) && it !in approvedDeletions }
             heldDeletions = held
             stillDirty += held
             queue = queue - held.toSet()
@@ -959,6 +969,18 @@ class CouchSyncEngine(
     private fun isNotebookTombstone(documentId: String): Boolean =
         CouchDocId.split(documentId)?.first == CouchDocType.NOTEBOOK &&
             (runCatching { store.load(documentId) }.getOrNull()?.isDeleted ?: false)
+
+    /**
+     * What waits for the user's answer once the guard has tripped: notebook tombstones — the
+     * ones the guard counts — **and** folder tombstones. A wiped database queues both kinds, and
+     * a folder `_deleted` that sailed past the guard destroyed the folder tree on the server
+     * while the notebooks politely waited for permission.
+     */
+    private fun isHeldTombstone(documentId: String): Boolean {
+        val type = CouchDocId.split(documentId)?.first
+        if (type != CouchDocType.NOTEBOOK && type != CouchDocType.FOLDER) return false
+        return runCatching { store.load(documentId) }.getOrNull()?.isDeleted ?: false
+    }
 
     private fun exceedsDeletionGuard(queue: List<String>): Boolean {
         val tombstones = queue.filter { isNotebookTombstone(it) }

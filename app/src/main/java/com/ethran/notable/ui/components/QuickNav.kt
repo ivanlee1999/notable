@@ -65,6 +65,7 @@ import com.ethran.notable.io.ThumbnailBackfillQueue
 import com.ethran.notable.sync.couch.CouchOutlineEntry
 import com.ethran.notable.ui.SnackDispatcher
 import com.ethran.notable.ui.dialogs.NamePromptDialog
+import com.ethran.notable.ui.dialogs.ShowSimpleConfirmationDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.viewmodels.QuickNavTab
 import com.ethran.notable.ui.viewmodels.QuickNavUiState
@@ -172,7 +173,7 @@ fun QuickNavContent(
     onRenameOutlineEntry: (String, String) -> Unit,
     onChangeOutlineDepth: (String, Int) -> Unit,
     onRemoveOutlineEntry: (String) -> Unit,
-    onMoveOutlineEntry: (Int, Int) -> Unit,
+    onMoveOutlineEntry: (String, Int) -> Unit,
     onGenerateBookPreviews: () -> Unit,
     onScrubStart: () -> Unit,
     onScrubPreview: (Int) -> Unit,
@@ -478,7 +479,7 @@ private fun OutlineTab(
     onRename: (String, String) -> Unit,
     onChangeDepth: (String, Int) -> Unit,
     onRemove: (String) -> Unit,
-    onMove: (Int, Int) -> Unit,
+    onMove: (String, Int) -> Unit,
 ) {
     if (entries.isEmpty()) {
         QuickNavEmpty(
@@ -489,6 +490,7 @@ private fun OutlineTab(
     }
 
     var renaming by remember { mutableStateOf<CouchOutlineEntry?>(null) }
+    var deleting by remember { mutableStateOf<CouchOutlineEntry?>(null) }
 
     LazyColumn(
         modifier = Modifier
@@ -506,11 +508,12 @@ private fun OutlineTab(
                 onRename = { renaming = entry },
                 onIndent = { onChangeDepth(entry.id, entry.depth + 1) },
                 onOutdent = { onChangeDepth(entry.id, entry.depth - 1) },
-                onMoveUp = { onMove(index, index - 1) },
-                // Past the row below, not onto it: the move removes before it inserts, so "down
-                // one" is an insert two positions along.
-                onMoveDown = { onMove(index, index + 2) },
-                onRemove = { onRemove(entry.id) },
+                // By the entry's own id, one step against its visible neighbors. Indices into
+                // this list used to be handed to the repository, whose stored outline also holds
+                // entries this tab hides — so a hidden entry above the row moved the wrong one.
+                onMoveUp = { onMove(entry.id, -1) },
+                onMoveDown = { onMove(entry.id, 1) },
+                onRemove = { deleting = entry },
             )
         }
     }
@@ -524,6 +527,20 @@ private fun OutlineTab(
                 renaming = null
             },
             onDismiss = { renaming = null },
+        )
+    }
+
+    // Confirmed, like every other destructive tap in the app: the button sits in a row of
+    // reorder arrows, and the tombstone it writes travels to every device.
+    deleting?.let { entry ->
+        ShowSimpleConfirmationDialog(
+            title = "Delete outline entry",
+            message = "Remove \"${entry.title}\" from the outline? The page itself is kept.",
+            onConfirm = {
+                onRemove(entry.id)
+                deleting = null
+            },
+            onCancel = { deleting = null },
         )
     }
 }

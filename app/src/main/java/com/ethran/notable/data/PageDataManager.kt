@@ -1344,8 +1344,10 @@ class PageDataManager @Inject constructor(
         val page = if (pageId == pageFromDb?.id) pageFromDb
         else appRepository.pageRepository.getById(pageId)
         val notebookId = page?.notebookId ?: return
-        val notebook = appRepository.bookRepository.getById(notebookId) ?: return
-        appRepository.bookRepository.update(notebook)
+        // A single-column bump, not getById-then-update: this runs on every stroke save with
+        // nothing serializing it against the sync engine, and a whole-row write here reverted any
+        // remote change applied to the notebook between the read and the write.
+        appRepository.bookRepository.touchUpdatedAt(notebookId)
     }
 
     // Scroll is device-local and deliberately not synced (see RoomCouchStore.applyPage), so this

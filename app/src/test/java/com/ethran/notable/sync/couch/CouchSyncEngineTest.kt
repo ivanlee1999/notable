@@ -671,15 +671,24 @@ class CouchSyncEngineTest {
     /** And the server's copy comes back, because the server was never told anything. */
     @Test
     fun a_discarded_deletion_returns_from_the_server_on_the_next_pull() = runBlocking {
-        // The notebook exists on the server, pushed by the peer.
+        // The notebook exists on the server *with a page*, pushed by the peer. The page matters:
+        // it is what the shell-restore bug below lost.
+        booxStore.set(
+            pageId,
+            CouchDocBody.Page(page(listOf(stroke("s1", 1, "boox")), updatedAt = 1, by = "boox"))
+        )
         booxStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "boox")))
-        boox.markDirty(listOf(notebookId))
+        boox.markDirty(listOf(pageId, notebookId))
         boox.flush()
         ipad.pull()
+        assertEquals(listOf("s1"), ipadStore.page(pageId)?.strokes?.map { it.id })
 
-        // The iPad deletes it as part of a batch big enough to trip the guard, then changes its mind.
+        // The iPad deletes it as part of a batch big enough to trip the guard, then changes its
+        // mind. Deleting locally cascades the page rows away and tombstones only the notebook —
+        // the pages' server revisions never change.
         val ids = stageMassDeletion(count = 11, from = 200) + notebookId
         ipadStore.set(notebookId, tombstone(at = 10, by = "ipad"))
+        ipadStore.remove(pageId)
         ipad.markDirty(ids)
         val held = ipad.flush().heldDeletions
         assertTrue(held.contains(notebookId))
@@ -693,6 +702,66 @@ class CouchSyncEngineTest {
             "notes",
             ipadStore.notebook(notebookId)?.title,
         )
+        // The replay must re-deliver the pages too. Their revisions survived a discard that
+        // cleared only the notebooks' rev entries, so the replayed page rows were skipped as
+        // this device's own echoes and the notebook came back as an empty shell. The discard
+        // clears the whole rev map now — the checkpoint rewind already re-reads everything.
+        assertEquals(
+            "the notebook's pages must come back with it, not as an empty shell",
+            listOf("s1"),
+            ipadStore.page(pageId)?.strokes?.map { it.id },
+        )
+    }
+
+    /**
+     * A wiped database queues folder tombstones beside the notebooks'. Folders do not trip the
+     * guard — the count that asks the question is notebooks — but once it has tripped, a folder
+     * `_deleted` sailing through would take the folder tree off the server while the notebooks
+     * politely waited for the user's answer.
+     */
+    @Test
+    fun folder_tombstones_wait_with_the_held_notebooks() = runBlocking {
+        val folderId = CouchDocId.folder("f1")
+        ipadStore.set(
+            folderId,
+            CouchDocBody.Deleted(
+                CouchDeletedDoc(type = CouchDocType.FOLDER, deletedAt = stamp(10), updatedBy = "ipad")
+            )
+        )
+        val ids = stageMassDeletion()
+        ipad.markDirty(ids + folderId)
+
+        val report = ipad.flush()
+
+        assertTrue(report.blockedByDeletionGuard)
+        assertTrue(
+            "the folder tombstone must wait with the notebooks'",
+            folderId in report.heldDeletions,
+        )
+        assertTrue("nothing may reach the server", server.documentIds().isEmpty())
+
+        // And an approval releases it with the rest.
+        ipad.approveHeldDeletions(report.heldDeletions)
+        ipad.flush()
+        assertTrue(server.isDeleted(folderId))
+    }
+
+    /** The guard is about mass deletion; an ordinary folder delete goes out unquestioned. */
+    @Test
+    fun a_lone_folder_deletion_is_not_held() = runBlocking {
+        val folderId = CouchDocId.folder("f1")
+        ipadStore.set(
+            folderId,
+            CouchDocBody.Deleted(
+                CouchDeletedDoc(type = CouchDocType.FOLDER, deletedAt = stamp(10), updatedBy = "ipad")
+            )
+        )
+        ipad.markDirty(listOf(folderId))
+
+        val report = ipad.flush()
+
+        assertFalse(report.blockedByDeletionGuard)
+        assertTrue(server.isDeleted(folderId))
     }
 
     /**

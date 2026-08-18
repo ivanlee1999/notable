@@ -227,6 +227,26 @@ dependencies {
     implementation libs.rxandroid
 
     testImplementation libs.junit
+    // JVM view-model tests: mock the Room-backed repositories, and stand in for
+    // Dispatchers.Main so viewModelScope runs without a device.
+    testImplementation libs.mockk
+    testImplementation libs.kotlinx.coroutines.test
+    // MockK's transitives would drag the unit-test classpath onto coroutines 1.10.x and a
+    // kotlin-reflect ahead of the app's own Kotlin. Tests should run against the versions the
+    // app actually ships, so pin the family back to what everything else here resolves to.
+    configurations.configureEach {
+        if (it.name.toLowerCase().contains("unittest")) {
+            it.resolutionStrategy {
+                force 'org.jetbrains.kotlin:kotlin-reflect:2.2.10'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'
+                force 'org.jetbrains.kotlinx:kotlinx-coroutines-test-jvm:1.9.0'
+            }
+        }
+    }
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     androidTestImplementation libs.androidx.ui.test.junit4

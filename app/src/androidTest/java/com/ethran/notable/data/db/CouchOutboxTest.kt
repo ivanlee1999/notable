@@ -226,6 +226,46 @@ class CouchOutboxTest {
         )
     }
 
+    /**
+     * The ink-save bump is a single-column write now. It used to be getById-then-update — a
+     * whole-row read-modify-write on unserialized Dispatchers.IO, racing the sync engine's
+     * applyNotebook: a remote change (title, pageIds, parentFolderId, deletedAt) applied between
+     * the read and the write was reverted by the stale full row, and the freshly bumped updatedAt
+     * made the stale scalars win the next merge as well. Pinned by asserting the bump leaves
+     * every other column exactly as a peer's verbatim write left them.
+     */
+    @Test
+    fun the_ink_save_bump_touches_only_the_timestamp_columns() = runBlocking {
+        val (notebookId, _) = seedNotebook()
+        // A peer's write, landed the way the sync store lands it: the remote author kept.
+        val remote = repository.bookRepository.getById(notebookId)!!.copy(
+            title = "From the iPad",
+            updatedAt = Date(1_700_000_000_000L),
+            updatedBy = "ipad",
+        )
+        repository.bookRepository.updateVerbatim(remote)
+        clearQueue()
+
+        repository.bookRepository.touchUpdatedAt(notebookId)
+
+        val after = repository.bookRepository.getById(notebookId)!!
+        assertTrue("the bump must advance updatedAt", after.updatedAt.after(remote.updatedAt))
+        assertNull("the bump was made here, whoever wrote last", after.updatedBy)
+        assertEquals(
+            "every other column must be exactly what the peer wrote",
+            remote.copy(updatedAt = after.updatedAt, updatedBy = null),
+            after,
+        )
+        assertEquals(setOf(CouchDocId.notebook(notebookId)), queued())
+    }
+
+    @Test
+    fun bumping_a_notebook_that_does_not_exist_queues_nothing() = runBlocking {
+        repository.bookRepository.touchUpdatedAt(UUID.randomUUID().toString())
+
+        assertEquals(emptySet<String>(), queued())
+    }
+
     // endregion
 
     // region What must not be queued
@@ -386,6 +426,63 @@ class CouchOutboxTest {
             "and the store must answer with it rather than with the rows",
             store().load(documentId)?.isDeleted == true,
         )
+    }
+
+    /**
+     * The page-level deletion, whole: dbUtils.deletePage used to spread this over three
+     * transactions (manifest, tombstone, row delete), and a crash between them silently
+     * un-happened the deletion — a page gone from the list with no tombstone to publish the
+     * removal, so the peer's copy appended it straight back. One transaction now, checked in one
+     * shot: the manifest no longer names the page, the tombstone exists, and the outbox offers
+     * the notebook that carries both.
+     */
+    @Test
+    fun deleting_a_page_removes_it_records_its_tombstone_and_queues_the_notebook() = runBlocking {
+        val (notebookId, pageId) = seedNotebook()
+        repository.newPageInBook(notebookId, index = 1)
+        clearQueue()
+
+        val deleted = repository.deletePageLocally(pageId)
+
+        assertEquals(pageId, deleted?.id)
+        val notebook = repository.bookRepository.getById(notebookId)!!
+        assertTrue("the manifest must no longer name the page", pageId !in notebook.pageIds)
+        assertNull("the row must be gone", repository.pageRepository.getById(pageId))
+        assertEquals(
+            "the tombstone is what makes the removal travel",
+            listOf(pageId),
+            repository.deletedPageRepository.getByNotebook(notebookId).map { it.pageId },
+        )
+        // Only the notebook: the removal travels inside its manifest and deletedPageIds
+        // (protocol §6.6), and the page document itself is on its way out.
+        assertEquals(setOf(CouchDocId.notebook(notebookId)), queued())
+    }
+
+    @Test
+    fun deleting_a_page_that_does_not_exist_changes_nothing() = runBlocking {
+        val (notebookId, _) = seedNotebook()
+        clearQueue()
+
+        assertNull(repository.deletePageLocally(UUID.randomUUID().toString()))
+
+        assertEquals(emptySet<String>(), queued())
+        assertEquals(
+            emptyList<DeletedPage>(),
+            repository.deletedPageRepository.getByNotebook(notebookId),
+        )
+    }
+
+    @Test
+    fun deleting_a_quick_page_needs_no_tombstone_and_queues_nothing() = runBlocking {
+        val page = Page(notebookId = null)
+        repository.pageRepository.create(page)
+        clearQueue()
+
+        val deleted = repository.deletePageLocally(page.id)
+
+        assertEquals(page.id, deleted?.id)
+        assertNull(repository.pageRepository.getById(page.id))
+        assertEquals(emptySet<String>(), queued())
     }
 
     @Test
