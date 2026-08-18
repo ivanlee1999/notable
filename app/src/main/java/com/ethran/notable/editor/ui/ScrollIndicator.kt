@@ -21,7 +21,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.ui.convertDpToPixel
-import kotlin.math.max
 
 /**
  * Vertical scroll indicator (right side).
@@ -30,6 +29,7 @@ import kotlin.math.max
 @Composable
 fun ScrollIndicator(viewModel: EditorViewModel, page: PageView) {
     val toolbarState by viewModel.toolbarState.collectAsStateWithLifecycle()
+    val zoom by page.zoomLevel.collectAsStateWithLifecycle()
     BoxWithConstraints(
         modifier = Modifier
             .width(5.dp)
@@ -37,14 +37,17 @@ fun ScrollIndicator(viewModel: EditorViewModel, page: PageView) {
     ) {
         val viewportHeightPx = convertDpToPixel(this.maxHeight, LocalContext.current).toInt()
 
-        // Total scrollable height approximation:
-        // page.height is the total content height (page coordinates)
-        // page.scroll.y + viewportHeightPx ensures indicator still shows while near bottom
-        val virtualHeight = max(page.height, page.scroll.y.toInt() + viewportHeightPx)
-        if (virtualHeight <= viewportHeightPx) return@BoxWithConstraints
+        // All page units inside — the viewport's pixel extent only means anything on the page
+        // once divided by the zoom. See [ScrollIndicatorGeometry].
+        val thumb = ScrollIndicatorGeometry.thumb(
+            contentExtent = page.height.toFloat(),
+            scroll = page.scroll.y,
+            viewportPx = viewportHeightPx,
+            zoom = zoom,
+        ) ?: return@BoxWithConstraints
 
-        val indicatorSizeDp = (viewportHeightPx / virtualHeight.toFloat()) * this.maxHeight.value
-        val indicatorPositionDp = (page.scroll.y / virtualHeight.toFloat()) * this.maxHeight.value
+        val indicatorSizeDp = thumb.sizeFraction * this.maxHeight.value
+        val indicatorPositionDp = thumb.offsetFraction * this.maxHeight.value
 
         if (!toolbarState.isToolbarOpen) return@BoxWithConstraints
 
@@ -67,6 +70,7 @@ fun ScrollIndicator(viewModel: EditorViewModel, page: PageView) {
 @Composable
 fun HorizontalScrollIndicator(viewModel: EditorViewModel, page: PageView) {
     val toolbarState by viewModel.toolbarState.collectAsStateWithLifecycle()
+    val zoom by page.zoomLevel.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         Spacer(Modifier.weight(1f))
         BoxWithConstraints(
@@ -76,18 +80,20 @@ fun HorizontalScrollIndicator(viewModel: EditorViewModel, page: PageView) {
         ) {
             val viewportWidthPx = convertDpToPixel(this.maxWidth, LocalContext.current).toInt()
 
-            // Total scrollable width approximation: the page's own sheet, so the indicator shows
-            // up whenever the page is wider than the view and there is something to the right worth
-            // scrolling to. It used to be the *view's* width, which by definition never was.
-            // Deliberately the sheet rather than the ink extent (PageDataManager.computeWidth):
-            // that takes a lock and walks every stroke, which is not something to do during
-            // composition. page.scroll.x + viewportWidthPx keeps the indicator alive while panned
-            // past the sheet's edge, which is where out-of-bounds ink lives.
-            val virtualWidth = max(page.sheet.width, page.scroll.x.toInt() + viewportWidthPx)
-            if (virtualWidth <= viewportWidthPx) return@BoxWithConstraints
+            // The extent is deliberately the page's own sheet rather than the ink extent
+            // (PageDataManager.computeWidth): that takes a lock and walks every stroke, which is
+            // not something to do during composition. The scroll-past-the-sheet case (where
+            // out-of-bounds ink lives) is folded in by [ScrollIndicatorGeometry.thumb] — in page
+            // units, since the viewport's pixels only mean anything divided by the zoom.
+            val thumb = ScrollIndicatorGeometry.thumb(
+                contentExtent = page.sheet.width.toFloat(),
+                scroll = page.scroll.x,
+                viewportPx = viewportWidthPx,
+                zoom = zoom,
+            ) ?: return@BoxWithConstraints
 
-            val indicatorSizeDp = (viewportWidthPx / virtualWidth.toFloat()) * this.maxWidth.value
-            val indicatorPositionDp = (page.scroll.x / virtualWidth.toFloat()) * this.maxWidth.value
+            val indicatorSizeDp = thumb.sizeFraction * this.maxWidth.value
+            val indicatorPositionDp = thumb.offsetFraction * this.maxWidth.value
 
             if (!toolbarState.isToolbarOpen) return@BoxWithConstraints
 
