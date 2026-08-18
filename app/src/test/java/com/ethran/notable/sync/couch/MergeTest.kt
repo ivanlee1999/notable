@@ -51,7 +51,14 @@ class MergeTest {
         val images: List<ExpectedImage>,
         val pageWidth: Int,
         val pageHeight: Int,
+        // The parent's memory of the ink that moved to its children — §6.6. Pinned here because
+        // both apps must emit the same tombstones or the peer's tall copy never converges.
+        val deletedStrokes: List<ExpectedTombstone> = emptyList(),
+        val deletedImages: List<ExpectedTombstone> = emptyList(),
     )
+
+    @Serializable
+    private data class ExpectedTombstone(val id: String, val deletedAt: String)
 
     @Serializable
     private data class ExpectedStroke(
@@ -449,6 +456,16 @@ class MergeTest {
             }
             assertEquals("${vector.name}: ${want.id} sheet", want.pageWidth, made.page.pageWidth)
             assertEquals("${vector.name}: ${want.id} sheet", want.pageHeight, made.page.pageHeight)
+            assertEquals(
+                "${vector.name}: stroke tombstones on ${want.id}",
+                want.deletedStrokes.map { it.id to it.deletedAt },
+                made.page.deletedStrokes.map { it.id to it.deletedAt },
+            )
+            assertEquals(
+                "${vector.name}: image tombstones on ${want.id}",
+                want.deletedImages.map { it.id to it.deletedAt },
+                made.page.deletedImages.map { it.id to it.deletedAt },
+            )
         }
 
         for ((id, page) in produced.map { it.id to it.page }) {

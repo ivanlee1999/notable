@@ -2281,7 +2281,17 @@
           ],
           "images": [],
           "pageWidth": 1400,
-          "pageHeight": 1000
+          "pageHeight": 1000,
+          "deletedStrokes": [
+            {
+              "id": "s2",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            },
+            {
+              "id": "s3",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            }
+          ]
         },
         {
           "id": "82b2c548-bbc8-c002-5ea9-3e81ce812b9e",
@@ -2444,7 +2454,13 @@
           ],
           "images": [],
           "pageWidth": 1400,
-          "pageHeight": 1000
+          "pageHeight": 1000,
+          "deletedStrokes": [
+            {
+              "id": "below",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            }
+          ]
         },
         {
           "id": "6a6a9a3f-382f-fb76-ff04-3c6dce9852e9",
@@ -2588,7 +2604,13 @@
           ],
           "images": [],
           "pageWidth": 1400,
-          "pageHeight": 1000
+          "pageHeight": 1000,
+          "deletedImages": [
+            {
+              "id": "img",
+              "deletedAt": "2026-08-15T12:00:00Z"
+            }
+          ]
         },
         {
           "id": "38883ee5-8741-4ff7-9e60-40f5858e0e76",
@@ -2603,6 +2625,130 @@
           "pageHeight": 1000
         }
       ]
+    },
+    {
+      "name": "page-split-parent-beats-its-tall-past",
+      "kind": "page",
+      "why": "A device that split a tall page pushes the truncated parent with tombstones for the moved ink (\u00a76.6); a peer still holding the tall copy must converge to the truncated parent instead of unioning the moved strokes back in and re-growing the page forever.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 100,
+            "bottom": 200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+          }
+        ],
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-15T12:00:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-15T12:00:00Z",
+        "updatedBy": "ipad"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 100,
+            "bottom": 200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+          },
+          {
+            "id": "s2",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 1100,
+            "bottom": 1200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABwAAAF96dUVfcFIAgACA"
+          }
+        ],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-12T09:00:00Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "pageWidth": 1400,
+        "pageHeight": 1000,
+        "strokes": [
+          {
+            "id": "s1",
+            "createdAt": "2026-08-10T06:00:00Z",
+            "updatedAt": "2026-08-10T06:00:00Z",
+            "deviceId": "boox",
+            "pen": "BALLPEN",
+            "color": -16777216,
+            "size": 3,
+            "maxPressure": 1,
+            "top": 100,
+            "bottom": 200,
+            "left": 5,
+            "right": 15,
+            "pointsData": "U0ICAQIAAAAABQAAAGdeb31ABgAAAF9wUl9wUgCAAIA="
+          }
+        ],
+        "deletedStrokes": [
+          {
+            "id": "s2",
+            "deletedAt": "2026-08-15T12:00:00Z"
+          }
+        ],
+        "images": [],
+        "deletedImages": [],
+        "createdAt": "2026-08-10T06:00:00Z",
+        "updatedAt": "2026-08-15T12:00:00Z",
+        "updatedBy": "ipad"
+      }
     }
   ]
 }
