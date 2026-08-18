@@ -747,7 +747,12 @@ class PageDataManager @Inject constructor(
                 touchLocked(entry)
                 logEstimateVsActualLocked(entry)
             }
-            recomputeHeight(pageId)
+            // Measured against the loaded row's own sheet, not [getSheet]'s answer: this load also
+            // runs for prefetched neighbors, and [getSheet] only knows the current page — a
+            // neighbor would be measured against this screen's sheet, clamping a page whose paper
+            // is taller than the screen short of its own bottom edge. A page that declares no size
+            // still resolves to the screen sheet, exactly as before.
+            recomputeHeight(pageId, pageWithData.page.sheet())
         } catch (e: CancellationException) {
             log.w("Loading of page $pageId was cancelled.")
             if (!validatePageDataLoaded(pageId)) removePage(pageId)
@@ -986,9 +991,16 @@ class PageDataManager @Inject constructor(
      *
      * Images count, and used not to: the height came from the strokes alone, so an image below the
      * sheet was stored, drawn, and impossible to scroll to.
+     *
+     * [sheet] defaults to [getSheet], which can only answer for the *current* page — [pageFromDb]
+     * is the only page row this class holds. A caller measuring any other page must pass that
+     * page's own sheet: asked through [getSheet], a prefetched neighbor was measured against this
+     * screen's sheet instead of its own, which on a screen shorter than the paper put the bottom
+     * of the sheet out of scroll reach — and nothing re-measured it on entry, because entering a
+     * prefetched page just joins its already-finished load.
      */
-    fun recomputeHeight(pageId: String): Int {
-        val sheetHeight = getSheet(pageId).height
+    fun recomputeHeight(pageId: String, sheet: PageSize = getSheet(pageId)): Int {
+        val sheetHeight = sheet.height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
         val measured = synchronized(lock) {
