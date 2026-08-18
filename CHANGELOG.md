@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.29.0
+
+Ink is filed where it was drawn, not where the view has moved to since.
+
+- **A stroke stays where the pen left it, even if the page moves while you are writing.** Ink is
+  stored in page units, and which scroll and zoom it was converted through used to be decided when
+  the pen lifted — so anything that moved the view mid-stroke (a hand scrolling, a page finishing
+  its load, a rotation re-fitting the page) filed the stroke against a view you had never seen. The
+  panel goes on showing ink under the nib, so the page looked right until something repainted it,
+  by which time the misplaced ink had synced. The view is now taken when the pen goes down and held
+  until the stroke has been read — for strokes, shapes, the lasso and the eraser alike.
+- **The scroll no longer creeps away from the picture.** Travel worth less than a whole pixel moved
+  the scroll position without moving the screen, and the two stayed apart — every stroke after that
+  filed through a view nobody could see. The scroll now moves exactly as far as the screen does,
+  and travel too small to draw is carried into the next scroll instead of being lost.
+
 ## 0.28.0
 
 If your notes sync but your pictures never arrive, this release finally says why — and the fix is
