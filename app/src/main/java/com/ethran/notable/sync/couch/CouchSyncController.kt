@@ -920,7 +920,11 @@ class CouchSyncController @Inject constructor(
         // 413 is the one terminal status with an answer the user can act on. Everything else in
         // that class is a server or configuration fault they can only report.
         is CouchError.Server -> when {
-            error.status == 413 -> "A page is too large for the sync server to accept."
+            error.status == 413 -> {
+                val size = error.requestBytes?.let { " (${humanBytes(it)})" } ?: ""
+                "A document$size is too large for the sync server to accept. Everything else " +
+                    "still syncs; it will be retried once it changes."
+            }
             error.status < 500 ->
                 "The sync server refused the request (${error.status}). Check the sync settings."
             else -> "The sync server returned an error (${error.status})."
@@ -933,6 +937,13 @@ class CouchSyncController @Inject constructor(
     private companion object {
         const val TAG = "CouchSync"
     }
+}
+
+/** Bytes for a human: the number that makes "too large" actionable. */
+private fun humanBytes(bytes: Long): String = when {
+    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1 shl 10 -> "${bytes / 1024} KB"
+    else -> "$bytes bytes"
 }
 
 /**

@@ -466,6 +466,20 @@ class CouchSyncEngine(
      */
     private val approvedDeletions: MutableSet<String> = LinkedHashSet()
 
+    /**
+     * Documents the server refused as too large (413), by id, with the `updatedAt` of the exact
+     * copy it refused. A 413 is terminal for that content — the server will keep saying it — but
+     * the document sat in the outbox being re-derived and re-sent in full on every flush,
+     * megabytes a pass for an oversized asset, only to hear the same refusal. Later flushes skip
+     * an entry here until the document's `updatedAt` moves, which is the one thing that makes the
+     * answer worth asking for again; the entry then leaves and the document gets one real attempt.
+     *
+     * In-memory on purpose: an engine lives as long as one configuration, and after a restart the
+     * single re-send re-learns the entry. Guarded by [mutex] like everything else here.
+     */
+    private class Oversized(val updatedAt: String, val requestBytes: Long?)
+    private val oversized = LinkedHashMap<String, Oversized>()
+
     init {
         // The checkpoint blob's copy of the outbox is written asynchronously (see
         // `CouchSyncHost.stateWrites`), so it can be a moment behind at the point the process died.
@@ -901,7 +915,20 @@ class CouchSyncEngine(
             queue = queue - held.toSet()
         }
 
+        // Documents this pass may not push because something they name was just refused — see
+        // [suppressDependents]. Only ever ids later in [queue] than the failure that put them
+        // here, because the push order sorts dependencies first.
+        val suppressed = mutableSetOf<String>()
+
         for ((index, documentId) in queue.withIndex()) {
+            if (documentId in suppressed) {
+                stillDirty += documentId
+                continue
+            }
+            if (skipAsOversized(documentId, queue, index, suppressed, failures, failureCauses)) {
+                stillDirty += documentId
+                continue
+            }
             try {
                 when (push(documentId)) {
                     PushOutcome.PUSHED -> pushed += documentId
@@ -912,11 +939,30 @@ class CouchSyncEngine(
                 failures[documentId] = error.detail
                 failureCauses[documentId] = error
                 stillDirty += documentId
+                if (error is CouchError.Server && error.status == 413) {
+                    // Remember exactly what was refused, so later flushes stop re-deriving and
+                    // re-sending it until the content changes — see [oversized].
+                    runCatching { store.load(documentId) }.getOrNull()?.let { body ->
+                        oversized[documentId] = Oversized(body.updatedAt, error.requestBytes)
+                    }
+                }
                 if (error.isRetriable) {
                     hasRetriableFailure = true
                     (error as? CouchError.Server)?.retryAfterMs?.let {
                         retryAfterMs = maxOf(retryAfterMs ?: 0L, it)
                     }
+                } else if (error !is CouchError.Unauthorized &&
+                    error !is CouchError.Blocked &&
+                    error !is CouchError.Conflict
+                ) {
+                    // The server refused this document on its merits and will keep refusing it.
+                    // Whatever is queued behind it that *names* it must not push this pass: the
+                    // push order exists so a manifest never precedes its documents, and a 413'd
+                    // page with its notebook still in the queue used to break that invariant
+                    // permanently. (A conflict is contention, not a refusal — the document is
+                    // demonstrably on the server — and unauthorized/blocked stop the whole loop
+                    // below anyway.)
+                    suppressDependents(documentId, queue, index, suppressed)
                 }
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
@@ -963,6 +1009,72 @@ class CouchSyncEngine(
             // on: it is a warning, and a warning must never be able to fail a push.
             clockSkewSeconds = client.clockSkewSeconds,
         )
+    }
+
+    /**
+     * Whether [documentId] is denylisted as oversized and unchanged — in which case the refusal is
+     * reported exactly as the wire would have, minus the round trip that re-sends megabytes to be
+     * told the same thing, and its dependents are held back the same way. A changed document
+     * leaves the denylist and earns one real attempt.
+     */
+    private fun skipAsOversized(
+        documentId: String,
+        queue: List<String>,
+        index: Int,
+        suppressed: MutableSet<String>,
+        failures: MutableMap<String, String>,
+        failureCauses: MutableMap<String, Throwable>,
+    ): Boolean {
+        val entry = oversized[documentId] ?: return false
+        val current = runCatching { store.load(documentId) }.getOrNull()
+        if (current == null || current.updatedAt != entry.updatedAt) {
+            oversized.remove(documentId)
+            return false
+        }
+        val refusal = CouchError.Server(413, documentId, requestBytes = entry.requestBytes)
+        failures[documentId] = refusal.detail
+        failureCauses[documentId] = refusal
+        suppressDependents(documentId, queue, index, suppressed)
+        return true
+    }
+
+    /**
+     * Holds back, for this pass alone, everything queued after [index] that names [documentId].
+     *
+     * The push order — assets, then folders and pages, then notebooks — exists precisely so a
+     * reader never sees a manifest pointing at documents that have not landed. That invariant is
+     * only as strong as the failure handling: the loop used to continue past a non-retriable
+     * per-document refusal, so a 413'd page's notebook pushed moments later and every peer then
+     * held a manifest naming a page the server will never have. A failed page holds back its
+     * owning notebook; a failed asset holds back the queued pages and notebooks that reference it
+     * (and those pages' notebooks). Nothing is dropped — the held documents stay dirty and go out
+     * the moment their dependency does, or is edited down to size.
+     */
+    private fun suppressDependents(
+        documentId: String,
+        queue: List<String>,
+        index: Int,
+        suppressed: MutableSet<String>,
+    ) {
+        when (CouchDocId.split(documentId)?.first) {
+            CouchDocType.PAGE -> owningNotebookOf(documentId)?.let { suppressed += it }
+
+            CouchDocType.ASSET -> for (later in queue.subList(index + 1, queue.size)) {
+                val type = CouchDocId.split(later)?.first
+                if (type != CouchDocType.PAGE && type != CouchDocType.NOTEBOOK) continue
+                val body = runCatching { store.load(later) }.getOrNull() ?: continue
+                if (documentId !in body.referencedAssetIds) continue
+                suppressed += later
+                if (type == CouchDocType.PAGE) owningNotebookOf(later)?.let { suppressed += it }
+            }
+
+            else -> Unit
+        }
+    }
+
+    private fun owningNotebookOf(pageDocumentId: String): String? {
+        val body = runCatching { store.load(pageDocumentId) }.getOrNull() as? CouchDocBody.Page
+        return body?.page?.notebookId?.let { CouchDocId.notebook(it) }
     }
 
     private enum class PushOutcome { PUSHED, MERGED_THEN_PUSHED, NOTHING_TO_PUSH }
