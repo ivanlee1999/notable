@@ -4,6 +4,9 @@ import androidx.room.RenameColumn
 import androidx.room.migration.AutoMigrationSpec
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.UUID
 
 val MIGRATION_16_17 = object : Migration(16, 17) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -240,6 +243,179 @@ val MIGRATION_45_46 = object : Migration(45, 46) {
 }
 
 /**
+ * Gives every loose page a notebook, and takes away the column that let it go without one.
+ *
+ * Until 0.14.0 a page whose `notebookId` was NULL was a "quick note": one sheet parked directly in
+ * a library folder through `page.parentFolderId`, created by a button that skipped the new-notebook
+ * dialog. The speed was the point, and the speed is kept — but the second kind of thing is not, and
+ * this migration is where it ends.
+ *
+ * It ends because a loose page was never *anywhere*. The protocol gives pages no lifecycle of their
+ * own (§6.4 — they live and die inside a notebook's `pageIds`), so `RoomCouchStore.allDocumentIds`
+ * enumerated pages through their notebook's manifest and a page with no notebook was never offered
+ * to the server. Nothing the user wrote on one has ever reached their iPad, and nothing ever would
+ * have: bopa stores pages as files *inside* the notebook directory, so it has no shape to put one
+ * in. On top of that a quick page matched no search, could not be starred, and was hard-deleted
+ * rather than going to the Trash.
+ *
+ * **Phase A** gives each one a notebook of its own — reMarkable's "Convert to Notebook", applied
+ * once to everything. One notebook per page rather than one shared "Quick notes" book: these pages
+ * were written as separate thoughts and merging them would invent a document the user never made.
+ * The title is the page's own name if it has one, and otherwise the creation date in the same
+ * `dd MMM yyyy` the library already printed under the thumbnail — so the shelf reads afterwards
+ * much as the strip read before. The notebook inherits the page's own background and sheet, so a
+ * second page added later matches the first, and takes over its `parentFolderId` so the note stays
+ * in the folder the user left it in.
+ *
+ * The outbox rows are the whole point of doing this here rather than lazily. These documents have
+ * never been offered to the server even once, so no repair scan will ever notice them —
+ * `CouchSyncEngine.neverSent` looks for a mutation site that forgot to queue, and nothing here ever
+ * forgot: it was never eligible. Unqueued, a migrated note would sit in the library looking like
+ * every other notebook and silently never travel. This is the moment they join sync.
+ *
+ * `updatedAt` is stamped to now and `updatedBy` cleared for the reason [MIGRATION_45_46] spells
+ * out: §5.5 decides a scalar by `updatedAt`, and a stamp left at the original edit would lose to
+ * any peer that has touched something since. Here it is close to free — the peer has no copy of
+ * these documents at all, so there is nothing to lose against — but the stamp is what makes the
+ * first push unambiguous rather than a tie.
+ *
+ * **Phase B** then rebuilds `page` with `notebookId` NOT NULL and no `parentFolderId` at all.
+ * SQLite cannot tighten a column in place, so this is the standard create-copy-drop-rename; it has
+ * to run after Phase A, or the copy would fault on the rows Phase A exists to fix. Dropping the
+ * column matters as much as tightening the other: `parentFolderId` on a page had no meaning except
+ * "this page is filed somewhere a notebook isn't", and a column that can still express the concept
+ * is a concept that grows back.
+ *
+ * A page that somehow reaches this point with no notebook *and* no row to build one from cannot
+ * happen — Phase A's cursor covers exactly `notebookId IS NULL` — but if the copy in Phase B were
+ * ever to fault, it faults loudly inside the transaction and the upgrade rolls back, which is the
+ * right failure: no ink is destroyed, and the database still opens on the old build.
+ */
+val MIGRATION_47_48 = object : Migration(47, 48) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val now = System.currentTimeMillis()
+        // Locale-default, matching what the library printed under an unnamed quick page.
+        val dateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+
+        // ---- Phase A: every loose page gets a notebook of its own ----
+
+        // Read the whole set up front rather than stepping the cursor while writing to the same
+        // table: the UPDATE below would otherwise be mutating what is still being iterated.
+        val loose = mutableListOf<Array<Any?>>()
+        db.query(
+            """
+            SELECT `id`, `title`, `parentFolderId`, `background`, `backgroundType`,
+                   `pageWidth`, `pageHeight`, `createdAt`
+            FROM `Page` WHERE `notebookId` IS NULL
+            """.trimIndent()
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                loose += arrayOf(
+                    cursor.getString(0),
+                    if (cursor.isNull(1)) null else cursor.getString(1),
+                    if (cursor.isNull(2)) null else cursor.getString(2),
+                    cursor.getString(3),
+                    cursor.getString(4),
+                    if (cursor.isNull(5)) null else cursor.getInt(5),
+                    if (cursor.isNull(6)) null else cursor.getInt(6),
+                    cursor.getLong(7),
+                )
+            }
+        }
+
+        for (row in loose) {
+            val pageId = row[0] as String
+            val title = row[1] as String?
+            val parentFolderId = row[2] as String?
+            val background = row[3] as String
+            val backgroundType = row[4] as String
+            val pageWidth = row[5] as Int?
+            val pageHeight = row[6] as Int?
+            val createdAt = row[7] as Long
+
+            val notebookId = UUID.randomUUID().toString()
+            val notebookTitle = title?.takeIf { it.isNotBlank() }
+                ?: dateFormat.format(java.util.Date(createdAt))
+
+            db.execSQL(
+                """
+                INSERT INTO `Notebook` (
+                    `id`, `title`, `openPageId`, `pageIds`, `parentFolderId`,
+                    `defaultBackground`, `defaultBackgroundType`,
+                    `defaultPageWidth`, `defaultPageHeight`,
+                    `bookmarks`, `outline`, `linkedExternalUri`,
+                    `createdAt`, `updatedAt`, `deletedAt`, `updatedBy`
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', NULL, ?, ?, NULL, NULL)
+                """.trimIndent(),
+                arrayOf<Any?>(
+                    notebookId,
+                    notebookTitle,
+                    pageId,
+                    // The JSON shape `Converters.fromListString` reads back.
+                    "[\"$pageId\"]",
+                    parentFolderId,
+                    background,
+                    backgroundType,
+                    pageWidth,
+                    pageHeight,
+                    createdAt,
+                    now,
+                ),
+            )
+
+            db.execSQL(
+                "UPDATE `Page` SET `notebookId` = ?, `updatedAt` = ?, `updatedBy` = NULL WHERE `id` = ?",
+                arrayOf<Any?>(notebookId, now, pageId),
+            )
+
+            // INSERT OR IGNORE and `queuedAt` left alone on an existing row, as MIGRATION_45_46
+            // does: the outbox measures how long the *oldest* unsent change has waited.
+            db.execSQL(
+                "INSERT OR IGNORE INTO `couch_outbox` (`docId`, `queuedAt`) VALUES (?, ?), (?, ?)",
+                arrayOf<Any?>("notebook:$notebookId", now, "page:$pageId", now),
+            )
+        }
+
+        // ---- Phase B: rebuild `page` without the nullability that made loose pages expressible ----
+
+        db.execSQL(
+            """
+            CREATE TABLE `Page_new` (
+                `id` TEXT NOT NULL,
+                `scroll` INTEGER NOT NULL,
+                `notebookId` TEXT NOT NULL,
+                `background` TEXT NOT NULL DEFAULT 'blank',
+                `backgroundType` TEXT NOT NULL DEFAULT 'native',
+                `title` TEXT,
+                `pageWidth` INTEGER,
+                `pageHeight` INTEGER,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                `updatedBy` TEXT,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`notebookId`) REFERENCES `Notebook`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO `Page_new` (
+                `id`, `scroll`, `notebookId`, `background`, `backgroundType`,
+                `title`, `pageWidth`, `pageHeight`, `createdAt`, `updatedAt`, `updatedBy`
+            )
+            SELECT `id`, `scroll`, `notebookId`, `background`, `backgroundType`,
+                   `title`, `pageWidth`, `pageHeight`, `createdAt`, `updatedAt`, `updatedBy`
+            FROM `Page`
+            """.trimIndent()
+        )
+        db.execSQL("DROP TABLE `Page`")
+        db.execSQL("ALTER TABLE `Page_new` RENAME TO `Page`")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_Page_notebookId` ON `Page` (`notebookId`)")
+    }
+}
+
+/**
  * Every hand-written migration, in one list, because opening the database at the current version
  * needs *all* of them — the auto-migrations Room generates only cover the gaps between these.
  *
@@ -258,4 +434,5 @@ val APP_MIGRATIONS = arrayOf(
     MIGRATION_41_42,
     MIGRATION_44_45,
     MIGRATION_45_46,
+    MIGRATION_47_48,
 )

@@ -7,6 +7,7 @@ import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Page
+import com.ethran.notable.data.db.getParentFolder
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.io.ThumbnailBackfillQueue
 import com.ethran.notable.sync.couch.CouchOutlineEntry
@@ -77,7 +78,9 @@ class QuickNavViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             val page = runCatching { pageRepository.getById(currentPageId) }.getOrNull()
-            val folderList = getFolderList(appRepository, page)
+            // A page is filed wherever its notebook is filed; it has no folder of its own.
+            val folderId = page?.getParentFolder(appRepository.bookRepository)
+            val folderList = getFolderList(appRepository, folderId)
 
             // Read favorites from your database/preferences
             val currentSettings = GlobalAppSettings.current
@@ -88,7 +91,7 @@ class QuickNavViewModel(
 
             _uiState.update { state ->
                 state.copy(
-                    folderId = page?.parentFolderId,
+                    folderId = folderId,
                     breadcrumbFolders = folderList,
                     bookId = page?.notebookId,
                     isCurrentPagePinned = isFavorite,

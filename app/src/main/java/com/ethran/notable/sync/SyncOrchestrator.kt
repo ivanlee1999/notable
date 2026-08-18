@@ -353,10 +353,6 @@ class SyncOrchestrator @Inject constructor(
                 return
             }
             val notebookId = page.notebookId
-            if (notebookId == null) {
-                log.d(TAG, "Note closed: page $pageId is a quick page, not in a notebook")
-                return
-            }
             log.d(TAG, "Note closed; syncing its notebook $notebookId")
             syncNotebook(notebookId)
         } catch (e: Exception) {

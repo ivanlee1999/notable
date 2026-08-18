@@ -164,14 +164,12 @@ class CouchSyncHost @Inject constructor(
      * moves and page order by, and marking it dirty here pushed an unchanged document — a fresh
      * server revision per stroke, carrying nothing.
      *
-     * A page with no notebook — a quick page — queues nothing, matching
-     * [RoomCouchStore.allDocumentIds]: the protocol has no standalone page lifecycle (§6.4) and
-     * pushing one lands a document no manifest will ever name. A page whose row is already gone
-     * also queues nothing: its removal travels inside the notebook's manifest.
+     * A page whose row is already gone queues nothing: its removal travels inside the notebook's
+     * manifest, not as a document of its own.
      */
     override suspend fun markPageDirty(pageId: String) {
         val engine = stack()?.engine ?: return
-        appRepository.pageRepository.getById(pageId)?.notebookId ?: return
+        appRepository.pageRepository.getById(pageId) ?: return
         engine.markDirty(listOf(CouchDocId.page(pageId)))
     }
 

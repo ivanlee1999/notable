@@ -16,6 +16,7 @@ import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.data.db.KvRepository
+import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageRepository
@@ -125,9 +126,9 @@ class PageDataManagerWriteOrderTest {
     )
 
     private fun seedPage(): String = runBlocking {
-        val page = Page(notebookId = null)
-        repository.pageRepository.create(page)
-        page.id
+        val notebook = Notebook(title = "Notes")
+        repository.bookRepository.create(notebook)
+        repository.bookRepository.getById(notebook.id)!!.pageIds.single()
     }
 
     private fun stroke(pageId: String) = Stroke(

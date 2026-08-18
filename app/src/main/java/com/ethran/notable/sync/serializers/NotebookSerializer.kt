@@ -147,7 +147,9 @@ object NotebookSerializer {
             title = page.title,
             background = page.background,
             backgroundType = page.backgroundType,
-            parentFolderId = page.parentFolderId,
+            // A page has no folder of its own — it is filed wherever its notebook is. The field
+            // stays on the DTO so a stock upstream Notable still parses what we write.
+            parentFolderId = null,
             scroll = page.scroll,
             pageWidth = page.pageWidth,
             pageHeight = page.pageHeight,
@@ -218,13 +220,22 @@ object NotebookSerializer {
                 )
             }
 
+            // Every page belongs to a notebook. A file that names none is either a stock
+            // upstream Notable's quick page or a corrupted export; either way there is nowhere
+            // here to put it.
+            val pageNotebookId = pageDto.notebookId
+            if (pageNotebookId == null) {
+                return AppResult.Error(
+                    DomainError.UnexpectedState("Page belongs to no notebook", recoverable = false)
+                )
+            }
+
             val page = Page(
                 id = pageDto.id,
-                notebookId = pageDto.notebookId,
+                notebookId = pageNotebookId,
                 title = pageDto.title,
                 background = pageDto.background,
                 backgroundType = pageDto.backgroundType,
-                parentFolderId = pageDto.parentFolderId,
                 scroll = pageDto.scroll,
                 pageWidth = pageDto.pageWidth?.takeIf { it > 0 },
                 pageHeight = pageDto.pageHeight?.takeIf { it > 0 },

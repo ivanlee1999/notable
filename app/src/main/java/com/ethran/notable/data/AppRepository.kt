@@ -13,6 +13,7 @@ import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.ImageRepository
 import com.ethran.notable.data.db.KvProxy
+import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageRepository
@@ -27,12 +28,18 @@ import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private val log = ShipBook.getLogger("appRepository")
+
+// The caption the library used to print under an unnamed quick page, now the name a one-tap note
+// is born with. Locale-default so the date reads the way the rest of the device writes dates.
+private val noteDateFormat get() = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -300,24 +307,38 @@ class AppRepository @Inject constructor(
         return book.getPageIndex(pageId)
     }
 
-    suspend fun createNewQuickPage(parentFolderId: String? = null): String? {
+    /**
+     * A notebook for capture: one tap, no dialog, straight onto a blank page.
+     *
+     * This replaced the old `createNewQuickPage`, which made a page belonging to no notebook. The
+     * speed was worth keeping and the second kind of thing was not — a loose page was never
+     * offered for sync, never matched a search, and could not go to the Trash. What the button
+     * makes now is an ordinary notebook, so a note jotted here is a note the iPad also has.
+     *
+     * Titled with the date, which is what the library already captioned an unnamed quick page
+     * with, so a shelf of these reads the way the old strip did. The name is a placeholder for the
+     * user to replace, not an identifier — nothing looks a notebook up by title.
+     *
+     * @return the new notebook's id and the page to open in it, or null if the write failed.
+     */
+    suspend fun createNewNote(parentFolderId: String? = null): Pair<String, String>? {
         val sheet = GlobalAppSettings.current.defaultPageSize
-        val page = Page(
-            notebookId = null,
-            background = GlobalAppSettings.current.defaultNativeTemplate,
-            backgroundType = BackgroundType.Native.key,
+        val notebook = Notebook(
+            title = noteDateFormat.format(Date()),
             parentFolderId = parentFolderId,
-            pageWidth = sheet.width,
-            pageHeight = sheet.height
+            defaultBackground = GlobalAppSettings.current.defaultNativeTemplate,
+            defaultBackgroundType = BackgroundType.Native.key,
+            defaultPageWidth = sheet.width,
+            defaultPageHeight = sheet.height
         )
-        try {
-            pageRepository.create(page)
+        return try {
+            // `create` writes the notebook, its first page and both outbox entries in one
+            // transaction, so what it hands back is already durable.
+            notebook.id to bookRepository.create(notebook)
         } catch (e: android.database.sqlite.SQLiteConstraintException) {
-            log.e("Failed to create page: ${e.message}")
-            // it should return something like a result
-            return null
+            log.e("Failed to create note: ${e.message}")
+            null
         }
-        return page.id
     }
 
     suspend fun newPageInBook(notebookId: String, index: Int = 0): String? {
@@ -358,13 +379,11 @@ class AppRepository @Inject constructor(
      */
     suspend fun deletePageLocally(pageId: String): Page? = db.withTransaction {
         val page = pageRepository.getById(pageId) ?: return@withTransaction null
-        if (page.notebookId != null) {
-            bookRepository.removePage(page.notebookId, pageId)
-            // A manifest that merely stopped naming the page is not a deletion anyone else can
-            // read: `mergeNotebook` is an add-wins union, so the peer's copy appends it straight
-            // back. The tombstone is the fact that travels (protocol §6.6).
-            deletedPageRepository.record(page.notebookId, listOf(pageId))
-        }
+        bookRepository.removePage(page.notebookId, pageId)
+        // A manifest that merely stopped naming the page is not a deletion anyone else can
+        // read: `mergeNotebook` is an add-wins union, so the peer's copy appends it straight
+        // back. The tombstone is the fact that travels (protocol §6.6).
+        deletedPageRepository.record(page.notebookId, listOf(pageId))
         pageRepository.delete(pageId)
         page
     }

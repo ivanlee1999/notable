@@ -157,12 +157,19 @@ class NotableNavigator(
         }
     }
 
-    fun onCreateNewQuickPage(appRepository: AppRepository, folderId: String?) {
+    /**
+     * One tap to a blank page: make a notebook in the folder the user is standing in, and open it.
+     *
+     * This is what the old quick-page button became. The speed is the same — no dialog, straight
+     * into the editor — but what it makes is an ordinary notebook, so the note syncs, is searchable
+     * and can be recovered from the Trash. None of which a loose page could do.
+     */
+    fun onCreateNewNote(appRepository: AppRepository, folderId: String?) {
         coroutineScope.launch {
-            val pageId = withContext(Dispatchers.IO) {
-                appRepository.createNewQuickPage(parentFolderId = folderId)
+            val (bookId, pageId) = withContext(Dispatchers.IO) {
+                appRepository.createNewNote(parentFolderId = folderId)
             } ?: return@launch
-            navController.navigate(EditorDestination.createRoute(pageId, null))
+            navController.navigate(EditorDestination.createRoute(pageId, bookId))
         }
     }
 

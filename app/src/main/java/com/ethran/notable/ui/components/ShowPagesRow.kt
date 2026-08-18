@@ -36,7 +36,6 @@ import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.ui.noRippleClickable
 import com.onyx.android.sdk.extension.isNullOrEmpty
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.FilePlus
 import io.shipbook.shipbooksdk.ShipBook
 
 
@@ -45,10 +44,8 @@ fun ShowPagesRow(
     appRepository: AppRepository,
     pages: List<Page>?,
     currentPageId: String? = null,
-    title: String? = "Quick Pages",
+    title: String? = null,
     onSelectPage: (String) -> Unit,
-    showAddQuickPage: Boolean = false,
-    onCreateNewQuickPage: () -> Unit = {},
     onPreviewNeeded: (String) -> Unit = {},
 ) {
 
@@ -63,28 +60,6 @@ fun ShowPagesRow(
             .fillMaxWidth()
             .autoEInkAnimationOnScroll()
     ) {
-        // Add the "Add quick page" button
-        if (showAddQuickPage) {
-            item {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .width(100.dp)
-                        .aspectRatio(3f / 4f)
-                        .border(1.dp, Color.Gray, RectangleShape)
-                        .noRippleClickable {
-                            onCreateNewQuickPage()
-
-                        }) {
-                    Icon(
-                        imageVector = FeatherIcons.FilePlus,
-                        contentDescription = "Add Quick Page",
-                        tint = Color.Gray,
-                        modifier = Modifier.size(40.dp),
-                    )
-                }
-            }
-        }
         // Render existing pages
         if (!pages.isNullOrEmpty()) {
             items(pages.reversed()) { page ->

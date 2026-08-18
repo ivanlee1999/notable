@@ -257,58 +257,36 @@ class CouchOutboxTest {
 
     // endregion
 
-    // region Quick pages
+    // region One-tap notes
 
     /**
-     * Quick pages are deliberately not offered for sync (`RoomCouchStore.allDocumentIds`): the
-     * protocol has no standalone page lifecycle — pages live and die with a notebook's `pageIds`,
-     * and the peer drops orphan pages on receipt. Queueing one anyway pushed it into a void on
-     * every edit: never enumerable on the peer, never deletable remotely. The exclusion has to be
-     * symmetric: what enumeration never offers, editing must not queue.
+     * The Library's one-tap capture button, which replaced the quick page.
+     *
+     * A quick page (`notebookId == null`) was never offered for sync — `allDocumentIds` enumerates
+     * pages through their notebook's manifest, so a page belonging to no notebook was never
+     * enumerable on the peer and never deletable remotely. Whatever was written on one stayed on
+     * the device that made it. Making a notebook instead is what fixes that, and this is the
+     * assertion that says so: both documents queued, the moment the button is pressed.
      */
     @Test
-    fun creating_a_quick_page_queues_nothing() = runBlocking {
-        repository.pageRepository.create(Page(notebookId = null))
-
-        assertEquals(emptySet<String>(), queued())
-    }
-
-    @Test
-    fun editing_a_quick_page_queues_nothing() = runBlocking {
-        val page = Page(notebookId = null)
-        repository.pageRepository.create(page)
-        clearQueue()
-
-        repository.pageRepository.touchUpdatedAt(page.id)
-        repository.pageRepository.rename(page.id, "Groceries")
-        repository.pageRepository.update(
-            repository.pageRepository.getById(page.id)!!.copy(background = "grid")
-        )
-
-        assertEquals(emptySet<String>(), queued())
-    }
-
-    /**
-     * The moment a quick page is adopted into a notebook it joins sync whole: the page document
-     * and the manifest that names it, together. This is what makes the exclusion above safe —
-     * nothing is lost, it just travels once it has somewhere to live.
-     */
-    @Test
-    fun adopting_a_quick_page_queues_the_page_and_the_notebook() = runBlocking {
-        val (notebookId, _) = seedNotebook()
-        val page = Page(notebookId = null)
-        repository.pageRepository.create(page)
-        clearQueue()
-
-        repository.pageRepository.update(
-            repository.pageRepository.getById(page.id)!!.copy(notebookId = notebookId)
-        )
-        repository.bookRepository.addPage(notebookId, page.id)
+    fun creating_a_note_queues_the_notebook_and_its_page() = runBlocking {
+        val (notebookId, pageId) = repository.createNewNote()!!
 
         assertEquals(
-            setOf(CouchDocId.notebook(notebookId), CouchDocId.page(page.id)),
+            setOf(CouchDocId.notebook(notebookId), CouchDocId.page(pageId)),
             queued(),
         )
+    }
+
+    /** And it is a real notebook: one page, named by it, openable on it. */
+    @Test
+    fun a_note_is_an_ordinary_single_page_notebook() = runBlocking {
+        val (notebookId, pageId) = repository.createNewNote()!!
+
+        val notebook = repository.bookRepository.getById(notebookId)!!
+        assertEquals(listOf(pageId), notebook.pageIds)
+        assertEquals(pageId, notebook.openPageId)
+        assertEquals(notebookId, repository.pageRepository.getById(pageId)!!.notebookId)
     }
 
     // endregion
@@ -515,19 +493,6 @@ class CouchOutboxTest {
             emptyList<DeletedPage>(),
             repository.deletedPageRepository.getByNotebook(notebookId),
         )
-    }
-
-    @Test
-    fun deleting_a_quick_page_needs_no_tombstone_and_queues_nothing() = runBlocking {
-        val page = Page(notebookId = null)
-        repository.pageRepository.create(page)
-        clearQueue()
-
-        val deleted = repository.deletePageLocally(page.id)
-
-        assertEquals(page.id, deleted?.id)
-        assertNull(repository.pageRepository.getById(page.id))
-        assertEquals(emptySet<String>(), queued())
     }
 
     @Test

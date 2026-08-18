@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.db.Folder
-import com.ethran.notable.data.db.Page
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.InkaTheme
 
@@ -78,21 +77,6 @@ suspend fun getFolderList(appRepository: AppRepository, folderId: String?): List
     return folderList
 }
 
-suspend fun getFolderList(appRepository: AppRepository, page: Page?): List<Folder> {
-    val folderList = mutableListOf<Folder>()
-    var currentFolderId = page?.parentFolderId
-    while (currentFolderId != null) {
-        val folder = appRepository.folderRepository.get(currentFolderId)
-        if (folder != null) {
-            folderList.add(folder)
-            currentFolderId = folder.parentFolderId
-        } else {
-            currentFolderId = null
-        }
-    }
-    folderList.reverse() // Parents first
-    return folderList
-}
 
 @Preview(showBackground = true)
 @Composable

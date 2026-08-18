@@ -142,10 +142,11 @@ class ImportEngine @Inject constructor(
 
         xoppFile.importBook(
             uri = uri,
+            notebookId = book.id,
             onPageCreated = { page ->
                 try {
                     // TODO: Handle conflicts with existing pages.
-                    pageRepo.create(page.copy(notebookId = book.id))
+                    pageRepo.create(page)
                     bookRepo.addPage(book.id, page.id)
                     importedPageIds.add(page.id)
                 } catch (e: Exception) {
@@ -210,9 +211,9 @@ class ImportEngine @Inject constructor(
         val importedPageIds = mutableListOf<String>()
         var persistentError: DomainError? = null
 
-        importPdf(fileToSave, options) { pageData ->
+        importPdf(fileToSave, options, book.id) { pageData ->
             try {
-                pageRepo.create(pageData.page.copy(notebookId = book.id))
+                pageRepo.create(pageData.page)
                 if (pageData.strokes.isNotEmpty())
                     strokeRepo.create(pageData.strokes)
                 if (pageData.images.isNotEmpty())

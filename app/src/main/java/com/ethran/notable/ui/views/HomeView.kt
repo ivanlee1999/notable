@@ -123,7 +123,7 @@ fun Library(
     navController: NavController,
     folderId: String? = null,
     goToPage: (String) -> Unit = {},
-    onCreateNewQuickPage: (String?) -> Unit = {},
+    onCreateNewNote: (String?) -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -199,7 +199,7 @@ fun Library(
             navController.navigate(EditorDestination.createRoute(pageId, bookId))
         },
         goToPage = goToPage,
-        onCreateNewQuickPage = { onCreateNewQuickPage(uiState.folderId) },
+        onCreateNewNote = { onCreateNewNote(uiState.folderId) },
         // The prompt is a preference, not a requirement: with it off, creation stays a single tap
         // and the item is named from the long-press menu if and when the user cares.
         onCreateNewFolder = {
@@ -241,7 +241,7 @@ fun LibraryContent(
     onSyncNow: () -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     goToPage: (String) -> Unit,
-    onCreateNewQuickPage: () -> Unit,
+    onCreateNewNote: () -> Unit,
     onCreateNewFolder: () -> Unit,
     onDeleteEmptyBook: (String) -> Unit,
     onCreateNewNotebook: () -> Unit,
@@ -280,6 +280,7 @@ fun LibraryContent(
                 onNavigateToSettings = onNavigateToSettings,
                 onSyncNow = onSyncNow,
                 onCreateNewNotebook = onCreateNewNotebook,
+                onCreateNewNote = onCreateNewNote,
                 onQueryChanged = onQueryChanged,
                 onSortChanged = onSortChanged,
             )
@@ -358,27 +359,6 @@ fun LibraryContent(
                             }
                         )
                     }
-                }
-
-                // Quick pages drop out of a search: they are matched by nothing, having no title
-                // of their own, so leaving the row in would look like a result set that ignored
-                // the query.
-                if (!uiState.isSearching) item(key = "pages-header") {
-                    Spacer(Modifier.height(22.dp))
-                    SectionHeader(stringResource(R.string.home_quick_pages))
-                    Spacer(Modifier.height(12.dp))
-                }
-                if (!uiState.isSearching) item(key = "pages-row") {
-                    ShowPagesRow(
-                        appRepository = appRepository,
-                        pages = uiState.singlePages,
-                        currentPageId = null,
-                        title = null,
-                        onSelectPage = goToPage,
-                        showAddQuickPage = true,
-                        onCreateNewQuickPage = onCreateNewQuickPage,
-                        onPreviewNeeded = onPreviewNeeded
-                    )
                 }
 
                 item(key = "books-header") {
@@ -466,7 +446,7 @@ fun LibraryContent(
             if (metrics.narrow) {
                 LibraryBottomBar(
                     onCreateNewNotebook = onCreateNewNotebook,
-                    onCreateNewQuickPage = onCreateNewQuickPage,
+                    onCreateNewNote = onCreateNewNote,
                 )
             }
         }
@@ -485,6 +465,7 @@ private fun LibraryHeader(
     onNavigateToSettings: () -> Unit,
     onSyncNow: () -> Unit,
     onCreateNewNotebook: () -> Unit,
+    onCreateNewNote: () -> Unit,
     onQueryChanged: (String) -> Unit = {},
     onSortChanged: (LibrarySortOrder, Boolean) -> Unit = { _, _ -> },
 ) {
@@ -557,9 +538,19 @@ private fun LibraryHeader(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            SquareButton(hit = metrics.hit, onClick = onCreateNewNotebook, filled = true) {
+            SquareButton(hit = metrics.hit, onClick = onCreateNewNotebook) {
                 Icon(
                     FeatherIcons.Plus, stringResource(R.string.home_new_notebook),
+                    tint = Kaleido.Ink, modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            // The filled one, because capture is the action this screen exists to get out of the
+            // way. The bottom bar repeats it on a one-handed device for the same reason it repeats
+            // `+`: this corner is what a single hand cannot reach.
+            SquareButton(hit = metrics.hit, onClick = onCreateNewNote, filled = true) {
+                Icon(
+                    FeatherIcons.Zap, stringResource(R.string.home_new_note),
                     tint = Kaleido.Paper, modifier = Modifier.size(22.dp)
                 )
             }
@@ -866,7 +857,7 @@ private fun ImportTile(onClick: () -> Unit) {
 @Composable
 private fun LibraryBottomBar(
     onCreateNewNotebook: () -> Unit,
-    onCreateNewQuickPage: () -> Unit,
+    onCreateNewNote: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Box(
@@ -890,10 +881,10 @@ private fun LibraryBottomBar(
                     .background(Kaleido.Rule)
             )
             BottomBarAction(
-                label = stringResource(R.string.home_quick_note),
+                label = stringResource(R.string.home_new_note),
                 icon = FeatherIcons.Zap,
                 filled = true,
-                onClick = onCreateNewQuickPage,
+                onClick = onCreateNewNote,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1047,6 +1038,7 @@ private fun LibraryPreview(uiState: LibraryUiState) {
                 onNavigateToSettings = {},
                 onSyncNow = {},
                 onCreateNewNotebook = {},
+                onCreateNewNote = {},
             )
             Column(Modifier.padding(metrics.pad)) {
                 SectionHeader(stringResource(R.string.home_folders))

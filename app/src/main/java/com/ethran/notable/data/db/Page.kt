@@ -1,6 +1,5 @@
 package com.ethran.notable.data.db
 
-import androidx.lifecycle.LiveData
 import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Embedded
@@ -24,13 +23,19 @@ import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
 
+/**
+ * One sheet of a notebook.
+ *
+ * Every page belongs to a notebook: [notebookId] is not nullable, and the foreign key is the only
+ * one on this table. That was not always so — until 0.14.0 a page with no notebook was a "quick
+ * page", parked in a folder of its own through a `parentFolderId` column. It bought nothing the
+ * library could not already do and cost the page its sync: the protocol has no standalone page
+ * lifecycle (§6.4 — pages live and die with a notebook's `pageIds`), so a page belonging to no
+ * notebook was never enumerated, never pushed, and never seen on the peer. `MIGRATION_47_48` gave
+ * each of those pages a notebook of its own, and the column that made them expressible is gone.
+ */
 @Entity(
     foreignKeys = [ForeignKey(
-        entity = Folder::class,
-        parentColumns = arrayOf("id"),
-        childColumns = arrayOf("parentFolderId"),
-        onDelete = ForeignKey.CASCADE
-    ), ForeignKey(
         entity = Notebook::class,
         parentColumns = arrayOf("id"),
         childColumns = arrayOf("notebookId"),
@@ -39,10 +44,9 @@ import javax.inject.Inject
 )
 data class Page(
     @PrimaryKey val id: String = UUID.randomUUID().toString(), val scroll: Int = 0,
-    @ColumnInfo(index = true) val notebookId: String? = null,
+    @ColumnInfo(index = true) val notebookId: String,
     @ColumnInfo(defaultValue = "blank") val background: String = "blank", // path or native subtype
     @ColumnInfo(defaultValue = "native") val backgroundType: String = "native", // image, imageRepeating, coverImage, native
-    @ColumnInfo(index = true) val parentFolderId: String? = null,
     // Null, not "", for a page the user never named: the library then falls back to the creation
     // date instead of showing a blank label, and an empty string stays available as a real (if
     // odd) choice rather than being indistinguishable from "untitled".
@@ -50,8 +54,7 @@ data class Page(
     // The sheet this page's coordinates are laid out on, in page units (see [PageSize]).
     // Null for a page created before page sizes existed: nothing retrofits one, so those keep
     // falling back to the screen width they were written against. Denormalized from the notebook
-    // at creation, the way [background] is, because it is what the renderer needs in hand — and
-    // because a page outside a notebook has no notebook to ask.
+    // at creation, the way [background] is, because it is what the renderer needs in hand.
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
     val createdAt: Date = SyncClock.nowDate(), val updatedAt: Date = SyncClock.nowDate(),
@@ -145,8 +148,7 @@ interface PageDao {
     // by, and bumping it on every stroke let ink undo them) — so recency is read from the pages,
     // where the ink actually lands.
     @Query(
-        "SELECT notebookId, MAX(updatedAt) AS lastEdited FROM page " +
-            "WHERE notebookId IS NOT NULL GROUP BY notebookId"
+        "SELECT notebookId, MAX(updatedAt) AS lastEdited FROM page GROUP BY notebookId"
     )
     fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>>
 
@@ -156,15 +158,9 @@ interface PageDao {
     @Query("SELECT MAX(updatedAt) FROM page WHERE notebookId = :notebookId")
     suspend fun newestUpdatedAtInNotebook(notebookId: String): Date?
 
-    @Query("SELECT * FROM page WHERE notebookId is null AND parentFolderId is :folderId")
-    fun getSinglePagesInFolder(folderId: String? = null): LiveData<List<Page>>
-
     @Query("SELECT id FROM page WHERE notebookId = :notebookId")
     suspend fun getPageIdsForNotebook(notebookId: String): List<String>
 
-    /** Quick pages parked directly in [folderId] — they belong to no notebook, so nothing else counts them. */
-    @Query("SELECT id FROM page WHERE notebookId IS NULL AND parentFolderId IS :folderId")
-    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String>
     /**
      * The owning notebook, and nothing else.
      *
@@ -173,8 +169,7 @@ interface PageDao {
      * whole row — background, geometry, titles, timestamps — and threw all of it away. One column
      * is what the caller wanted; on a BOOX the difference is per stroke, not per session.
      *
-     * Null for a page that has no notebook (a quick page) *and* for a page that no longer exists.
-     * The caller treats both the same way: there is no notebook to queue.
+     * Null only for a page that no longer exists — every page that does has a notebook.
      */
     @Query("SELECT notebookId FROM page WHERE id = :pageId")
     suspend fun getNotebookId(pageId: String): String?
@@ -216,15 +211,8 @@ class PageRepository @Inject constructor(
      * `updatedAt` moved with the page, so a page pushed alone lands on the peer as a document no
      * manifest names.
      *
-     * A page outside a notebook — a quick page — queues **nothing**, matching
-     * `RoomCouchStore.allDocumentIds`, which deliberately never offers quick pages for sync: the
-     * protocol has no standalone page lifecycle (§6.4 — pages live and die with a notebook's
-     * `pageIds`, and bopa drops orphan pages on receipt). Queueing one pushed it into a void on
-     * every edit: never enumerable on the peer, never deletable remotely. It joins sync the
-     * moment it is adopted into a notebook, which queues page and notebook together.
      */
-    private suspend fun queuePage(pageId: String, notebookId: String?) {
-        if (notebookId == null) return
+    private suspend fun queuePage(pageId: String, notebookId: String) {
         outbox.queue(listOf(CouchDocId.page(pageId), CouchDocId.notebook(notebookId)))
     }
 
@@ -264,8 +252,9 @@ class PageRepository @Inject constructor(
         database.withTransaction {
             db.updateTitle(pageId, title, SyncClock.nowMs())
             // Read back rather than taken from the caller: the rename menu knows a page id and
-            // nothing else, and the notebook has to travel with it.
-            queuePage(pageId, db.getNotebookId(pageId))
+            // nothing else, and the notebook has to travel with it. Null only if the page was
+            // deleted underneath us, in which case there is nothing to send.
+            queuePage(pageId, db.getNotebookId(pageId) ?: return@withTransaction)
         }
     }
 
@@ -285,10 +274,7 @@ class PageRepository @Inject constructor(
             // writes that move the manifest. An ink save moves nothing on the notebook any
             // more (see PageDataManager.bumpEditTimestamps), and queueing it here would push
             // an unchanged document on every stroke, churning its revision for nothing.
-            // A quick page still queues nothing at all, same as [queuePage].
-            if (db.getNotebookId(pageId) != null) {
-                outbox.queue(listOf(CouchDocId.page(pageId)))
-            }
+            outbox.queue(listOf(CouchDocId.page(pageId)))
         }
     }
 
@@ -321,10 +307,6 @@ class PageRepository @Inject constructor(
         return db.getPageIdsForNotebook(notebookId)
     }
 
-    suspend fun getSinglePageIdsInFolder(folderId: String?): List<String> {
-        return db.getSinglePageIdsInFolder(folderId)
-    }
-
     suspend fun getFileBackgrounds(): List<FileBackground> {
         return db.getFileBackgrounds()
     }
@@ -339,10 +321,6 @@ class PageRepository @Inject constructor(
         return data.copy(strokes = data.strokes.map { it.withNormalizedPressure() })
     }
 
-
-    fun getSinglePagesInFolder(folderId: String? = null): LiveData<List<Page>> {
-        return db.getSinglePagesInFolder(folderId)
-    }
 
     suspend fun update(page: Page) {
         database.withTransaction {
@@ -359,6 +337,7 @@ class PageRepository @Inject constructor(
             // it, and the notebook is the document that actually carries the removal.
             val notebookId = db.getNotebookId(pageId)
             db.delete(pageId)
+            // Null only if there was no such page, in which case nothing was removed to publish.
             if (notebookId != null) outbox.queue(CouchDocId.notebook(notebookId))
         }
     }
@@ -370,12 +349,6 @@ fun Page.getBackgroundType(): BackgroundType {
     return BackgroundType.fromKey(backgroundType)
 }
 
-// TODO: make it better
-suspend fun Page.getParentFolder(bookRepository: BookRepository): String? {
-    return if (notebookId != null) {
-        val notebook = bookRepository.getById(notebookId)
-        notebook?.parentFolderId
-    } else {
-        parentFolderId
-    }
-}
+/** Where this page sits in the library, which is wherever its notebook sits. */
+suspend fun Page.getParentFolder(bookRepository: BookRepository): String? =
+    bookRepository.getById(notebookId)?.parentFolderId
