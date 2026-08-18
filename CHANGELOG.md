@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.25.0
+
+What you do on one device can no longer be quietly undone by what you draw on the other, and the
+inputs that were slightly off are now exact.
+
+- **Drawing no longer overwrites the other device's changes.** Every stroke used to rewrite the
+  whole notebook record; a rename, move, or reordering arriving from the other device in that
+  instant was thrown away, and the rewrite's fresh clock made the loss stick. A stroke now
+  advances only the notebook's timestamp, touching nothing else.
+- **"Keep them on the server" brings everything back.** Declining a large deletion restored the
+  notebooks but not their pages — the sync remembered having seen the pages and skipped them —
+  and folders were deleted without being held for the question at all. Both are put right: a
+  kept library returns whole, folders included.
+- **The sheet holds its line while you write.** Writing at the bottom edge could still stretch
+  the page a little further with every stroke — room that vanished, along with reach to the ink
+  in it, the next time the page was opened.
+- **Outline arrows move the entry you pressed them on.** An outline holding invisible entries —
+  ones whose pages were deleted — shifted the count, so moving an entry could reorder a
+  different one. Moves now name the entry itself, and deleting one asks first.
+- **Tapping the page scrubber always jumps.** Tapping the page you last scrubbed to used to be
+  mistaken for the end of that old drag and ignored — and the page you were leaving was not
+  saved first. A tap is now a full journey of its own.
+- **Scribble-to-erase works on every device.** On devices without the Onyx pen path, the
+  scribble detector compared two different clocks and concluded every scribble was too soon
+  after the last stroke — forever. It now keeps one clock.
+- **Deleting a page is all-or-nothing** — an ill-timed interruption can no longer leave a page
+  gone from the notebook but primed to return, or half-deleted.
+
 ## 0.24.0
 
 The dividing of pages that outgrew their sheet now happens on this device too, and ink can no
