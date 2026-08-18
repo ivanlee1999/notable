@@ -293,6 +293,15 @@ class CouchSyncEngine(
     private val nowIso: () -> String = { Instant.now().toString() },
     private val newGeneration: () -> String = { java.util.UUID.randomUUID().toString() },
     private val onStateChange: ((CouchSyncState) -> Unit)? = null,
+    /**
+     * Persists the state and does not return until the write has durably landed — or throws when
+     * it could not. [onStateChange] is fire-and-forget by design (the host conflates the writes
+     * onto one consumer), which is right for every routine save and wrong for exactly one thing:
+     * a state that *must* be on disk before the next destructive step is allowed to happen. See
+     * [discardHeldDeletions]. Null falls back to [onStateChange], which is what the JVM engine
+     * tests and any host without a synchronous path get.
+     */
+    private val onStateChangeSync: (suspend (CouchSyncState) -> Unit)? = null,
 ) {
 
     data class FlushReport(
@@ -665,11 +674,9 @@ class CouchSyncEngine(
      * is the undo, and the caller must have said so before getting here (protocol §6.7).
      */
     suspend fun discardHeldDeletions(ids: List<String>) = mutex.withLock {
-        for (documentId in ids) {
-            runCatching { store.discardDeletion(documentId) }
-            clearDirty(documentId)
-        }
-        // ...and rewind the checkpoint, or the promise made to the user is not kept.
+        if (ids.isEmpty()) return@withLock
+
+        // The checkpoint is rewound, or the promise made to the user is not kept.
         //
         // "They come back on the next pull" is only true if the server mentions them again, and the
         // change feed does not repeat itself: these documents were announced long ago, the
@@ -692,11 +699,40 @@ class CouchSyncEngine(
         // notebooks came back as empty shells. With the checkpoint at "0" the map rebuilds itself
         // over the replay; the cost is the 409-then-merge round trip on the next push of each
         // still-held document, which resolves to "nothing to send".
-        if (ids.isNotEmpty()) {
-            revs.clear()
-            lastSeq = "0"
+        revs.clear()
+        lastSeq = "0"
+
+        // ...and the rewind lands durably BEFORE a single tombstone is dropped. The two halves of
+        // this method compensate each other — dropping the tombstones is what forgets the deletion,
+        // replaying the feed is what brings the documents back — and the routine persist path is an
+        // asynchronous, conflated channel. A crash after the drops but before that write left the
+        // tombstones forgotten AND the checkpoint still past the documents: the promised restore
+        // simply never happened. Written the other way round, a crash in the window costs a feed
+        // replay while the tombstones are still held — safe, and the user's answer still stands to
+        // be given again. A rewind that cannot be written durably aborts the discard entirely, for
+        // the same reason.
+        persistDurably()
+
+        for (documentId in ids) {
+            runCatching { store.discardDeletion(documentId) }
+            clearDirty(documentId)
         }
         persist()
+    }
+
+    /**
+     * Persists through the synchronous path when the host provides one, suspending until the write
+     * has landed; falls back to the ordinary fire-and-forget persist otherwise. Throws when the
+     * durable write failed — callers use this precisely because proceeding without the write on
+     * disk would be unsafe. An invalidated engine refuses outright, for [persist]'s reason.
+     */
+    private suspend fun persistDurably() {
+        val write = onStateChangeSync ?: run {
+            persist()
+            return
+        }
+        check(!invalidated.get()) { "this engine's configuration has been replaced" }
+        write(currentState)
     }
 
     /**

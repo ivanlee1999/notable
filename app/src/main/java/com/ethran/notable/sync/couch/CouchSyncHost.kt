@@ -76,14 +76,44 @@ class CouchSyncHost @Inject constructor(
      * of order and resurrect an older `lastSeq`; a conflated channel keeps only the newest state
      * and writes them in order.
      */
-    private val stateWrites = Channel<Pair<String, CouchSyncState>>(Channel.CONFLATED)
+    private val stateWrites = Channel<StateWrite>(Channel.CONFLATED)
+
+    /**
+     * One checkpoint save, stamped with when it was requested. The stamp is what lets the
+     * synchronous path (see [writeState]) jump the queue safely: a stale save still sitting in the
+     * conflated channel must not land *after* — and therefore on top of — a newer state that was
+     * written directly.
+     */
+    private class StateWrite(val seq: Long, val key: String, val state: CouchSyncState)
+
+    private val stateWriteSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Per state key, the [StateWrite.seq] of the newest state actually on disk. */
+    private val newestWrittenSeq = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Serializes the kv writes themselves, so the sync path and the channel cannot interleave. */
+    private val kvWriteMutex = Mutex()
 
     init {
         scope.launch {
-            for ((key, state) in stateWrites) {
-                runCatching { kvProxy.setKv(key, state, CouchSyncState.serializer()) }
+            for (write in stateWrites) {
+                runCatching { writeState(write) }
                     .onFailure { log.w("Could not persist couch sync state: ${it.message}") }
             }
+        }
+    }
+
+    /**
+     * Lands one checkpoint on disk — unless a newer one for the same key already has. The engine's
+     * ordinary saves ride the conflated channel and can be a moment behind; `discardHeldDeletions`
+     * writes through here directly because its rewind must be durable before the tombstones are
+     * dropped, and the guard is what keeps a stale channel write from undoing that.
+     */
+    private suspend fun writeState(write: StateWrite) {
+        kvWriteMutex.withLock {
+            if (write.seq <= (newestWrittenSeq[write.key] ?: Long.MIN_VALUE)) return
+            kvProxy.setKv(write.key, write.state, CouchSyncState.serializer())
+            newestWrittenSeq[write.key] = write.seq
         }
     }
 
@@ -316,10 +346,17 @@ class CouchSyncHost @Inject constructor(
             deviceId = deviceId,
             state = initial,
             onStateChange = {
-                stateWrites.trySend(stateKey to it)
+                stateWrites.trySend(StateWrite(stateWriteSeq.incrementAndGet(), stateKey, it))
                 // The badge follows the engine, not the persisted copy: it should change the moment
                 // a document is queued or accepted, not once the checkpoint write lands.
                 publish(it)
+            },
+            // The one save that may not be fire-and-forget: discarding held deletions must have its
+            // checkpoint rewind on disk before the tombstones go. Failures propagate — the engine
+            // aborts the discard rather than proceeding on a write that never landed.
+            onStateChangeSync = { state ->
+                writeState(StateWrite(stateWriteSeq.incrementAndGet(), stateKey, state))
+                publish(state)
             },
         )
         publish(initial)

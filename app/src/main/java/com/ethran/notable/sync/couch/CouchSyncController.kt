@@ -567,7 +567,19 @@ class CouchSyncController @Inject constructor(
         val held = _state.value.heldDeletions
         if (held.isEmpty()) return
         SyncLogger.beginRun("CouchDB discard deletions")
-        backend.discardHeldDeletions(held)
+        try {
+            backend.discardHeldDeletions(held)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The engine refuses to drop the tombstones when it could not durably rewind the
+            // checkpoint first — proceeding would forget the deletions with no replay to bring the
+            // documents back. Nothing has been discarded, so the prompt stays on screen and the
+            // user's answer stands to be given again.
+            SyncLogger.w(TAG, "Could not discard the held deletions: $e")
+            _state.update { it.copy(status = Status.Failed(describe(e))) }
+            return
+        }
         val pending = runCatching { backend.pendingCount() }.getOrNull()
         _state.update {
             it.copy(

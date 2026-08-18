@@ -668,6 +668,76 @@ class CouchSyncEngineTest {
         assertTrue("nothing may reach the server", server.documentIds().isEmpty())
     }
 
+    /**
+     * The two halves of a discard compensate each other: dropping the tombstones forgets the
+     * deletions, and replaying the feed is what brings the documents back. The replay only happens
+     * if the rewound checkpoint is durably on disk *before* the tombstones go — a crash in between,
+     * with the writes the other way round, left the deletions forgotten and the checkpoint still
+     * past the documents, so the promised restore never happened.
+     */
+    @Test
+    fun a_discard_persists_the_rewound_checkpoint_before_dropping_any_tombstone() = runBlocking {
+        val events = mutableListOf<String>()
+        val recordingStore = object : CouchLocalStore by ipadStore {
+            override fun discardDeletion(documentId: String) {
+                events += "discard"
+                ipadStore.discardDeletion(documentId)
+            }
+        }
+        val engine = CouchSyncEngine(
+            CouchDbClient(server, database = "notes"), recordingStore, deviceId = "ipad",
+            onStateChangeSync = { state -> events += "state-write(lastSeq=${state.lastSeq})" },
+        )
+        val ids = stageMassDeletion()
+        engine.markDirty(ids)
+        val held = engine.flush().heldDeletions
+        events.clear()
+
+        engine.discardHeldDeletions(held)
+
+        val firstWrite = events.indexOfFirst { it.startsWith("state-write") }
+        val firstDiscard = events.indexOf("discard")
+        assertTrue("the rewound state must be written", firstWrite >= 0)
+        assertTrue("the tombstones must be dropped", firstDiscard >= 0)
+        assertTrue(
+            "the durable state write has to land before any tombstone is dropped: $events",
+            firstWrite < firstDiscard,
+        )
+        assertEquals(
+            "and the state written is the rewound one",
+            "state-write(lastSeq=0)",
+            events[firstWrite],
+        )
+    }
+
+    /** A rewind that cannot be written durably must abort the discard, not proceed without it. */
+    @Test
+    fun a_discard_whose_state_write_fails_drops_nothing() = runBlocking {
+        val discards = mutableListOf<String>()
+        val recordingStore = object : CouchLocalStore by ipadStore {
+            override fun discardDeletion(documentId: String) {
+                discards += documentId
+                ipadStore.discardDeletion(documentId)
+            }
+        }
+        val engine = CouchSyncEngine(
+            CouchDbClient(server, database = "notes"), recordingStore, deviceId = "ipad",
+            onStateChangeSync = { throw java.io.IOException("the disk refused the write") },
+        )
+        val ids = stageMassDeletion()
+        engine.markDirty(ids)
+        val held = engine.flush().heldDeletions
+
+        val failed = runCatching { engine.discardHeldDeletions(held) }
+
+        assertTrue("the discard must report its failure", failed.isFailure)
+        assertTrue("no tombstone may be dropped: $discards", discards.isEmpty())
+        assertEquals("the outbox must still hold the deletions", ids.size, engine.pendingCount)
+        ids.forEach {
+            assertTrue("$it must still be a tombstone", ipadStore.body(it)?.isDeleted ?: false)
+        }
+    }
+
     /** And the server's copy comes back, because the server was never told anything. */
     @Test
     fun a_discarded_deletion_returns_from_the_server_on_the_next_pull() = runBlocking {
