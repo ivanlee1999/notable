@@ -7,6 +7,9 @@ import com.ethran.notable.data.db.StrokePoint
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.ui.SnackConf
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 private val log = ShipBook.getLogger("draw")
@@ -30,17 +33,39 @@ fun handleDraw(
         // stroke travels: this is the same rule PageSplit applies (a stroke belongs to the sheet
         // its top edge falls in, and ink is never cut), so writing across the seam from above
         // stays on this page, while writing below it lands where the eye says it landed.
-        if (startY >= page.height && page.crossPageScrollActive) {
+        if (startY >= page.height && page.continuousScrollEnabled) {
             val nextPageId = page.nextPageId
             if (nextPageId != null) {
                 handleDrawOntoNextPage(page, nextPageId, strokeSize, color, pen, touchPoints)
                 return
             }
+            // The last page. Writing past the end means "keep writing", and the way to keep
+            // writing is the next page — so it is created here, exactly the way turning past
+            // the end creates it, and the ink files onto it. Asynchronous because the creation
+            // is a database transaction; the stroke appears with the redraw that follows.
+            if (page.hasHardBounds) {
+                page.coroutineScope.launch(Dispatchers.IO) {
+                    val created = page.pageDataManager.ensureNextPage(page.currentPageId)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (created != null) {
+                            handleDrawOntoNextPage(
+                                page, created, strokeSize, color, pen, touchPoints
+                            )
+                        } else {
+                            // A quick page has no notebook to put a next page in.
+                            page.snackManager.showOrUpdateSnack(
+                                SnackConf(text = "The page ends here", duration = 2000)
+                            )
+                        }
+                    }
+                }
+                return
+            }
         }
 
-        // Without a next page under the seam, past-the-end is the gray dead space of a bounded
-        // page: nothing there can be scrolled back to (the page never grows past its sheet), so
-        // ink accepted there would be stored and unreachable. Refusing loudly beats losing it.
+        // Past the end with Pagination selected: the gray dead space of a bounded page. Nothing
+        // there can be scrolled back to (the page never grows past its sheet), so ink accepted
+        // there would be stored and unreachable. Refusing loudly beats losing it.
         if (startY >= page.height && page.hasHardBounds) {
             page.snackManager.showOrUpdateSnack(
                 SnackConf(text = "The page ends here", duration = 2000)

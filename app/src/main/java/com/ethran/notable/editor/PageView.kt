@@ -257,20 +257,27 @@ class PageView(
     val previousPageId: String? get() = pageDataManager.previousPageIdOf(currentPageId)
 
     /**
-     * Whether vertical scrolling flows on into the next page instead of stopping at this one's
-     * end and turning by a whole screen.
+     * Whether the "Scrolling" choice under Vertical Navigation is in force: the notebook is one
+     * long surface, and vertical scrolling is allowed to flow across the seam between pages.
+     * "Pagination" keeps the discrete turn, which on e-ink is one clean refresh.
      *
-     * This is what the "Scrolling" choice under Vertical Navigation has always promised: the
-     * notebook is one long surface and you stop wherever you let go — including with the seam
-     * between two pages on screen. "Pagination" keeps the discrete turn, which on e-ink is one
-     * clean refresh. Only for downward page turns (a sideways turn has no seam to scroll over),
-     * and only once the next page is actually known — on the last page the drag past the edge
-     * still creates a fresh page, exactly as before.
+     * Deliberately *not* gated on the page-turn direction. It was at first — "a sideways turn
+     * has no seam to scroll over" — which quietly turned the whole feature off for anyone who
+     * turns pages sideways: their vertical drags stopped dead at the sheet's end and the space
+     * below it stayed gray, which read as "scrolling is still paginated" and "the edge cannot
+     * be written on". The two settings answer different questions: the page turn is what a
+     * *sideways swipe* does; this is what *scrolling down* does when the page runs out.
+     */
+    val continuousScrollEnabled: Boolean
+        get() = !GlobalAppSettings.current.verticalNavigation.isPaged
+
+    /**
+     * [continuousScrollEnabled], and the next page is actually known — the condition for the
+     * seam to be drawn and scrolled past. On the last page there is nothing to draw under the
+     * seam; writing past the end creates the next page instead (see handleDraw).
      */
     val crossPageScrollActive: Boolean
-        get() = GlobalAppSettings.current.pageTurn.isVertical &&
-                !GlobalAppSettings.current.verticalNavigation.isPaged &&
-                nextPageId != null
+        get() = continuousScrollEnabled && nextPageId != null
 
     /**
      * The lowest zoom this page may be viewed at: the fit on a bounded page, so blank non-page
