@@ -746,8 +746,11 @@ class PageView(
      *
      * An undeclared page has no such edge, so it keeps the old rule: the sheet or the ink,
      * whichever reaches further, so ink written past this screen's width stays reachable.
+     *
+     * Not private: the page-cut selection spans exactly this width (see `handleSelect`), and the
+     * definition of "how wide the page is" must live in one place.
      */
-    private fun pannableWidth(): Float =
+    fun pannableWidth(): Float =
         if (hasHardBounds) sheet.width.toFloat()
         else pageDataManager.computeWidth(currentPageId).toFloat()
 

@@ -209,19 +209,27 @@ fun handleSelect(
 ) {
     val state = viewModel.selectionState
 
-    val firstPointPosition =
-        if (points.first().x < 50) SelectPointPosition.LEFT else if (points.first().x > page.viewWidth - 50) SelectPointPosition.RIGHT else SelectPointPosition.CENTER
-    val lastPointPosition =
-        if (points.last().x < 50) SelectPointPosition.LEFT else if (points.last().x > page.viewWidth - 50) SelectPointPosition.RIGHT else SelectPointPosition.CENTER
+    // The points are in PAGE coordinates but "at the edge" is a fact about the VIEW, so the test
+    // maps each endpoint back to screen space — see [PageCutGeometry]. Comparing the page-space x
+    // against view pixels triggered the cut at the wrong places at any zoom != 1 or scroll.x != 0.
+    val firstPointPosition = PageCutGeometry.edgePosition(
+        points.first().x, page.scroll.x, page.zoomLevel.value, page.viewWidth
+    )
+    val lastPointPosition = PageCutGeometry.edgePosition(
+        points.last().x, page.scroll.x, page.zoomLevel.value, page.viewWidth
+    )
 
     if (firstPointPosition != SelectPointPosition.CENTER && lastPointPosition != SelectPointPosition.CENTER && firstPointPosition != lastPointPosition) {
         // Page cut situation
         val correctedPoints =
             if (firstPointPosition === SelectPointPosition.LEFT) points else points.reversed()
-        // lets make this end to end
+        // Make the cut end to end: it has to divide EVERY stroke on the page, so it spans the
+        // page's own pannable width in page units — the sheet for a declared page, the ink extent
+        // for a legacy one — not the view's pixel width, which is a different (and at fit zoom,
+        // shorter) span in page space.
         val completePoints =
             listOf(SimplePointF(0f, correctedPoints.first().y)) + correctedPoints + listOf(
-                SimplePointF(page.viewWidth.toFloat(), correctedPoints.last().y)
+                SimplePointF(page.pannableWidth(), correctedPoints.last().y)
             )
         if (state.firstPageCut == null) {
             // this is the first page cut
