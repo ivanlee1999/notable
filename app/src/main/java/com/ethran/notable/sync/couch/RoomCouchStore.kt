@@ -67,8 +67,10 @@ class RoomCouchStore(
     private val deviceId: String,
     /**
      * The pages an applied change rewrote, so anything holding them in memory can re-read them.
-     * Never called for reads, and never with an empty set — a change that touched no page's rows
-     * (a folder, an asset's bytes) leaves nothing cached to correct.
+     * Never called for reads, and never with an empty set — a change that touched no page (a
+     * folder, an asset no page places) leaves nothing cached to correct. An image blob landing
+     * for a page that is already applied counts: the page's rows did not move, but what the
+     * canvas shows for them did — see [applyAsset].
      */
     private val onPagesApplied: ((Set<String>) -> Unit)? = null,
     /**
@@ -160,7 +162,11 @@ class RoomCouchStore(
 
             // Where the bytes go was decided when the page that places them was applied: under
             // the hash that names them, which is the path that page's rows already point at.
-            is CouchDocBody.Asset -> applyAsset(documentId, body.asset)
+            // The pages drawing those rows are rewritten pages in every sense that matters: they
+            // were applied moments earlier with the file missing, the canvas drew its load-error
+            // placeholder, and nothing else will ever repaint them — the file watcher announces
+            // backgrounds, but a *picture's* path maps to nobody there.
+            is CouchDocBody.Asset -> rewrittenPages += applyAsset(documentId, body.asset)
 
             is CouchDocBody.Folder -> {
                 applyFolder(id, body.folder)
@@ -1019,10 +1025,19 @@ class RoomCouchStore(
         return PendingAsset(CouchDocId.asset(sha), file)
     }
 
-    /** Files the bytes of an asset, at every path a row is currently pointing at for them. */
-    private suspend fun applyAsset(documentId: String, asset: CouchAsset) {
-        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return
-        val bytes = asset.bytes ?: return
+    /**
+     * Files the bytes of an asset, at every path a row is currently pointing at for them.
+     *
+     * Returns the ids of the pages whose *image rows* point at a path just written. Those pages
+     * were applied while the file was still on its way — the canvas decoded a missing file and
+     * cached the failure — and this arrival is the only event that can say so: the file watcher
+     * ([onAssetFileWritten]) covers backgrounds, and a picture's path deliberately maps to nobody
+     * there. Reporting them lets [apply] fold them into the same `onPagesApplied` notification a
+     * page apply produces, which is exactly what they need: a re-read and a repaint.
+     */
+    private suspend fun applyAsset(documentId: String, asset: CouchAsset): Set<String> {
+        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return emptySet()
+        val bytes = asset.bytes ?: return emptySet()
         // Nothing waiting means an image whose row already resolves — the fetch that asked for
         // these bytes expects them in the images folder, under the hash that names them.
         val destinations = pendingAssets().filter { it.assetId == documentId }.map { it.file }
@@ -1030,6 +1045,7 @@ class RoomCouchStore(
             .ifEmpty {
                 listOfNotNull(runCatching { imagesFolder() }.getOrNull()?.let { File(it, sha) })
             }
+        val written = mutableSetOf<String>()
         for (file in destinations) {
             runCatching {
                 file.parentFile?.mkdirs()
@@ -1037,9 +1053,15 @@ class RoomCouchStore(
             }.onFailure {
                 log.e("Could not store asset $sha at ${file.name}: ${it.message}")
             }.onSuccess {
+                written += file.absolutePath
                 onAssetFileWritten?.invoke(file.absolutePath)
             }
         }
+        if (written.isEmpty()) return emptySet()
+        return appRepository.imageRepository.getPageUris()
+            .filter { row -> CouchImageFiles.fileFor(row.uri)?.absolutePath in written }
+            .map { it.pageId }
+            .toSet()
     }
 
     // endregion

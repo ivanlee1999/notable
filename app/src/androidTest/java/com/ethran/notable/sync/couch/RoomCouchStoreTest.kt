@@ -192,6 +192,60 @@ class RoomCouchStoreTest {
     }
 
     /**
+     * The page landed while its picture was still on its way, so the canvas decoded a missing
+     * file and cached the failure. The blob's arrival is the only event that can correct that —
+     * the file watcher announces backgrounds, but a picture's path maps to nobody there — so
+     * applying the asset must notify `onPagesApplied` with the pages whose rows point at the
+     * file, exactly as a page apply would.
+     */
+    @Test
+    fun anArrivingImageBlobNotifiesThePagesShowingIt() {
+        val applied = mutableListOf<Set<String>>()
+        val notifying = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images },
+            backgroundsFolder = { backgrounds },
+            onPagesApplied = { applied += it },
+        )
+        val pageId = CouchDocId.page("p1")
+        notifying.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 0, y = 0, width = 4,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(1),
+                        )
+                    )
+                )
+            ),
+        )
+        assertEquals(listOf(pictureAssetId), notifying.missingAssetIds())
+        applied.clear()
+
+        notifying.apply(
+            pictureAssetId,
+            CouchDocBody.Asset(CouchAsset.of(pictureBytes, at = stamp(2), updatedBy = "boox")),
+        )
+
+        assertEquals(
+            "the page showing the picture has to be told to re-read",
+            listOf(setOf("p1")),
+            applied,
+        )
+
+        // An asset nobody places writes its bytes and stays silent: there is no stale canvas.
+        applied.clear()
+        val strayBytes = "an image no page has placed".toByteArray()
+        notifying.apply(
+            CouchAssetId.forBytes(strayBytes),
+            CouchDocBody.Asset(CouchAsset.of(strayBytes, at = stamp(3), updatedBy = "boox")),
+        )
+        assertTrue("no page shows this file; nobody needs telling", applied.isEmpty())
+    }
+
+    /**
      * The hash of a placed image is asked for on every load of every page — per push and per
      * apply — and used to be recomputed from the bytes each time. The mtime+size-keyed cache that
      * already spared backgrounds covers images now: an unchanged file is digested once, ever.

@@ -43,6 +43,12 @@ data class Image(
     val updatedAt: Date = Date()
 )
 
+/** One image row's placement, as [ImageDao.getPageUris] projects it. */
+data class PageUri(
+    val pageId: String,
+    val uri: String,
+)
+
 // DAO for image operations
 @Dao
 interface ImageDao {
@@ -73,6 +79,13 @@ interface ImageDao {
     /** Every distinct image referenced anywhere — what CouchDB sync checks for missing blobs. */
     @Query("SELECT DISTINCT uri FROM Image WHERE uri IS NOT NULL")
     suspend fun getAllUris(): List<String>
+
+    /**
+     * Every image row's page and uri — how sync maps a downloaded blob back to the pages that
+     * placed it, so an open canvas can be told those pages changed.
+     */
+    @Query("SELECT pageId, uri FROM Image WHERE uri IS NOT NULL")
+    suspend fun getPageUris(): List<PageUri>
 
     /** Where this page's lowest-placed image sits — the image half of [StrokeDao.maxTop]. */
     @Query("SELECT MAX(y) FROM Image WHERE pageId = :pageId")
@@ -138,6 +151,11 @@ class ImageRepository @Inject constructor(
 
     suspend fun getAllUris(): List<String> {
         return db.getAllUris()
+    }
+
+    /** Every image row's page and uri — see [ImageDao.getPageUris]. */
+    suspend fun getPageUris(): List<PageUri> {
+        return db.getPageUris()
     }
 
     /** The y of the lowest-placed image on the page, or null when it has none. */
