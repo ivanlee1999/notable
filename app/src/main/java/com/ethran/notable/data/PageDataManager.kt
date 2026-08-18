@@ -747,7 +747,12 @@ class PageDataManager @Inject constructor(
                 touchLocked(entry)
                 logEstimateVsActualLocked(entry)
             }
-            recomputeHeight(pageId)
+            // Measured against the loaded row's own sheet, not [getSheet]'s answer: this load also
+            // runs for prefetched neighbors, and [getSheet] only knows the current page — a
+            // neighbor would be measured against this screen's sheet, clamping a page whose paper
+            // is taller than the screen short of its own bottom edge. A page that declares no size
+            // still resolves to the screen sheet, exactly as before.
+            recomputeHeight(pageId, pageWithData.page.sheet())
         } catch (e: CancellationException) {
             log.w("Loading of page $pageId was cancelled.")
             if (!validatePageDataLoaded(pageId)) removePage(pageId)
@@ -986,24 +991,25 @@ class PageDataManager @Inject constructor(
      *
      * Images count, and used not to: the height came from the strokes alone, so an image below the
      * sheet was stored, drawn, and impossible to scroll to.
+     *
+     * [sheet] defaults to [getSheet], which can only answer for the *current* page — [pageFromDb]
+     * is the only page row this class holds. A caller measuring any other page must pass that
+     * page's own sheet: asked through [getSheet], a prefetched neighbor was measured against this
+     * screen's sheet instead of its own, which on a screen shorter than the paper put the bottom
+     * of the sheet out of scroll reach — and nothing re-measured it on entry, because entering a
+     * prefetched page just joins its already-finished load.
      */
-    fun recomputeHeight(pageId: String): Int {
-        val sheetHeight = getSheet(pageId).height
+    fun recomputeHeight(pageId: String, sheet: PageSize = getSheet(pageId)): Int {
+        val sheetHeight = sheet.height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
         // snapshot, which must never run with this hot drawing-path lock held.
         val measured = synchronized(lock) {
             PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
         }
-        // Grow-stop: a page never gets taller than its sheet, or than it already was.
-        //
-        // Writing near the bottom used to extend the page, which is how a notebook ended up with
-        // screenfuls of notes that were not pages — invisible to the overview, to bookmarks and to
-        // reordering. The ceiling is `max(sheet, what this page already is)` rather than the sheet
-        // alone because a page written before this holds ink below its sheet, and clamping to the
-        // sheet would not park that ink off-page but strand it, with no scroll that reaches it.
-        // It stays reachable until the split moves it onto pages of its own.
-        val ceiling = maxOf(sheetHeight, getPageHeight(pageId) ?: sheetHeight)
-        val newHeight = minOf(measured, ceiling)
+        // Grow-stop: a page never gets taller than its sheet, or than it already was. The rule —
+        // and why the first measurement of a session must come through unclamped — lives with its
+        // tests in [PageHeightGrowStop].
+        val newHeight = PageHeightGrowStop.clamp(measured, sheetHeight, getPageHeight(pageId))
         viewport.setHeight(pageId, newHeight)
         return newHeight
     }
@@ -1758,5 +1764,33 @@ class PageDataManager @Inject constructor(
          */
         const val SAVE_RETRY_FLOOR_MS = 500L
         const val SAVE_RETRY_CEILING_MS = 60_000L
+    }
+}
+
+/**
+ * The grow-stop for a page's scrollable height, on its own so the rule is testable without the
+ * cache around it.
+ *
+ * A page never gets taller than its sheet, or than it already was. Writing near the bottom used to
+ * extend the page, which is how a notebook ended up with screenfuls of notes that were not pages —
+ * invisible to the overview, to bookmarks and to reordering. The ceiling is `max(sheet, what this
+ * page already is)` rather than the sheet alone because a page written before this holds ink below
+ * its sheet, and clamping to the sheet would not park that ink off-page but strand it, with no
+ * scroll that reaches it. It stays reachable until the split moves it onto pages of its own.
+ *
+ * "What this page already is" needs care, because [PageViewportState] only remembers a session:
+ * it starts empty and eviction wipes it. On the first computation of a session there is no
+ * [sessionHeight], and the [measured] extent — fresh from the database — is itself the only record
+ * of what the page already is, so it seeds the ceiling. Seeding with the sheet instead was a bug:
+ * it clamped a legacy tall page to one sheet on its very first load, stranding everything below —
+ * exactly what the ceiling exists to prevent. The stop only starts holding the line once a height
+ * for this session exists to hold it at, and after an eviction the next load simply re-derives it
+ * from the content again.
+ */
+internal object PageHeightGrowStop {
+    /** [measured] held under the ceiling: the sheet, or the height the page already had. */
+    fun clamp(measured: Int, sheetHeight: Int, sessionHeight: Int?): Int {
+        val ceiling = maxOf(sheetHeight, sessionHeight ?: measured)
+        return minOf(measured, ceiling)
     }
 }

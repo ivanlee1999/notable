@@ -31,6 +31,7 @@ import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportTarget
 import com.ethran.notable.sync.SyncOrchestrator
+import com.ethran.notable.sync.couch.CouchSyncHost
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.SnackDispatcher
@@ -192,6 +193,7 @@ class EditorViewModel @Inject constructor(
     private val exportEngine: ExportEngine,
     val pageDataManager: PageDataManager,
     private val syncOrchestrator: SyncOrchestrator,
+    private val couchSyncHost: CouchSyncHost,
     val snackDispatcher: SnackDispatcher,
     private val historyFactory: History.Factory,
     @param:ApplicationScope private val appScope: CoroutineScope
@@ -557,6 +559,16 @@ class EditorViewModel @Inject constructor(
     // --------------------------------------------------------
     // Book / Page Data
     // --------------------------------------------------------
+
+    /**
+     * Divides this notebook's pages that outgrew their sheet, before the editor loads any of
+     * them — see [CouchSyncHost.splitOversizedPages]. A no-op after the first open.
+     */
+    suspend fun divideOversizedPages(bookId: String) = withContext(Dispatchers.IO) {
+        val rewritten = couchSyncHost.splitOversizedPages(bookId)
+        if (rewritten.isNotEmpty())
+            log.i("Divided oversized pages of $bookId: ${rewritten.size} pages rewritten")
+    }
 
     /**
      * Loads context data for the toolbar (page number, background info, etc.)

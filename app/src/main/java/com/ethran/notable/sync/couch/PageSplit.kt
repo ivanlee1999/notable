@@ -17,7 +17,7 @@ import kotlin.math.floor
  * it. This turns each of those sheets into a page of its own.
  *
  * The rules are shared with the iPad (`PageSplit.swift`) and pinned by the conformance vectors in
- * `couch-sync-vectors/`, described normatively in `couch-sync-protocol.md` §6.6. Three of them
+ * `couch-sync-vectors/`, described normatively in `couch-sync-protocol.md` §6.6. Four of them
  * carry the weight:
  *
  * - **The first sheet keeps the page's own id.** Bookmarks and outline entries name a page id, so
@@ -27,6 +27,16 @@ import kotlin.math.floor
  *   would then keep both of. This is the whole reason the id is a hash and not a UUID.
  * - **Ink is never cut.** A stroke belongs to the sheet its top edge falls in and travels whole,
  *   so a descender crossing the boundary stays in one piece rather than being severed.
+ * - **The parent remembers what left it.** The first sheet carries a tombstone for every stroke
+ *   and image that moved to a child. Without them, a peer still holding the tall copy unions the
+ *   moved ink straight back into the parent on merge — the page re-grows on every pull, each side
+ *   pushes its own version back, and the notebook never converges. The tombstones are scoped to
+ *   the parent *document*, so the same ink living on a child under the same id is untouched, and
+ *   a peer on an older build converges too, because every merge already honours `deletedStrokes`.
+ *   The children start with no tombstones at all: one handed down could name ink that already
+ *   lives on that child — moved there by an earlier division of the same page, before it re-grew
+ *   under a peer's push — and would erase it on the next merge. Erasures made while the page was
+ *   tall stay recorded on sheet 0, whose id is the page's own.
  */
 object PageSplit {
 
@@ -109,6 +119,15 @@ object PageSplit {
         val count = sheetCount(tops, sheet.height)
         if (count <= 1) return listOf(Divided(id, declaring(sheet, page)))
 
+        // What the first sheet has to remember leaving it — see the class doc. Stamped with the
+        // split's own clock: the tombstone must outrank the copy a peer's tall page still holds.
+        val movedStrokes = page.strokes
+            .filter { sheetIndexOfTop(it.top, sheet.height) > 0 }
+            .map { CouchTombstone(id = it.id, deletedAt = now) }
+        val movedImages = page.images
+            .filter { sheetIndexOfTop(it.y.toFloat(), sheet.height) > 0 }
+            .map { CouchTombstone(id = it.id, deletedAt = now) }
+
         return (0 until count).map { index ->
             val offset = index * sheet.height.toFloat()
             val strokes = page.strokes
@@ -122,6 +141,12 @@ object PageSplit {
                 declaring(sheet, page).copy(
                     strokes = strokes,
                     images = images,
+                    // Sheet 0 keeps the page's tombstones and adds the moved ink's; the children
+                    // start clean — see the class doc for why handing one down would be a trap.
+                    deletedStrokes =
+                        if (index == 0) page.deletedStrokes + movedStrokes else emptyList(),
+                    deletedImages =
+                        if (index == 0) page.deletedImages + movedImages else emptyList(),
                     updatedBy = updatedBy,
                 ).also { it.updatedAt = now },
             )

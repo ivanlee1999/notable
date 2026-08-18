@@ -73,6 +73,14 @@ interface ImageDao {
     /** Every distinct image referenced anywhere — what CouchDB sync checks for missing blobs. */
     @Query("SELECT DISTINCT uri FROM Image WHERE uri IS NOT NULL")
     suspend fun getAllUris(): List<String>
+
+    /** Where this page's lowest-placed image sits — the image half of [StrokeDao.maxTop]. */
+    @Query("SELECT MAX(y) FROM Image WHERE pageId = :pageId")
+    suspend fun maxY(pageId: String): Int?
+
+    /** Which of these ids exist at all, on any page — the image half of [StrokeDao.existingIds]. */
+    @Query("SELECT id FROM Image WHERE id IN (:ids)")
+    suspend fun existingIds(ids: List<String>): List<String>
 }
 
 // Repository for image operations
@@ -130,6 +138,16 @@ class ImageRepository @Inject constructor(
 
     suspend fun getAllUris(): List<String> {
         return db.getAllUris()
+    }
+
+    /** The y of the lowest-placed image on the page, or null when it has none. */
+    suspend fun maxY(pageId: String): Int? {
+        return db.maxY(pageId)
+    }
+
+    /** The subset of [ids] that already exist, on whatever page. */
+    suspend fun existingIds(ids: List<String>): Set<String> {
+        return ids.chunked(900).flatMap { db.existingIds(it) }.toSet()
     }
 
     suspend fun getImageWithPointsById(imageId: String): Image {

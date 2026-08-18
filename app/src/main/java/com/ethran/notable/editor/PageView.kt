@@ -404,6 +404,9 @@ class PageView(
                     }
                     logCache.d("All strokes loaded in $timeToLoad ms")
                 }
+                // The load measured the page, so the bounds exist now: this is the clamp that
+                // init/changePage deferred while the height was still unknown.
+                clampScrollToBounds()
                 // TODO: If we put it in loadPage(…) sometimes it will try to refresh
                 //  without seeing strokes, I have no idea why.
                 coroutineScope.launch(Dispatchers.Main) {
@@ -763,8 +766,15 @@ class PageView(
     /**
      * Pulls the current scroll back inside the page. Needed wherever the bounds move rather than
      * the scroll — a page switch, a rotation, a zoom out.
+     *
+     * Waits for the page to have been measured. Before the load has run, [height] falls back to
+     * the view's own height, and clamping a scroll saved deep in the page against one screenful
+     * folds it to the top — overwriting the saved position moments before the load would have
+     * proven it valid. [loadPage] clamps again once the measurement exists, and every gesture
+     * passes through [boundScroll] regardless, so nothing stays out of bounds for long.
      */
     private fun clampScrollToBounds() {
+        if (pageDataManager.getPageHeight(currentPageId) == null) return
         val bounded = boundScroll(scroll)
         if (bounded != scroll) scroll = bounded
     }

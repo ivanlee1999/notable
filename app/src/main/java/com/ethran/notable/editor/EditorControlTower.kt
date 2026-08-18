@@ -49,6 +49,13 @@ class EditorControlTower(
     private val pendingScroll = MutableStateFlow(Offset.Zero)
     private var scrollConsumerJob: Job? = null
 
+    // One page turn per gesture. The drag that turned the page keeps streaming scroll events
+    // while the switch is still landing, and every one of them re-reads the same edge — without
+    // a latch a sustained drag skips pages, and on the last page each event minted a fresh blank
+    // page. Released by [onGestureEnd], which every gesture exit path reaches.
+    @Volatile
+    private var edgeTurnTaken = false
+
     fun registerObservers() {
         startScrollConsumer()
         if (changePageObserverJob?.isActive == true) return
@@ -91,8 +98,13 @@ class EditorControlTower(
         if (GlobalAppSettings.current.pageTurn.isVertical &&
             delta.x == 0f && page.isAtVerticalEdge(-delta.y)
         ) {
-            // A drag up asks for what is below, which is the next page.
-            if (delta.y < 0) viewModel.goToNextPage() else viewModel.goToPreviousPage()
+            if (!edgeTurnTaken) {
+                edgeTurnTaken = true
+                // A drag up asks for what is below, which is the next page. Through this
+                // class's own methods, not the view model's, so the turn drops the undo
+                // history the way every other navigation route does.
+                if (delta.y < 0) goToNextPage() else goToPreviousPage()
+            }
             return
         }
         pendingScroll.update { it + delta }
@@ -111,7 +123,10 @@ class EditorControlTower(
         // requestScroll, so the page turn has to be offered on this path too — otherwise the
         // setting would work in continuous scrolling and silently do nothing in paged.
         if (GlobalAppSettings.current.pageTurn.isVertical && page.isAtVerticalEdge(-delta)) {
-            if (direction > 0) viewModel.goToNextPage() else viewModel.goToPreviousPage()
+            if (!edgeTurnTaken) {
+                edgeTurnTaken = true
+                if (direction > 0) goToNextPage() else goToPreviousPage()
+            }
             return
         }
         logEditorControlTower.i("Paged step, direction: $direction")
@@ -180,6 +195,10 @@ class EditorControlTower(
         logEditorControlTower.i("Going to previous page")
         viewModel.goToPreviousPage()
         history.cleanHistory()
+    }
+
+    override fun onGestureEnd() {
+        edgeTurnTaken = false
     }
 
     override fun undo() {

@@ -11,7 +11,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -82,6 +84,19 @@ fun EditorView(
     val context = LocalContext.current
     val snackManager = LocalSnackContext.current
     val scope = rememberCoroutineScope()
+
+    // A page that outgrew its sheet is divided before anything loads it — the reconciliation
+    // the iPad has run on notebook open since pages became sheets (§6.6), now run here too.
+    // The editor waits because PageView reads the page the moment it is constructed; on every
+    // open after the first this is a handful of MAX() queries and composes on the next frame.
+    var pagesDivided by remember(bookId) { mutableStateOf(bookId == null) }
+    if (!pagesDivided) {
+        LaunchedEffect(bookId) {
+            viewModel.divideOversizedPages(bookId!!)
+            pagesDivided = true
+        }
+        return
+    }
 
     // Single point of entry for loading book data based on the pageId from Navigation
     // Should not be used for regular page switching
@@ -221,6 +236,12 @@ fun EditorView(
                 .drop(1) // Skip initial emission from loadBookData
                 .collect { newPageId ->
                     log.v("EditorView: snapshotFlow detected pageId change to $newPageId, triggering onPageChange")
+                    // Undo history names stroke ids, and replaying it against a page that does
+                    // not hold them deletes those rows from the DB anyway — the ids are global.
+                    // Cleaning here, at the one point every navigation route passes through,
+                    // covers the paths that used to skip it (the drag-past-the-edge turn, the
+                    // scrubber) instead of trusting each call site to remember.
+                    history.cleanHistory()
                     // update the PageView
                     page.changePage(newPageId)
 

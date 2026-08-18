@@ -19,6 +19,12 @@ interface GestureActions {
      * travelled is deliberately not part of the answer.
      */
     fun requestPageStep(direction: Int)
+
+    /**
+     * The gesture is over — every exit path, normal or abandoned. Per-gesture state on the
+     * editor side (the page-turn latch) is released here rather than guessed at from deltas.
+     */
+    fun onGestureEnd()
     fun onPinchToZoom(delta: Float, center: Offset?)
     fun goToNextPage()
     fun goToPreviousPage()

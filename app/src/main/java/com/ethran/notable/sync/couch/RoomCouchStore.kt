@@ -14,6 +14,7 @@ import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.RemoteApply
 import com.ethran.notable.data.db.Stroke
+import com.ethran.notable.data.db.declaredDefaultPageSize
 import com.ethran.notable.data.db.decodeStrokePoints
 import com.ethran.notable.data.db.encodeStrokePoints
 import com.ethran.notable.data.db.withNormalizedPressure
@@ -356,6 +357,101 @@ class RoomCouchStore(
 
     // endregion
 
+    // region Dividing pages that outgrew their sheet
+
+    /**
+     * Divides every page of [notebookId] that outgrew its sheet — the Room half of §6.6, the
+     * reconciliation the iPad has run on notebook open since pages became sheets
+     * (`NotebookStore.splitOversizedPages`). Until now this app only ever *received* a division;
+     * a notebook that never left this device kept its tall pages, with everything below the
+     * first sheet invisible to the overview, to bookmarks and to reordering.
+     *
+     * Cheap when there is nothing to do — the usual case, every open after the first: a MAX()
+     * over each page's stroke tops and image positions decides candidacy without loading a
+     * single point blob. A page that needs dividing is loaded as the document the protocol
+     * splits, divided by [PageSplit] — the function the shared vectors pin — and written back
+     * through [applyPage], the same path a peer's division arrives by, inside one transaction
+     * with the notebook's new page list and the outbox rows that will publish all of it.
+     *
+     * Children are applied before their parent deliberately: their rows already exist under the
+     * parent, so applying the child first *re-homes* each row — a true move that keeps what the
+     * wire model does not carry, an image's local file above all — and the parent's tombstones
+     * then have nothing left to delete.
+     *
+     * Returns every page id the division rewrote (parents and children), after telling
+     * [onPagesApplied], so anything holding those pages in memory re-reads them.
+     */
+    suspend fun splitOversizedPages(notebookId: String): Set<String> {
+        val book = appRepository.bookRepository.getById(notebookId) ?: return emptySet()
+        val notebookDefault = book.declaredDefaultPageSize()
+        val candidates = book.pageIds.filter { pageId ->
+            val page = appRepository.pageRepository.getById(pageId) ?: return@filter false
+            val sheet = PageSplit.sheetFor(page.pageWidth, page.pageHeight, notebookDefault)
+            val lowestStart = maxOf(
+                appRepository.strokeRepository.maxTop(pageId) ?: 0f,
+                (appRepository.imageRepository.maxY(pageId) ?: 0).toFloat(),
+            )
+            // The rule sheetCount applies: a second sheet exists when content *starts* past the
+            // first one's end, never when it merely reaches past it.
+            lowestStart >= sheet.height
+        }
+        if (candidates.isEmpty()) return emptySet()
+
+        val now = Instant.now().toString()
+        val rewritten = mutableSetOf<String>()
+        appRepository.inTransaction {
+            val fresh = appRepository.bookRepository.getById(notebookId)
+                ?: return@inTransaction
+            var pageIds = fresh.pageIds
+            for (pageId in candidates) {
+                val doc = loadPage(pageId) ?: continue
+                val sheet = PageSplit.sheetFor(doc.pageWidth, doc.pageHeight, notebookDefault)
+                val pieces = PageSplit.split(doc, pageId, sheet, now, deviceId)
+                if (pieces.size <= 1) continue
+
+                for (piece in pieces.drop(1)) {
+                    // A child can already exist: the parent re-grew after an earlier division —
+                    // a peer that has not learned the split pushing new below-sheet ink is the
+                    // usual way. The produced child is built from the parent alone, so applying
+                    // it as-is would erase whatever was drawn on the child since; folding it
+                    // through the ordinary page merge keeps both.
+                    val existing =
+                        if (appRepository.pageRepository.getById(piece.id) == null) null
+                        else loadPage(piece.id)
+                    val landed =
+                        if (existing == null) piece.page
+                        else CouchMerge.mergePage(existing, piece.page)
+                    applyPage(piece.id, landed, basedOn = null)
+                }
+                applyPage(pieces[0].id, pieces[0].page, basedOn = null)
+
+                val at = pageIds.indexOf(pageId)
+                // A re-divided page's children are usually listed already; they keep the place
+                // they have rather than being filed twice.
+                val children = pieces.drop(1).map { it.id }.filter { it !in pageIds }
+                pageIds =
+                    if (at < 0) pageIds + children
+                    else pageIds.take(at + 1) + children + pageIds.drop(at + 1)
+
+                // The pages have to travel by themselves: the notebook update below queues only
+                // the notebook document.
+                pieces.forEach {
+                    appRepository.couchOutboxRepository.queue(CouchDocId.page(it.id))
+                }
+                rewritten += pieces.map { it.id }
+            }
+            if (rewritten.isNotEmpty()) {
+                // Stamps the notebook's clock and queues it — the repair has to travel, or a peer
+                // holding the old page list would merge the children straight back out of order.
+                appRepository.bookRepository.update(fresh.copy(pageIds = pageIds))
+            }
+        }
+        if (rewritten.isNotEmpty()) onPagesApplied?.invoke(rewritten)
+        return rewritten
+    }
+
+    // endregion
+
     // region Reading
 
     private suspend fun loadNotebook(id: String): CouchNotebook? {
@@ -677,8 +773,17 @@ class RoomCouchStore(
         appRepository.strokeRepository.deleteAll(
             (((merged - incomingIds) + tombstoned) intersect existingIds).toList()
         )
-        appRepository.strokeRepository.create(incoming.filter { it.id !in existingIds })
-        appRepository.strokeRepository.update(incoming.filter { it.id in existingIds })
+        // §6.6 moves ink between pages under a stable id, and the change feed promises no
+        // order: a divided page's child can land before the parent's truncation releases the
+        // row here. The id is the global primary key, so a blind insert would abort the whole
+        // pull — and every retry would replay it. The incoming document owns the id; re-homing
+        // the row onto this page is the correct application of it.
+        val arriving = incoming.filter { it.id !in existingIds }
+        val heldElsewhere = appRepository.strokeRepository.existingIds(arriving.map { it.id })
+        appRepository.strokeRepository.create(arriving.filter { it.id !in heldElsewhere })
+        appRepository.strokeRepository.update(
+            incoming.filter { it.id in existingIds } + arriving.filter { it.id in heldElsewhere }
+        )
 
         // The tombstones themselves have to be stored, or the next `load` would forget the erasure
         // and the peer's copy would come back on the following merge.
@@ -706,8 +811,22 @@ class RoomCouchStore(
             (((mergedImages - incomingImageIds) + tombstonedImages) intersect existingImageIds)
                 .toList()
         )
-        appRepository.imageRepository.create(incomingImages.filter { it.id !in existingImageIds })
-        appRepository.imageRepository.update(incomingImages.filter { it.id in existingImageIds })
+        // Same re-homing rule as the strokes above, for the same reason — but an image row also
+        // carries where its bytes live locally, which the wire model does not, so a re-homed row
+        // keeps the uri it had on its old page whenever the incoming document cannot name one.
+        val arrivingImages = incomingImages.filter { it.id !in existingImageIds }
+        val imagesHeldElsewhere =
+            appRepository.imageRepository.existingIds(arrivingImages.map { it.id })
+        appRepository.imageRepository.create(
+            arrivingImages.filter { it.id !in imagesHeldElsewhere }
+        )
+        val rehomedImages = arrivingImages.filter { it.id in imagesHeldElsewhere }.map { row ->
+            if (row.uri != null) row
+            else row.copy(uri = appRepository.imageRepository.getImageWithPointsById(row.id).uri)
+        }
+        appRepository.imageRepository.update(
+            incomingImages.filter { it.id in existingImageIds } + rehomedImages
+        )
 
         appRepository.deletedImageRepository.upsertAll(
             page.deletedImages.map {

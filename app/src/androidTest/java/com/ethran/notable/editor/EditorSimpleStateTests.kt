@@ -113,6 +113,7 @@ class EditorSimpleStateTests {
             exportEngine = exportEngine,
             pageDataManager = pageDataManager,
             syncOrchestrator = syncOrchestrator,
+            couchSyncHost = mockk(relaxed = true),
             snackDispatcher = snackDispatcher,
             historyFactory = historyFactory,
             appScope = appScope,
