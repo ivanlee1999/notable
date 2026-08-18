@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.28.0
+
+If your notes sync but your pictures never arrive, this release finally says why — and the fix is
+almost certainly one line of your server's configuration, not anything about your notes.
+
+- **"Too large" now says which thing is too large, and what to change.** A sync server can refuse
+  an upload for two quite different reasons, and Notable used to report both as "a page is too
+  large for the sync server to accept" — sending you off to shrink a note that was never the
+  problem. It now tells apart CouchDB refusing a document because that document really is too big
+  from a proxy in front of CouchDB refusing the *upload* because it caps how large any request may
+  be. The second one names the setting to change.
+- **A picture refused by a proxy is no longer stuck forever.** Notable stops re-sending a refused
+  upload until something changes, which was right for a note you can edit down and wrong for this:
+  no edit was ever going to help, so the picture stayed stuck even after the server was fixed. It
+  now tries again when the connection comes back, and whenever you press Sync now — which is what
+  the message asks you to do once you have raised the limit.
+
+### Worth knowing
+
+- **This is likely why your photos never synced.** nginx — what most reverse proxies are, including
+  the one built into a Synology NAS — allows a 1 MB request by default. A picture travels as one
+  document with its bytes encoded inside, which makes it about a third larger on the wire, so
+  anything over roughly 750 KB was refused. That is most photographs a phone takes. Notes and ink
+  were unaffected and kept syncing perfectly, which is exactly what made it so hard to spot. Raise
+  `client_max_body_size` on the proxy and press Sync now.
+- **A correction to 0.17.0's note.** It said a PDF larger than 8 MB is refused because "CouchDB's
+  own default ceiling is 8 MB". That was wrong. CouchDB measures that ceiling *without* counting
+  attached file bytes, so it never refuses a picture or a PDF for its size at all — a 60 MB PDF
+  uploads and comes back byte for byte. The limit that was actually stopping them belonged to the
+  proxy, which is what this release is about.
+
+No database change.
+
 ## 0.27.0
 
 The page fits the width, everything that is not page says so, and "Scrolling" finally scrolls —
