@@ -55,6 +55,15 @@ interface CouchSyncBackend {
     suspend fun recordDeletion(documentId: String)
 
     /**
+     * Forgets uploads an intermediary refused as too large, so the next flush tries them for real
+     * (protocol §7.2). Called when something has plausibly changed on the far side: a reconnect, or
+     * the user explicitly asking to sync after raising the proxy's limit.
+     *
+     * Defaulted to nothing, because a backend with no engine behind it has nothing to forget.
+     */
+    suspend fun rearmRefusedRequests() {}
+
+    /**
      * "Yes, delete them on the server too": lets exactly [ids] past the mass-deletion guard on the
      * next flush. Scoped to those ids and spent once they are sent — never a standing exemption.
      */
@@ -357,11 +366,20 @@ class CouchSyncController @Inject constructor(
     private suspend fun runFeed() {
         var backoff = clock.retryFloorMs
         var caughtUp = false
+        // Whether the last time round this loop ended badly. A pull that succeeds after one that
+        // did not is this device's only notice that the far side changed — which is when an upload
+        // a proxy refused deserves another go (§7.2). Re-arming on *every* pull would instead
+        // re-send the same megabytes at feed pace, which is what the denylist exists to stop.
+        var reconnecting = false
         while (currentCoroutineContext().isActive) {
             try {
                 val report = backend.pull(caughtUp)
                 caughtUp = true
                 backoff = clock.retryFloorMs
+                if (reconnecting) {
+                    reconnecting = false
+                    backend.rearmRefusedRequests()
+                }
                 apply(report)
                 // Anything the server lacked is now queued; send it without waiting for the edit
                 // timer, which will not fire because the user is not writing.
@@ -397,6 +415,7 @@ class CouchSyncController @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 _state.update { it.copy(status = Status.Failed(describe(e))) }
+                reconnecting = true
                 // A dead connection should not become a request flood. Cancellation while waiting
                 // propagates, which is how `stop()` ends a loop that is backing off.
                 clock.sleep(backoff)
@@ -740,6 +759,11 @@ class CouchSyncController @Inject constructor(
             return
         }
         _state.update { it.copy(status = Status.Syncing) }
+        // Asking to sync is the answer to "raise client_max_body_size, then press Sync now", so it
+        // has to be the thing that actually retries an upload a proxy refused (§7.2). Nothing else
+        // would: those uploads are held on the server's configuration, not on the document, so no
+        // edit is ever coming to release them.
+        backend.rearmRefusedRequests()
         // Before pulling: queue anything created here that no edit ever queued. Without this a
         // notebook made and left alone is never sent, however many times sync runs.
         runCatching { backend.markUnsentDirty() }
@@ -928,13 +952,24 @@ class CouchSyncController @Inject constructor(
         is CouchError.Blocked ->
             "Android refused this address: sync needs an https:// server. A plain http:// one " +
                 "would send your password in the clear, so it is not allowed."
-        // 413 is the one terminal status with an answer the user can act on. Everything else in
-        // that class is a server or configuration fault they can only report.
+        // 413 is the one terminal status with an answer the user can act on — but which answer
+        // depends on which hop refused it (§7.2), and they are opposites. Everything else in that
+        // class is a server or configuration fault they can only report.
         is CouchError.Server -> when {
             error.status == 413 -> {
                 val size = error.requestBytes?.let { " (${humanBytes(it)})" } ?: ""
-                "A document$size is too large for the sync server to accept. Everything else " +
-                    "still syncs; it will be retried once it changes."
+                if (error.refusedBy == CouchError.Refuser.COUCHDB) {
+                    "A note$size is too large for the sync server's document limit. Everything " +
+                        "else still syncs; it will be retried once it changes."
+                } else {
+                    // Not the document's fault and not fixable here: something in front of CouchDB
+                    // capped the upload. Naming the setting is the whole value of this sentence —
+                    // "too large" alone sends the user to edit a note that is not the problem.
+                    "The sync server refused an upload$size before it reached CouchDB — a proxy " +
+                        "in front of it limits how large a request may be. Raise " +
+                        "client_max_body_size (nginx defaults to 1 MB, which is smaller than " +
+                        "most photos). Notes and ink still sync; press Sync now once it is raised."
+                }
             }
             error.status < 500 ->
                 "The sync server refused the request (${error.status}). Check the sync settings."

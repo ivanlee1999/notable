@@ -484,9 +484,35 @@ class CouchSyncEngine(
      *
      * In-memory on purpose: an engine lives as long as one configuration, and after a restart the
      * single re-send re-learns the entry. Guarded by [mutex] like everything else here.
+     *
+     * [refusedBy] decides what lifts the entry, and the two answers are opposites (§7.2). CouchDB
+     * refusing a document is about its content, so a changed `updatedAt` is exactly the right key.
+     * An intermediary refusing the request is about the *server's* configuration: nothing about the
+     * document will ever change, so keying on `updatedAt` would hold it forever after the user
+     * raised `client_max_body_size` — the one outcome worse than re-sending it. Those entries are
+     * cleared by [rearmRefusedRequests] instead, on the occasions that plausibly follow a fix.
      */
-    private class Oversized(val updatedAt: String, val requestBytes: Long?)
+    private class Oversized(
+        val updatedAt: String,
+        val requestBytes: Long?,
+        val refusedBy: CouchError.Refuser,
+    )
     private val oversized = LinkedHashMap<String, Oversized>()
+
+    /**
+     * Forgets every request an intermediary refused, so the next flush tries them for real.
+     *
+     * Called when something has plausibly changed on the far side — a reconnect, a settings change,
+     * or the user explicitly asking to sync. The last is the one that matters: after editing the
+     * proxy's body limit, "Sync now" is what a user actually does, and it must be the thing that
+     * works rather than a button that reports the same stale refusal.
+     *
+     * Documents CouchDB itself refused are left alone: nothing on the server changes what a page
+     * with too much ink in it weighs.
+     */
+    suspend fun rearmRefusedRequests() = mutex.withLock {
+        oversized.entries.removeAll { it.value.refusedBy == CouchError.Refuser.INTERMEDIARY }
+    }
 
     init {
         // The checkpoint blob's copy of the outbox is written asynchronously (see
@@ -949,9 +975,11 @@ class CouchSyncEngine(
                 stillDirty += documentId
                 if (error is CouchError.Server && error.status == 413) {
                     // Remember exactly what was refused, so later flushes stop re-deriving and
-                    // re-sending it until the content changes — see [oversized].
+                    // re-sending it — see [oversized] for what lifts the entry, which differs by
+                    // which hop refused it (§7.2).
                     runCatching { store.load(documentId) }.getOrNull()?.let { body ->
-                        oversized[documentId] = Oversized(body.updatedAt, error.requestBytes)
+                        oversized[documentId] =
+                            Oversized(body.updatedAt, error.requestBytes, error.refusedBy)
                     }
                 }
                 if (error.isRetriable) {
@@ -1040,11 +1068,22 @@ class CouchSyncEngine(
     ): Boolean {
         val entry = oversized[documentId] ?: return false
         val current = runCatching { store.load(documentId) }.getOrNull()
-        if (current == null || current.updatedAt != entry.updatedAt) {
+        // A changed document earns one real attempt — but only where the content was ever the
+        // problem. An intermediary's cap does not care what the document says, so editing it must
+        // not be mistaken for a reason to re-send it; [rearmRefusedRequests] is what lifts those.
+        if (current == null ||
+            (entry.refusedBy != CouchError.Refuser.INTERMEDIARY &&
+                current.updatedAt != entry.updatedAt)
+        ) {
             oversized.remove(documentId)
             return false
         }
-        val refusal = CouchError.Server(413, documentId, requestBytes = entry.requestBytes)
+        val refusal = CouchError.Server(
+            413,
+            documentId,
+            requestBytes = entry.requestBytes,
+            refusedBy = entry.refusedBy,
+        )
         failures[documentId] = refusal.detail
         failureCauses[documentId] = refusal
         suppressDependents(documentId, queue, index, suppressed)

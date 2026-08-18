@@ -58,6 +58,16 @@ class FakeCouchTransport : CouchTransport {
     /** Forces a status for documents whose id is listed, for failure injection. */
     val failingDocumentIds = mutableMapOf<String, Int>()
 
+    /**
+     * The body served with a forced status, for documents that need one.
+     *
+     * A 413's body is not decoration: it is how a client tells CouchDB refusing a document apart
+     * from a proxy refusing the request (protocol §7.2), and the two demand opposite handling. A
+     * forced status with no entry here keeps its empty body, which is exactly what an intermediary
+     * that answers with nothing looks like.
+     */
+    val failingDocumentBodies = mutableMapOf<String, ByteArray>()
+
     private val changeBatchSizes = mutableListOf<Int>()
 
     /**
@@ -94,7 +104,12 @@ class FakeCouchTransport : CouchTransport {
         val tail = components.drop(1).joinToString("/")
 
         if (tail == "_changes") return changes(request)
-        failingDocumentIds[tail]?.let { return CouchResponse(status = it) }
+        failingDocumentIds[tail]?.let {
+            return CouchResponse(
+                status = it,
+                body = failingDocumentBodies[tail] ?: ByteArray(0),
+            )
+        }
 
         return when {
             request.method == "GET" && components.size > 2 &&
@@ -373,8 +388,17 @@ class FakeCouchTransport : CouchTransport {
     private fun encode(json: JsonObject): ByteArray =
         couchJson.encodeToString(JsonObject.serializer(), json).toByteArray(Charsets.UTF_8)
 
-    private companion object {
-        val RESERVED = setOf("_id", "_rev", "_deleted")
+    companion object {
+        private val RESERVED = setOf("_id", "_rev", "_deleted")
+
+        /** What CouchDB itself answers when a document's ordinary fields exceed the limit. */
+        val COUCHDB_TOO_LARGE: ByteArray =
+            """{"error":"document_too_large","reason":""}""".toByteArray()
+
+        /** What nginx answers when the request body exceeds `client_max_body_size`. */
+        val PROXY_TOO_LARGE: ByteArray =
+            "<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n</html>"
+                .toByteArray()
     }
 }
 

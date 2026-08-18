@@ -188,6 +188,10 @@ class CouchSyncHost @Inject constructor(
         current.engine.markDirty(listOf(documentId))
     }
 
+    override suspend fun rearmRefusedRequests() {
+        stack()?.engine?.rearmRefusedRequests()
+    }
+
     override suspend fun approveHeldDeletions(ids: List<String>) {
         val current = stack() ?: return
         SyncLogger.i(TAG, "Confirmed ${ids.size} notebook deletion(s); they will be sent next flush")
