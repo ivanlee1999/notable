@@ -652,6 +652,17 @@ private fun CouchSection(
     val settings = state.syncSettings
     val onUpdate = callbacks.onUpdateSyncSettings
 
+    // Above the configuration rather than beside the status line: a wrong clock corrupts merge
+    // outcomes on *both* devices, and the footer sentence it used to share is the one people scroll
+    // past. It stays until the clock is fixed — there is nothing to dismiss, because nothing here
+    // stops being true by being read.
+    if (state.couchState.clockSkewNeedsAttention) {
+        state.couchState.clockSkewWarning?.let { warning ->
+            ClockSkewPanel(warning = warning)
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+
     EInkSection(
         title = stringResource(R.string.sync_connection_setup),
         icon = Icons.Default.Settings
@@ -827,6 +838,51 @@ private fun CouchSection(
  * locally, it stops this device claiming the deletion, and the server's copies then come back on the
  * next pull. Someone who was not told that will read the notebooks reappearing as sync misbehaving.
  */
+/**
+ * The persistent clock warning — [HeldDeletionsPanel]'s shape, without the buttons, because there
+ * is nothing to approve here. The only fix is in the system date settings, which no button in this
+ * app can reach.
+ */
+@Composable
+private fun ClockSkewPanel(warning: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+            .padding(12.dp)
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colors.onSurface
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.sync_couch_clock_skew_title),
+                    style = MaterialTheme.typography.body2,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colors.onSurface
+                )
+                Text(
+                    text = warning,
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface
+                )
+                Text(
+                    text = stringResource(R.string.sync_couch_clock_skew_hint),
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HeldDeletionsPanel(
     count: Int,

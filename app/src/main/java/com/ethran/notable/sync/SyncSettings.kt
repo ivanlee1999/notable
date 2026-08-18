@@ -72,6 +72,16 @@ data class SyncSettings(
      * differ from bopa's "ipad" — see [DEFAULT_DEVICE_ID].
      */
     val deviceId: String = DEFAULT_DEVICE_ID,
+    /**
+     * The last skew measured against the sync server, in signed seconds ahead — null when the
+     * clocks agreed, or when none has ever been measured.
+     *
+     * Persisted so [SyncClock] can correct stamps in a process that has not reached the server
+     * yet. Without it, every edit made between launching the app and its first successful request
+     * would be stamped from the uncorrected clock — and on a device that is offline for a day,
+     * that is all of them.
+     */
+    val lastClockSkewSeconds: Long? = null,
 ) {
     /** Enough to build a client: an http(s) URL and a database name. */
     val couchConfigured: Boolean

@@ -17,6 +17,7 @@ import com.ethran.notable.editor.utils.pagedScrollDelta
 import com.ethran.notable.editor.utils.refreshScreen
 import com.ethran.notable.editor.utils.selectImagesAndStrokes
 import com.ethran.notable.gestures.GestureActions
+import com.ethran.notable.sync.SyncClock
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -402,7 +403,7 @@ class EditorControlTower(
 
         val (strokes, images) = clipboardStore.get() ?: return
 
-        val now = Date()
+        val now = SyncClock.nowDate()
         val scrollPos = page.scroll
 
         val pastedStrokes = strokes.map {

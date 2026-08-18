@@ -24,9 +24,9 @@ import com.ethran.notable.data.db.getPageIndex
 import com.ethran.notable.data.db.newPage
 import com.ethran.notable.data.events.AppEvent
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
-import java.time.Instant
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -161,8 +161,8 @@ class AppRepository @Inject constructor(
         val duplicatedPage = pageWithData.page.copy(
             id = UUID.randomUUID().toString(),
             scroll = 0,
-            createdAt = Date(),
-            updatedAt = Date()
+            createdAt = SyncClock.nowDate(),
+            updatedAt = SyncClock.nowDate()
         )
         // One transaction, so the duplicate and the manifest that names it are either both here or
         // neither is — and so their outbox entries land with them rather than after them.
@@ -172,16 +172,16 @@ class AppRepository @Inject constructor(
                 it.copy(
                     id = UUID.randomUUID().toString(),
                     pageId = duplicatedPage.id,
-                    updatedAt = Date(),
-                    createdAt = Date()
+                    updatedAt = SyncClock.nowDate(),
+                    createdAt = SyncClock.nowDate()
                 )
             })
             imageRepository.create(pageWithData.images.map {
                 it.copy(
                     id = UUID.randomUUID().toString(),
                     pageId = duplicatedPage.id,
-                    updatedAt = Date(),
-                    createdAt = Date()
+                    updatedAt = SyncClock.nowDate(),
+                    createdAt = SyncClock.nowDate()
                 )
             })
             val notebookId = pageWithData.page.notebookId
@@ -217,8 +217,8 @@ class AppRepository @Inject constructor(
             // Not linked: a linked notebook exports itself over a file on disk, and two notebooks
             // pointed at the same file would overwrite each other.
             linkedExternalUri = null,
-            createdAt = Date(),
-            updatedAt = Date(),
+            createdAt = SyncClock.nowDate(),
+            updatedAt = SyncClock.nowDate(),
         )
         bookRepository.createEmpty(copy)
 
@@ -228,20 +228,20 @@ class AppRepository @Inject constructor(
             val newPage = data.page.copy(
                 id = UUID.randomUUID().toString(),
                 notebookId = copy.id,
-                createdAt = Date(),
-                updatedAt = Date(),
+                createdAt = SyncClock.nowDate(),
+                updatedAt = SyncClock.nowDate(),
             )
             pageRepository.create(newPage)
             strokeRepository.create(data.strokes.map {
                 it.copy(
                     id = UUID.randomUUID().toString(), pageId = newPage.id,
-                    createdAt = Date(), updatedAt = Date()
+                    createdAt = SyncClock.nowDate(), updatedAt = SyncClock.nowDate()
                 )
             })
             imageRepository.create(data.images.map {
                 it.copy(
                     id = UUID.randomUUID().toString(), pageId = newPage.id,
-                    createdAt = Date(), updatedAt = Date()
+                    createdAt = SyncClock.nowDate(), updatedAt = SyncClock.nowDate()
                 )
             })
             newPageIds += newPage.id
@@ -384,7 +384,7 @@ class AppRepository @Inject constructor(
      */
     suspend fun deleteNotebookLocally(
         notebookId: String,
-        deletedAt: String = Instant.now().toString(),
+        deletedAt: String = SyncClock.nowIso(),
     ) {
         val documentId = CouchDocId.notebook(notebookId)
         db.withTransaction {
@@ -397,7 +397,7 @@ class AppRepository @Inject constructor(
     /** The folder twin of [deleteNotebookLocally], for the same reason. */
     suspend fun deleteFolderLocally(
         folderId: String,
-        deletedAt: String = Instant.now().toString(),
+        deletedAt: String = SyncClock.nowIso(),
     ) {
         val documentId = CouchDocId.folder(folderId)
         db.withTransaction {

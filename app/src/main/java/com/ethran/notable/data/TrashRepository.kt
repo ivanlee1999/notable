@@ -9,6 +9,7 @@ import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.FolderRepository
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.PageRepository
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
 import java.time.Instant
@@ -147,14 +148,14 @@ class TrashRepository @Inject constructor(
      */
     suspend fun trashFolder(folderId: String): List<String> {
         val folder = folderRepository.get(folderId) ?: return emptyList()
-        folderRepository.update(folder.copy(deletedAt = Date()))
+        folderRepository.update(folder.copy(deletedAt = SyncClock.nowDate()))
         log.i("Moved folder $folderId to the Trash")
         return listOf(CouchDocId.folder(folderId))
     }
 
     suspend fun trashNotebook(notebookId: String): List<String> {
         val notebook = bookRepository.getById(notebookId) ?: return emptyList()
-        bookRepository.update(notebook.copy(deletedAt = Date()))
+        bookRepository.update(notebook.copy(deletedAt = SyncClock.nowDate()))
         log.i("Moved notebook $notebookId to the Trash")
         return listOf(CouchDocId.notebook(notebookId))
     }
@@ -237,7 +238,7 @@ class TrashRepository @Inject constructor(
         val scope = scopeOfFolder(folderId)
         if (scope.folders.isEmpty()) return scope
 
-        val deletedAt = Instant.now().toString()
+        val deletedAt = SyncClock.nowIso()
         val documentIds = scope.folders.map { CouchDocId.folder(it.id) } +
             scope.notebooks.map { CouchDocId.notebook(it.id) }
         db.withTransaction {

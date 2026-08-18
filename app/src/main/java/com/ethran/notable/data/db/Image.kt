@@ -9,6 +9,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import com.ethran.notable.sync.SyncClock
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -39,8 +40,8 @@ data class Image(
     @ColumnInfo(index = true)
     val pageId: String,
 
-    val createdAt: Date = Date(),
-    val updatedAt: Date = Date()
+    val createdAt: Date = SyncClock.nowDate(),
+    val updatedAt: Date = SyncClock.nowDate()
 )
 
 /** One image row's placement, as [ImageDao.getPageUris] projects it. */

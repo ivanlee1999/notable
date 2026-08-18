@@ -195,6 +195,8 @@
         <item quantity="other">Holding back %1$d notebook deletions</item>
     </plurals>
     <string name="sync_couch_held_deletions_body">That is most of this library, and a device whose database was wiped looks exactly the same. Everything else is still syncing normally.</string>
+    <string name="sync_couch_clock_skew_title">This device\'s clock is wrong</string>
+    <string name="sync_couch_clock_skew_hint">Open Settings and set the date and time automatically. Notable corrects new edits for the difference, but edits already made carry the wrong time and other devices cannot correct them.</string>
     <string name="sync_couch_held_deletions_confirm_button">Delete them on the server too</string>
     <string name="sync_couch_held_deletions_discard_button">Keep them on the server</string>
     <string name="sync_couch_held_deletions_discard_hint">This device stops trying to delete them. They are still on the server, so they will come back here on the next sync.</string>

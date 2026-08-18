@@ -14,6 +14,7 @@ import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.withTransaction
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.utils.logCallStack
 import io.shipbook.shipbooksdk.Log
@@ -53,7 +54,7 @@ data class Page(
     // because a page outside a notebook has no notebook to ask.
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
-    val createdAt: Date = Date(), val updatedAt: Date = Date(),
+    val createdAt: Date = SyncClock.nowDate(), val updatedAt: Date = SyncClock.nowDate(),
     /**
      * Which device last wrote this page, or null when that device is this one.
      *
@@ -261,7 +262,7 @@ class PageRepository @Inject constructor(
     suspend fun rename(pageId: String, title: String?) {
         if (pageId.isEmpty()) return
         database.withTransaction {
-            db.updateTitle(pageId, title, System.currentTimeMillis())
+            db.updateTitle(pageId, title, SyncClock.nowMs())
             // Read back rather than taken from the caller: the rename menu knows a page id and
             // nothing else, and the notebook has to travel with it.
             queuePage(pageId, db.getNotebookId(pageId))
@@ -276,7 +277,7 @@ class PageRepository @Inject constructor(
      * that reason — the whole row was being loaded, background and geometry included, so a single
      * `String?` could be picked out of it and the rest discarded.
      */
-    suspend fun touchUpdatedAt(pageId: String, updatedAt: Long = System.currentTimeMillis()) {
+    suspend fun touchUpdatedAt(pageId: String, updatedAt: Long = SyncClock.nowMs()) {
         if (pageId.isEmpty()) return
         database.withTransaction {
             db.touchUpdatedAt(pageId, updatedAt)

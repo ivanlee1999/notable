@@ -21,6 +21,7 @@ import com.ethran.notable.editor.utils.EpdRefreshArbiter
 import com.ethran.notable.editor.utils.offsetImage
 import com.ethran.notable.editor.utils.offsetStroke
 import com.ethran.notable.io.copyBitmapToClipboard
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.utils.DomainError
 import com.ethran.notable.utils.onError
@@ -215,12 +216,12 @@ class SelectionState {
         // change the selected stokes' ids - it's a copy
             selectedStrokes = selectedStrokes!!.map {
                 it.copy(
-                    id = UUID.randomUUID().toString(), createdAt = Date()
+                    id = UUID.randomUUID().toString(), createdAt = SyncClock.nowDate()
                 )
             }
         if (!selectedImages.isNullOrEmpty()) selectedImages = selectedImages!!.map {
             it.copy(
-                id = UUID.randomUUID().toString(), createdAt = Date()
+                id = UUID.randomUUID().toString(), createdAt = SyncClock.nowDate()
             )
         }
         // move the selection a bit, to show the copy

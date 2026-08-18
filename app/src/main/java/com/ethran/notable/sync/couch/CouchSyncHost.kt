@@ -9,6 +9,7 @@ import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.sync.COUCH_SYNC_STATE_KEY
 import com.ethran.notable.sync.DEFAULT_DEVICE_ID
 import com.ethran.notable.sync.SyncBackend
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import io.shipbook.shipbooksdk.ShipBook
@@ -57,6 +58,27 @@ class CouchSyncHost @Inject constructor(
     private val mutex = Mutex()
     private var stack: Stack? = null
     private val tombstonesPruned = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    init {
+        // Restore the last measured skew before anything can be stamped. An edit made offline, in
+        // a process that never reaches the server, is stamped from whatever this leaves behind —
+        // so a device that has synced once keeps the correction across restarts, and one that
+        // never has is exactly as wrong as it was before, which is the honest default.
+        scope.launch {
+            runCatching { kvProxy.getSyncSettings().lastClockSkewSeconds }
+                .onSuccess { SyncClock.note(it) }
+                .onFailure { SyncLogger.w(TAG, "Could not read the stored clock skew: $it") }
+        }
+    }
+
+    override suspend fun rememberClockSkew(seconds: Long?) {
+        runCatching {
+            val settings = kvProxy.getSyncSettings()
+            if (settings.lastClockSkewSeconds != seconds) {
+                kvProxy.setSyncSettings(settings.copy(lastClockSkewSeconds = seconds))
+            }
+        }.onFailure { SyncLogger.w(TAG, "Could not store the measured clock skew: $it") }
+    }
 
     private val _documentState = MutableStateFlow<CouchDocumentState?>(null)
     override val documentState: StateFlow<CouchDocumentState?> = _documentState.asStateFlow()
@@ -261,11 +283,17 @@ class CouchSyncHost @Inject constructor(
      * session. Deliberately not an edit — nothing is queued and no clock is bumped; the next
      * ordinary push of each page carries the shorter list. Page tombstones and outline entries
      * are never pruned (they hold structural identity the merge needs indefinitely).
+     *
+     * The cutoff comes off [SyncClock], not the raw system clock, because the instants it is
+     * compared against were stamped by that same corrected clock here and by the peers' corrected
+     * clocks there. A device a week fast reading its own uncorrected clock would take a week off
+     * the horizon and drop tombstones its peer still needs — which un-erases strokes, since a
+     * tombstone is the only record that an erasure happened.
      */
     private suspend fun pruneExpiredTombstonesOnce() {
         if (!tombstonesPruned.compareAndSet(false, true)) return
         appRepository.pruneExpiredTombstones(
-            cutoffMillis = System.currentTimeMillis() - TOMBSTONE_PRUNE_HORIZON_MS
+            cutoffMillis = SyncClock.nowMs() - TOMBSTONE_PRUNE_HORIZON_MS
         )
     }
 
