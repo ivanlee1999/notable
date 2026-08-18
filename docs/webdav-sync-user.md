@@ -14,7 +14,6 @@ experimental, so keep an independent backup—especially before using a replacem
 
 Not synced:
 
-- Standalone Quick Pages
 - Files referenced through linked external PDF paths
 - Folder deletions; a deleted folder may reappear after another device syncs
 
@@ -200,7 +199,6 @@ failure promptly. Tap **Clear** to empty it.
 3. Confirm both devices use exactly the same base URL and account
 4. Look under `/notable/notebooks/{id}/` in the provider's file UI
 5. Check for **Error**, **Not synced**, or **Newer on server** status
-6. Confirm the notebook isn't a standalone Quick Page — those never sync
 
 ### A Notebook Is Missing an Image or Background
 

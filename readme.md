@@ -64,7 +64,7 @@ Future plans include exploring how AI can enhance the app, with a focus on solut
 ## Features
 * ⚡ **Fast page turns with caching:** smooth, swift page transitions, including quick navigation to the next and previous pages.
 * ↕️ **Infinite vertical scroll:** a virtually endless canvas for notes with smooth vertical scrolling.
-* 📝 **Quick Pages:** instantly create a new page.
+* ⚡ **New note:** one tap makes a notebook and drops you on a blank page — no dialog.
 * 📒 **Notebooks:** group related notes and switch easily between notebooks.
 * 📁 **Folders:** organize notes with folders.
 * 🧭 **QuickNav panel:** page previews, an outline, bookmarks and pinned pages in one sheet — see [Getting around a notebook](#getting-around-a-notebook).

@@ -27,8 +27,8 @@ import javax.inject.Inject
  * One sheet of a notebook.
  *
  * Every page belongs to a notebook: [notebookId] is not nullable, and the foreign key is the only
- * one on this table. That was not always so — until 0.14.0 a page with no notebook was a "quick
- * page", parked in a folder of its own through a `parentFolderId` column. It bought nothing the
+ * one on this table. That was not always so — before schema 48 a page with no notebook was a
+ * "quick page", parked in a folder of its own through a `parentFolderId` column. It bought nothing the
  * library could not already do and cost the page its sync: the protocol has no standalone page
  * lifecycle (§6.4 — pages live and die with a notebook's `pageIds`), so a page belonging to no
  * notebook was never enumerated, never pushed, and never seen on the peer. `MIGRATION_47_48` gave

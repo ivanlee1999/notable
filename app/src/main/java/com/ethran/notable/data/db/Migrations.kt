@@ -245,9 +245,9 @@ val MIGRATION_45_46 = object : Migration(45, 46) {
 /**
  * Gives every loose page a notebook, and takes away the column that let it go without one.
  *
- * Until 0.14.0 a page whose `notebookId` was NULL was a "quick note": one sheet parked directly in
- * a library folder through `page.parentFolderId`, created by a button that skipped the new-notebook
- * dialog. The speed was the point, and the speed is kept — but the second kind of thing is not, and
+ * Before this migration a page whose `notebookId` was NULL was a "quick note": one sheet parked
+ * directly in a library folder through `page.parentFolderId`, created by a button that skipped the
+ * new-notebook dialog. The speed was the point, and the speed is kept — but the second kind of thing is not, and
  * this migration is where it ends.
  *
  * It ends because a loose page was never *anywhere*. The protocol gives pages no lifecycle of their

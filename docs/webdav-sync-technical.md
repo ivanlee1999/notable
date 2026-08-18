@@ -289,8 +289,10 @@ everything used to. See `PageSizes.kt`, and the normative table in bopa's
 
 ### 4.3 Page JSON (`pages/{uuid}.json`)
 
-Page JSON schema version is `1`. It contains `id`, a nullable `notebookId` (`null` for standalone
-Quick Pages, which are never synced), background fields, nullable `parentFolderId`, scroll position,
+Page JSON schema version is `1`. It contains `id`, a nullable `notebookId` and a nullable
+`parentFolderId` — both kept on the wire for compatibility with a stock upstream Notable, which
+still has loose pages; here a page always names a notebook and never a folder, and one arriving
+without a notebook is dropped. Then background fields, scroll position,
 the page's own nullable `pageWidth`/`pageHeight` (§4.2 — this is the authoritative geometry for
 laying the page out), timestamps, and arrays of strokes and images.
 

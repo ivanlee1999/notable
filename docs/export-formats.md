@@ -65,12 +65,10 @@ saveStream(
     - Subfolder (createSubfolderName):
         - Book (PDF/XOPP): book hierarchy (no extra book folder)
         - Book (PNG/JPEG): hierarchy + book title folder
-        - Page in a book: hierarchy + book title folder
-        - Quick page: page’s hierarchy
+        - Page: hierarchy + book title folder
 - File name (createFileName):
     - Book: BookTitle
-    - Page in a book: BookTitle-p<PageNumber> (or “p_” if unknown)
-    - Quick page: quickpage-<timestamp>
+    - Page: BookTitle-p<PageNumber> (or “p_” if unknown)
 
 ### Caveats
 - Rendering and pagination depend on GlobalAppSettings
