@@ -269,4 +269,62 @@ class PageViewportBoundsTest {
         assertTrue("at the top there is plenty below, so this must only scroll",
             !blocked(Offset(0f, 0f)))
     }
+
+    // MARK: Continuous scrolling across the seam
+
+    /**
+     * With the next page drawn under the seam, the scroll may run all the way to the page's own
+     * end — the moment the last of it leaves the top of the view is the moment the switch to the
+     * next page shows the exact same pixels. Without the overshoot the ordinary bound holds.
+     */
+    @Test
+    fun `the overshoot bound runs to the page's end and no further`() {
+        val sheet = PageSizePreset.A4.size
+        val viewHeight = 1000
+        val zoom = 1f
+        val height = sheet.height.toFloat()
+
+        val overshot = PageViewportBounds.boundScroll(
+            Offset(0f, height * 5f), sheet.width.toFloat(), 800, zoom, height, viewHeight,
+            overshootIntoNextPage = true
+        )
+        assertEquals(height, overshot.y, 1e-3f)
+
+        val ordinary = PageViewportBounds.boundScroll(
+            Offset(0f, height * 5f), sheet.width.toFloat(), 800, zoom, height, viewHeight,
+            overshootIntoNextPage = false
+        )
+        assertEquals(
+            PageViewportBounds.maxScroll(height, viewHeight, zoom), ordinary.y, 1e-3f
+        )
+        assertTrue("the overshoot must reach past the ordinary bound", overshot.y > ordinary.y)
+    }
+
+    /**
+     * A page shorter than the view — the phone-shaped case where the whole sheet fits with room
+     * to spare — can still be overshot exactly to its end: the seam travels from mid-screen to
+     * the top, and never past it.
+     */
+    @Test
+    fun `a page shorter than the view overshoots to its end, not off the screen`() {
+        val sheet = PageSizePreset.A4.size
+        val height = sheet.height.toFloat()
+        val tallView = (height * 2).toInt()
+
+        assertEquals(
+            height,
+            PageViewportBounds.maxVerticalScroll(
+                height, tallView, zoom = 1f, overshootIntoNextPage = true
+            ),
+            1e-3f
+        )
+        // And without the overshoot such a page does not scroll at all.
+        assertEquals(
+            0f,
+            PageViewportBounds.maxVerticalScroll(
+                height, tallView, zoom = 1f, overshootIntoNextPage = false
+            ),
+            1e-3f
+        )
+    }
 }

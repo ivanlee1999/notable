@@ -78,6 +78,26 @@ object PageViewportBounds {
     fun maxHorizontalScroll(pageWidth: Float, viewWidth: Int, zoom: Float): Float =
         maxScroll(pageWidth, viewWidth, zoom)
 
+    /**
+     * How far down the view may scroll when the next page is drawn below this one
+     * ([overshootIntoNextPage]): all the way to the page's own end, so the whole view can fill
+     * with the next page before the switch commits. Without the overshoot the ordinary
+     * [maxScroll] holds — the far edge of the page stops at the far edge of the view.
+     *
+     * The overshoot maximum is the page extent itself: at `scroll.y == pageExtent` the last of
+     * this page has just left the top of the view, which is the moment the next page can take
+     * over with the exact same pixels on screen. Never less than the ordinary maximum, so a page
+     * shorter than the view still cannot be dragged upward off the screen twice over.
+     */
+    fun maxVerticalScroll(
+        pageExtent: Float,
+        viewExtent: Int,
+        zoom: Float,
+        overshootIntoNextPage: Boolean,
+    ): Float =
+        if (overshootIntoNextPage) maxOf(pageExtent, 0f)
+        else maxScroll(pageExtent, viewExtent, zoom)
+
     /** [scroll] pulled inside the page: never before an edge, never past the opposite one. */
     fun boundScroll(
         scroll: Offset,
@@ -86,9 +106,12 @@ object PageViewportBounds {
         zoom: Float,
         pageHeight: Float,
         viewHeight: Int,
+        overshootIntoNextPage: Boolean = false,
     ): Offset = Offset(
         scroll.x.coerceIn(0f, maxScroll(pageWidth, viewWidth, zoom)),
-        scroll.y.coerceIn(0f, maxScroll(pageHeight, viewHeight, zoom))
+        scroll.y.coerceIn(
+            0f, maxVerticalScroll(pageHeight, viewHeight, zoom, overshootIntoNextPage)
+        )
     )
 
     /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */

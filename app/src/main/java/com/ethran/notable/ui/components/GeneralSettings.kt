@@ -60,9 +60,10 @@ fun GeneralSettings(
                 onSettingsChange(settings.copy(pageTurn = mode))
             })
 
-        // Paged turns by a whole screen at a time, so a turn is one clean refresh rather
-        // than a run of partial ones. It supersedes smooth scrolling, which is why that
-        // toggle drops away below when it is selected.
+        // Scrolling flows on across the seam into the next page; Pagination turns by a whole
+        // screen at a time, so a turn is one clean refresh rather than a run of partial ones.
+        // Paged supersedes smooth scrolling, which is why that toggle drops away below when
+        // it is selected.
         SelectorRow(
             label = stringResource(R.string.vertical_navigation), options = listOf(
                 AppSettings.VerticalNavigation.Continuous to

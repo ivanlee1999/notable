@@ -169,24 +169,22 @@ class PageView(
         get() = pageDataManager.getSheet(currentPageId)
 
     /**
-     * The zoom at which the sheet exactly fills the view's width.
+     * The zoom a page is shown at when it is fitted: the sheet exactly filling the view's width,
+     * with the rest of the page reached by scrolling down.
      *
      * This is what makes a declared page size mean the same thing on both devices: the page is the
      * page, and the device scales to it. Before page sizes, zoom 1.0 *was* the fit because the page
      * width was the screen width — which is precisely why the same page came out different sizes on
      * the two apps.
-     */
-    /**
-     * The zoom a page is shown at when it is fitted: the whole sheet when pages turn sideways, its
-     * width when they turn downward. Named for the width because that is what it has always been
-     * and what every caller means by "the fit"; which fit it is now follows the direction.
+     *
+     * The width fit regardless of which way pages turn. Sideways turning briefly used the
+     * whole-page fit instead, which letterboxed the sheet between dead margins on any screen
+     * whose aspect is not the paper's — margins that looked like page but took no ink. The page
+     * opens at full width now, and the part that does not fit is in the direction scrolling
+     * already goes.
      */
     val fitToWidthZoom: Float
-        get() = if (GlobalAppSettings.current.pageTurn.isVertical) {
-            PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
-        } else {
-            PageViewportBounds.fitWholePageZoom(sheet.width, sheet.height, viewWidth, viewHeight)
-        }
+        get() = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
 
     /**
      * Whether the sheet is a hard edge — true for any page that declares its own size.
@@ -196,8 +194,31 @@ class PageView(
      * "sheet" is only this device's screen), and bounding it would hide ink written past that
      * screen on a wider device, so it keeps the old free-roaming behaviour.
      */
-    private val hasHardBounds: Boolean
+    val hasHardBounds: Boolean
         get() = pageDataManager.hasDeclaredSheet(currentPageId)
+
+    /**
+     * The next / previous page of the notebook, as last resolved by the neighbor prefetch.
+     * Null for a quick page, at either end of the book, or before the prefetch has run.
+     */
+    val nextPageId: String? get() = pageDataManager.nextPageIdOf(currentPageId)
+    val previousPageId: String? get() = pageDataManager.previousPageIdOf(currentPageId)
+
+    /**
+     * Whether vertical scrolling flows on into the next page instead of stopping at this one's
+     * end and turning by a whole screen.
+     *
+     * This is what the "Scrolling" choice under Vertical Navigation has always promised: the
+     * notebook is one long surface and you stop wherever you let go — including with the seam
+     * between two pages on screen. "Pagination" keeps the discrete turn, which on e-ink is one
+     * clean refresh. Only for downward page turns (a sideways turn has no seam to scroll over),
+     * and only once the next page is actually known — on the last page the drag past the edge
+     * still creates a fresh page, exactly as before.
+     */
+    val crossPageScrollActive: Boolean
+        get() = GlobalAppSettings.current.pageTurn.isVertical &&
+                !GlobalAppSettings.current.verticalNavigation.isPaged &&
+                nextPageId != null
 
     /**
      * The lowest zoom this page may be viewed at: the fit on a bounded page, so blank non-page
@@ -339,6 +360,7 @@ class PageView(
                     log.i("PageView: using cached bitmap")
                     windowedBitmap = cached
                     windowedCanvas = Canvas(windowedBitmap)
+                    applyCanvasZoom()
                     // Check if we have correct size of canvas
                     if (windowedCanvas.width != viewWidth || windowedCanvas.height != viewHeight)
                         updateCanvasDimensions()
@@ -366,10 +388,32 @@ class PageView(
         }
     }
 
+    /**
+     * Sets the canvas transform to exactly the current zoom — *sets*, never multiplies.
+     *
+     * Every place that used to call `windowedCanvas.scale(...)` was implicitly relying on the
+     * canvas being freshly created or just reset by `setBitmap` (which clears the matrix), and
+     * one path relied on nothing at all: [updateCanvasDimensions] recreated the canvas and never
+     * scaled it, so until the next zoom or scroll event everything drew in screen pixels while
+     * the rest of the pipeline spoke page units. On a blank page that was invisible — a white
+     * fill has no scale — which is how it survived; anything drawn at a real position (strokes,
+     * the off-page shading) landed in the wrong place or off the bitmap entirely. Idempotent, so
+     * it is safe wherever the canvas might or might not already carry the zoom.
+     */
+    @Suppress("DEPRECATION")
+    private fun applyCanvasZoom() {
+        windowedCanvas.setMatrix(Matrix().apply {
+            setScale(zoomLevel.value, zoomLevel.value)
+        })
+    }
+
     private fun recreateCanvas() {
         windowedBitmap = createBitmap(viewWidth, viewHeight)
         windowedCanvas = Canvas(windowedBitmap)
+        // The initial bitmap (a disk preview or a bare background) is drawn in screen pixels on
+        // the identity matrix; the zoom comes on for everything after it.
         loadInitialBitmap()
+        applyCanvasZoom()
     }
 
     /*
@@ -400,7 +444,7 @@ class PageView(
      */
     private fun loadPage() {
         logCache.i("Init from persist layer, pageId: $currentPageId")
-        windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
+        applyCanvasZoom()
         loadingJob = coroutineScope.launch(Dispatchers.IO) {
             try {
                 snackManager.showSnackDuring(text = "Loading strokes...") {
@@ -724,7 +768,7 @@ class PageView(
         scrollBackBuffer = windowedBitmap
         windowedBitmap = shiftedBitmap
         windowedCanvas.setBitmap(windowedBitmap)
-        windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
+        applyCanvasZoom()
 
         redrawOutsideRect(
             alreadyDrawnRectAfterShift(movement.toIntOffset(), width, height),
@@ -767,7 +811,8 @@ class PageView(
     /** [scroll] clamped into the page: never before an edge, never past the opposite one. */
     private fun boundScroll(scroll: Offset, zoom: Float = zoomLevel.value): Offset =
         PageViewportBounds.boundScroll(
-            scroll, pannableWidth(), viewWidth, zoom, height.toFloat(), viewHeight)
+            scroll, pannableWidth(), viewWidth, zoom, height.toFloat(), viewHeight,
+            overshootIntoNextPage = crossPageScrollActive)
 
     /**
      * Whether a scroll of [pageDelta] has nowhere left to go on this page — the page is already
@@ -889,7 +934,7 @@ class PageView(
 //        windowedBitmap.recycle() -- It causes race condition with init from persistent layer
         windowedBitmap = zoomedBitmap
         windowedCanvas.setBitmap(windowedBitmap)
-        windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
+        applyCanvasZoom()
 
 
         // Redraw everything at new zoom level
@@ -976,7 +1021,7 @@ class PageView(
         windowedCanvas.setBitmap(windowedBitmap)
 
         zoomLevel.value = newZoom
-        windowedCanvas.scale(zoomLevel.value, zoomLevel.value)
+        applyCanvasZoom()
 
         if (bounded != unbounded) {
             // The snapshot was scaled about the pinch centre, so it sits where the *unbounded*
@@ -1089,11 +1134,12 @@ class PageView(
     }
 
     private fun updateCanvasDimensions() {
-        // Recreate bitmap and canvas with new dimensions
-        recreateCanvas()
         // Re-fit to the new width. Resetting to 1.0 was the old "fit", back when the page was the
         // screen; on a declared sheet it would leave the page adrift after every rotation.
+        // Before the canvas is recreated, so the new canvas carries the new zoom.
         zoomLevel.value = fitToWidthZoom
+        // Recreate bitmap and canvas with new dimensions
+        recreateCanvas()
         pageDataManager.setPageZoom(currentPageId, zoomLevel.value)
         // The new width moves the right-hand bound with it.
         clampScrollToBounds()
