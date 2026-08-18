@@ -221,6 +221,12 @@ fun EditorView(
                 .drop(1) // Skip initial emission from loadBookData
                 .collect { newPageId ->
                     log.v("EditorView: snapshotFlow detected pageId change to $newPageId, triggering onPageChange")
+                    // Undo history names stroke ids, and replaying it against a page that does
+                    // not hold them deletes those rows from the DB anyway — the ids are global.
+                    // Cleaning here, at the one point every navigation route passes through,
+                    // covers the paths that used to skip it (the drag-past-the-edge turn, the
+                    // scrubber) instead of trusting each call site to remember.
+                    history.cleanHistory()
                     // update the PageView
                     page.changePage(newPageId)
 

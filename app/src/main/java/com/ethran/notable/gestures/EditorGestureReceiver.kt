@@ -440,6 +440,9 @@ private fun cleanupGesture(recognizer: Recognizer, ctx: GestureContext) {
         ctx.actions.setIsDrawing(true)
     }
     applyGestureMode(recognizer, GestureMode.Normal, ctx)
+    // After the mode reset, not inside it: a gesture that never left Normal (a discrete
+    // swipe) still ends, and the editor's per-gesture latch has to be released either way.
+    ctx.actions.onGestureEnd()
 }
 
 /**
