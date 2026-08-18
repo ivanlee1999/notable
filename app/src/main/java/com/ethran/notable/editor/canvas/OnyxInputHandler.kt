@@ -4,14 +4,11 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
-import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toRect
-import com.ethran.notable.data.datastore.TOOLBAR_THICKNESS
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.state.History
-import com.ethran.notable.editor.ui.editorTitleBarHeight
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
@@ -32,7 +29,6 @@ import com.ethran.notable.editor.utils.onSurfaceInit
 import com.ethran.notable.editor.utils.penToStroke
 import com.ethran.notable.editor.utils.setupSurface
 import com.ethran.notable.editor.utils.ShapeGeometry
-import com.ethran.notable.ui.convertDpToPixel
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.device.Device
 import com.onyx.android.sdk.extension.isNullOrEmpty
@@ -246,27 +242,12 @@ class OnyxInputHandler(
         log.i("Update editable surface")
         coroutineScope.launch {
             onSurfaceInit(drawCanvas)
-            // Across the rail's short edge: its height when docked top/bottom, its width
-            // when docked left/right. setupSurface reads the position itself.
-            val open = toolbarState.isToolbarOpen
-            val toolbarThickness =
-                if (open) convertDpToPixel(TOOLBAR_THICKNESS.dp, drawCanvas.context).toInt()
-                else 0
-            // The title bar is shown and hidden with the rail, and sizes itself off the same
-            // screen width the composition reads — so both arrive at the same band.
-            val titleBarHeight =
-                if (open) convertDpToPixel(
-                    editorTitleBarHeight(
-                        drawCanvas.context.resources.configuration.screenWidthDp
-                    ),
-                    drawCanvas.context
-                ).toInt()
-                else 0
+            // The surface is laid out inside the chrome's inset, so its own box is the paper —
+            // there is no chrome to measure or exclude here. Showing or hiding the toolbar
+            // resizes the surface, which re-runs this through surfaceChanged with the new box.
             setupSurface(
                 drawCanvas,
                 touchHelper,
-                toolbarThickness,
-                titleBarHeight,
                 zoom = page.zoomLevel.value
             )
             // setupSurface resets the framework stroke style to firmware defaults. Re-send the
