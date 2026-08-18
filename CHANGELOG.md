@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.31.0
+
+"Scrolling" now means scrolling — in every configuration, and past the last page.
+
+- **Continuous scrolling works whichever way pages turn.** 0.27.0's cross-page scrolling was
+  quietly limited to vertical page turns; with "Turn the page: Side to side" a vertical drag
+  still stopped dead at the sheet's end, the space below stayed gray, and the pen was refused
+  there — which read as "still paginated" and "the edge cannot be written on". The page-turn
+  direction and the scrolling behaviour answer different questions now: Scrolling flows across
+  the seam in every configuration, and Pagination alone keeps the discrete turn.
+- **The last page stops being a wall.** Dragging past its end creates the next page in place
+  and the seam slides in under the same drag, instead of a whole-screen turn; writing past its
+  end creates the next page and files the ink onto it. The way to keep writing is the next
+  page — so writing simply keeps going. Quick pages, which have no notebook to grow into, still
+  say so.
+- **A page left with the seam on screen reopens exactly there**, instead of snapping back a
+  screenful; and ink written across the seam onto a page that was not loaded yet appears as it
+  is written, instead of surfacing on the next visit.
+
 ## 0.30.0
 
 A notebook you were still writing in when another device emptied the Trash now comes back
