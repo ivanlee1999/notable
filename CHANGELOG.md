@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.30.0
+
+A notebook you were still writing in when another device emptied the Trash now comes back
+everywhere, not only where you were writing.
+
+- **The notebook you kept drawing in comes back on every device.** If one device empties the Trash
+  while another is still writing in that notebook offline, the writing is meant to win — the
+  notebook comes back, with the new ink. Since 0.26.0 it came back only on the device holding the
+  pen. The device that emptied the Trash kept the deletion, the two never agreed again, and nothing
+  anywhere said so. The device holding the ink now tells the server the notebook survived, so every
+  device gets it back on its next sync.
+
+### Worth knowing
+
+- **Why this went unnoticed for four releases.** CouchDB does not let a revision be written over a
+  deleted document: bringing one back has to be sent as a fresh create, and Notable was sending it
+  as an update, which the server refused every single time. The stand-in for CouchDB used by the
+  tests accepted what the real server rejects, so the sync tests passed while the thing they were
+  testing could not have worked. It now refuses exactly what CouchDB refuses, and the case is
+  covered end to end against a real server.
+
 ## 0.29.0
 
 Ink is filed where it was drawn, not where the view has moved to since.
