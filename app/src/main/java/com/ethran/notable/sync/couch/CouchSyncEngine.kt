@@ -311,6 +311,13 @@ class CouchSyncEngine(
         val stillDirty: List<String> = emptyList(),
         val failures: Map<String, String> = emptyMap(),
         /**
+         * The typed error behind each entry in [failures], same keys. [failures] keeps the stable
+         * raw detail (`unauthorized`, `server(413, …)`) for the log; anything user-facing maps
+         * these through the controller's friendly wording instead, so an engine string never
+         * reaches the screen verbatim.
+         */
+        val failureCauses: Map<String, Throwable> = emptyMap(),
+        /**
          * The tombstones the mass-deletion guard held back (protocol §6.7) — notebooks and the
          * folders deleted with them — **which** ones, not merely how many.
          *
@@ -842,11 +849,11 @@ class CouchSyncEngine(
         val identity = runCatching { verifyDatabaseIdentity() }.getOrNull()
         if (enforceDatabaseIdentity && identity != null && !identity.isUsable) {
             return mutex.withLock {
+                val refusal = CouchError.DatabaseIdentity(identity)
                 FlushReport(
                     stillDirty = dirty.sorted(),
-                    failures = mapOf(
-                        CouchMetaDocId.DATABASE to CouchError.DatabaseIdentity(identity).detail
-                    ),
+                    failures = mapOf(CouchMetaDocId.DATABASE to refusal.detail),
+                    failureCauses = mapOf(CouchMetaDocId.DATABASE to refusal),
                     // Terminal on purpose: no amount of retrying resolves whose library this is.
                     // The outbox keeps everything, and the user's answer is what releases it.
                     hasRetriableFailure = false,
@@ -863,6 +870,7 @@ class CouchSyncEngine(
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
         val failures = LinkedHashMap<String, String>()
+        val failureCauses = LinkedHashMap<String, Throwable>()
         var hasRetriableFailure = false
         var retryAfterMs: Long? = null
         // The table, not only what `markDirty` was told. A repository queues a document by writing
@@ -902,6 +910,7 @@ class CouchSyncEngine(
                 }
             } catch (error: CouchError) {
                 failures[documentId] = error.detail
+                failureCauses[documentId] = error
                 stillDirty += documentId
                 if (error.isRetriable) {
                     hasRetriableFailure = true
@@ -931,6 +940,7 @@ class CouchSyncEngine(
                 }
             } catch (error: Exception) {
                 failures[documentId] = error.toString()
+                failureCauses[documentId] = error
                 stillDirty += documentId
                 // Not a `CouchError` at all — a store read that failed, most likely. Local faults
                 // are usually transient (a row locked, a device briefly out of space), and the
@@ -944,6 +954,7 @@ class CouchSyncEngine(
             merged = merged,
             stillDirty = stillDirty,
             failures = failures,
+            failureCauses = failureCauses,
             hasRetriableFailure = hasRetriableFailure,
             retryAfterMs = retryAfterMs,
             databaseIdentity = identity,

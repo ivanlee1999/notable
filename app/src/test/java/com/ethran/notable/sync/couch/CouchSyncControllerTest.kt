@@ -224,13 +224,61 @@ class CouchSyncControllerTest {
         backend.flushReport = CouchSyncEngine.FlushReport(
             stillDirty = listOf("page:a", "page:b"),
             failures = mapOf("page:a" to "transport(offline)"),
+            failureCauses = mapOf("page:a" to CouchError.Transport("offline")),
         )
         val controller = controller(backend, FakeSleeper(allowedTicks = 10))
 
         runBlocking { controller.pushNow() }
 
         assertEquals(2, controller.pendingCount)
-        assertEquals("transport(offline) 2 waiting to sync.", controller.state.value.detail)
+        assertEquals(
+            "Offline — changes are saved and will sync when you reconnect. 2 waiting to sync.",
+            controller.state.value.detail,
+        )
+    }
+
+    /**
+     * Flush failures store the engine's stable detail strings, and those used to be put straight
+     * into the status caption — the user read "unauthorized" while describe()'s friendly wording
+     * sat as dead code on this path. The typed cause travels with the report now, and the caption
+     * maps it; the raw detail still goes to the log.
+     */
+    @Test
+    fun `a flush failure reaches the user in words, not engine strings`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "unauthorized"),
+            failureCauses = mapOf("page:a" to CouchError.Unauthorized),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val status = controller.status
+        assertTrue("expected a failure, got $status", status is CouchSyncController.Status.Failed)
+        assertEquals(
+            "Sync rejected the username or password.",
+            (status as CouchSyncController.Status.Failed).message,
+        )
+    }
+
+    /** A report without typed causes (an older engine, a fake) still surfaces its raw detail. */
+    @Test
+    fun `a failure without a typed cause falls back to the raw detail`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "something bespoke"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        assertEquals(
+            "something bespoke",
+            (controller.status as CouchSyncController.Status.Failed).message,
+        )
     }
 
     @Test

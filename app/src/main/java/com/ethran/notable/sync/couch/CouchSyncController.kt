@@ -522,11 +522,19 @@ class CouchSyncController @Inject constructor(
                     ),
                 )
 
-                report.failures.isNotEmpty() -> current.copy(
-                    pendingCount = pending,
-                    heldDeletions = held,
-                    status = Status.Failed(report.failures.values.sorted().first()),
-                )
+                report.failures.isNotEmpty() -> {
+                    // The caption gets the friendly wording; `logFlush` above already kept the raw
+                    // detail. Straight `failures` values are engine strings ("unauthorized",
+                    // "server(413, …)") and used to reach the screen verbatim, leaving describe()'s
+                    // sentences dead code on the commonest failure path of all.
+                    val first = report.failures.entries.sortedBy { it.value }.first()
+                    val message = report.failureCauses[first.key]?.let(::describe) ?: first.value
+                    current.copy(
+                        pendingCount = pending,
+                        heldDeletions = held,
+                        status = Status.Failed(message),
+                    )
+                }
 
                 else -> current.copy(
                     pendingCount = pending,
@@ -845,6 +853,12 @@ class CouchSyncController @Inject constructor(
     private fun describe(error: Throwable): String = when (error) {
         is CouchError.Unauthorized -> "Sync rejected the username or password."
         is CouchError.Transport -> "Offline — changes are saved and will sync when you reconnect."
+        is CouchError.Conflict ->
+            "The server's copy kept changing while syncing. Nothing is lost; it will be retried."
+        is CouchError.NotFound ->
+            "The sync server has no such database. Check the database name in the sync settings."
+        is CouchError.MalformedResponse ->
+            "The sync server answered with something this app could not read."
         is CouchError.Blocked ->
             "Android refused this address: sync needs an https:// server. A plain http:// one " +
                 "would send your password in the clear, so it is not allowed."
