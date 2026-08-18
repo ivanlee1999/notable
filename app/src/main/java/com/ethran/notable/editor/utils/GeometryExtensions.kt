@@ -5,6 +5,7 @@ import android.graphics.RectF
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntOffset
 import com.ethran.notable.data.db.StrokePoint
+import com.ethran.notable.editor.InkViewport
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.data.note.TouchPoint
 import kotlin.math.ceil
@@ -84,10 +85,10 @@ internal val rawInputMaxPressure: Float by lazy {
     if (max > 0f) max else 1f
 }
 
-fun TouchPoint.toStrokePoint(scroll: Offset, scale: Float): StrokePoint {
+fun TouchPoint.toStrokePoint(viewport: InkViewport): StrokePoint {
     return StrokePoint(
-        x = x / scale + scroll.x,
-        y = y / scale + scroll.y,
+        x = viewport.pageX(x),
+        y = viewport.pageY(y),
         pressure = (pressure / rawInputMaxPressure).coerceIn(0f, 1f),
         tiltX = tiltX,
         tiltY = tiltY,

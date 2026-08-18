@@ -126,6 +126,12 @@ class PageView(
     // when the canvas size/config changes (zoom, dimension change, page switch).
     private var scrollBackBuffer: Bitmap? = null
 
+    /**
+     * The fraction of a pixel the last scroll could not move the picture by, held for the next
+     * one. Screen pixels, like the drag deltas it is added to.
+     */
+    private var scrollRemainderPx = Offset.Zero
+
     //    var strokes = listOf<Stroke>()
     var strokes: List<Stroke>
         get() = pageDataManager.getStrokes(currentPageId)
@@ -152,6 +158,52 @@ class PageView(
 
     val isTransformationAllowed: Boolean
         get() = pageDataManager.isTransformationAllowedForCurrentPage()
+
+    /**
+     * The view the pen is drawing on right now, taken at pen-down; null when no stroke is open.
+     *
+     * Written from the input callbacks and read from whatever thread finishes the stroke, hence
+     * volatile. See [InkViewport] for why a stroke may not be filed through the *live* view.
+     */
+    @Volatile
+    private var strokeViewport: InkViewport? = null
+
+    /** Where the page sits under the screen at this instant. */
+    val currentViewport: InkViewport
+        get() = InkViewport(scroll, zoomLevel.value)
+
+    /** Pen down: hold the view the firmware is about to paint this stroke onto. */
+    fun beginInkCapture() {
+        strokeViewport = currentViewport
+    }
+
+    /** Pen up, cancelled, or the page changed under the stroke: stop holding a view. */
+    fun endInkCapture() {
+        strokeViewport = null
+    }
+
+    /**
+     * The view a just-finished stroke must be filed through: the one it was drawn on.
+     *
+     * Falls back to the live view when no pen-down was seen — a shape or selection replayed from
+     * elsewhere, or an input path that does not bracket its strokes — which is the behaviour this
+     * replaced, and is right whenever nothing has moved.
+     *
+     * A difference between the two is the bug this exists to absorb, so it is logged rather than
+     * passed over: something moved the view under a stroke in flight, and but for the snapshot the
+     * ink would have been stored that far from where it was written.
+     */
+    fun inkViewport(): InkViewport {
+        val atPenDown = strokeViewport ?: return currentViewport
+        val now = currentViewport
+        if (atPenDown != now) {
+            log.w(
+                "View moved under a stroke in flight; filing it where it was drawn. " +
+                    "penDown=$atPenDown now=$now"
+            )
+        }
+        return atPenDown
+    }
 
 
     // we need to observe zoom level, to adjust strokes size.
@@ -351,6 +403,9 @@ class PageView(
                 // under it filed that stroke onto the NEW page, at the new page's scroll and zoom.
                 // Wait it out the same way updateScroll/updateZoom do before touching page state.
                 waitForDrawingWithSnack()
+                // A pen still down when the page went out from under it has no view left to be
+                // filed through: the one it was drawn on belongs to a page that is no longer here.
+                endInkCapture()
 
                 pageDataManager.onExit(oldId, windowedBitmap)
                 pageDataManager.setPage(newPageId)
@@ -736,22 +791,33 @@ class PageView(
 
     suspend fun updateScroll(dragDelta: Offset) {
 //        log.d("Update scroll, dragDelta: $dragDelta, scroll: $scroll, zoomLevel.value: $zoomLevel.value")
-        // drag delta is in screen coordinates,
-        // so we have to scale it back to page coordinates.
+        val zoom = zoomLevel.value
+        // drag delta is in screen coordinates, so we have to scale it back to page coordinates.
+        // Carrying the last step's sub-pixel tail in with it, so slow travel accumulates into
+        // whole pixels instead of being dropped a fraction at a time.
+        val requestedPx = dragDelta + scrollRemainderPx
         val deltaInPage = boundScroll(
-            scroll + Offset(dragDelta.x / zoomLevel.value, dragDelta.y / zoomLevel.value)
+            scroll + Offset(requestedPx.x / zoom, requestedPx.y / zoom)
         ) - scroll
 
         // There is nothing to do, return.
-        if (deltaInPage == Offset.Zero) return
+        if (deltaInPage == Offset.Zero) {
+            scrollRemainderPx = Offset.Zero
+            return
+        }
+
+        // The scroll moves exactly as far as the picture is about to, and not one fraction of a
+        // pixel further: a scroll the panel has not followed is a scroll the pen is filed through
+        // but nobody can see. See PageViewportBounds.scrollStep.
+        val step = PageViewportBounds.scrollStep(deltaInPage, zoom)
+        scrollRemainderPx = step.remainderPx
+        if (step.isStandingStill) return
 
         // before scrolling, make sure that strokes are drawn.
         waitForDrawingWithSnack()
 
-        scroll += deltaInPage
-        // To avoid rounding errors, we just calculate it again.
-        val movement = (deltaInPage * zoomLevel.value)
-        if (movement.toIntOffset() == IntOffset.Zero) return
+        scroll += step.scrollDelta
+        val movement = step.movementPx
 
         val width = windowedBitmap.width
         val height = windowedBitmap.height
@@ -762,7 +828,7 @@ class PageView(
         } ?: createBitmap(width, height, windowedBitmap.config!!)
         val shiftedCanvas = Canvas(shiftedBitmap)
         shiftedCanvas.drawColor(Color.RED) //for debugging.
-        shiftedCanvas.drawBitmap(windowedBitmap, -movement.x, -movement.y, null)
+        shiftedCanvas.drawBitmap(windowedBitmap, -movement.x.toFloat(), -movement.y.toFloat(), null)
 
         // Swap in the shifted bitmap; the old live buffer becomes the next spare.
         scrollBackBuffer = windowedBitmap
@@ -771,7 +837,7 @@ class PageView(
         applyCanvasZoom()
 
         redrawOutsideRect(
-            alreadyDrawnRectAfterShift(movement.toIntOffset(), width, height),
+            alreadyDrawnRectAfterShift(movement, width, height),
             width,
             height
         )
