@@ -403,6 +403,15 @@ class CouchSyncEngine(
     }
 
     private val mutex = Mutex()
+
+    /**
+     * Set once this engine's configuration has been replaced — see [invalidate]. Checked wherever
+     * state is handed out for persistence, never around the work itself: a PUT already in flight is
+     * a real write and may finish, but nothing this engine does from here on may reach the state
+     * store, because the state store now belongs to the successor.
+     */
+    private val invalidated = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private var lastSeq: String = state.lastSeq
     private val revs: MutableMap<String, String> = LinkedHashMap(state.revs)
     private val dirty: MutableSet<String> = LinkedHashSet(state.dirty)
@@ -1358,7 +1367,23 @@ class CouchSyncEngine(
     private fun <T> decodeOrNull(json: JsonObject, serializer: KSerializer<T>): T? =
         runCatching { couchJson.decodeFromJsonElement(serializer, json) }.getOrNull()
 
+    /**
+     * Retires this engine. Called by the host before the stack it belongs to is replaced — a
+     * settings change, or CouchDB being switched off. Requests already in flight may still finish;
+     * what stops is persistence: an invalidated engine's state describes a configuration that no
+     * longer exists, and the state key deliberately excludes credentials and the device id, so a
+     * password change rebuilds onto the *same* key — a late write from the old engine would land
+     * squarely on top of whatever the replacement has persisted since. bopa's
+     * `CouchSyncEngine.invalidate()` is the twin of this method.
+     */
+    fun invalidate() {
+        invalidated.set(true)
+    }
+
     private fun persist() {
+        // An invalidated engine's state describes a configuration that no longer exists; writing
+        // it would overwrite whatever the replacement engine has persisted since.
+        if (invalidated.get()) return
         onStateChange?.invoke(currentState)
     }
 

@@ -249,6 +249,9 @@ class CouchSyncHost @Inject constructor(
             // misconfigured CouchDB looks exactly like one that is working and has nothing to do.
             if (stack != null) SyncLogger.i(TAG, "CouchDB no longer active; sync stack released")
             else SyncLogger.d(TAG, couchInactiveReason(settings))
+            // Retired, not merely dropped: an in-flight flush or pull on the old engine keeps
+            // running after this returns, and its persist would land on the shared state key.
+            stack?.engine?.invalidate()
             stack = null
             publish(null)
             return@withLock null
@@ -256,6 +259,12 @@ class CouchSyncHost @Inject constructor(
 
         val key = settingsKey(settings)
         stack?.takeIf { it.settingsKey == key }?.let { return@withLock it }
+        // The settings changed under the old engine. Invalidate it *before* the replacement is
+        // built: the state key excludes credentials and the device id, so a password or
+        // device-name change rebuilds onto the very same key — and an old engine allowed to
+        // finish its flush would persist its stale checkpoint over the successor's. bopa's
+        // `SyncBackendHost` does the same, for the same reason.
+        stack?.engine?.invalidate()
         val stateKey = stateKey(settings)
 
         val deviceId = settings.deviceId.ifBlank { DEFAULT_DEVICE_ID }

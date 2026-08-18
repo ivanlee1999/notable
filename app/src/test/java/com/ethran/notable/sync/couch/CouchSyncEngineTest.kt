@@ -1402,6 +1402,35 @@ class CouchSyncEngineTest {
         }
 
     /**
+     * The host rebuilds the stack whenever its settings change, and the state key deliberately
+     * excludes credentials and the device id — so a password change rebuilds onto the same key.
+     * An old engine allowed to keep persisting would land its stale checkpoint on top of the
+     * replacement's. Invalidation is what stops it: work in flight may finish, state may not.
+     */
+    @Test
+    fun an_invalidated_engine_never_persists_again() = runBlocking {
+        val states = mutableListOf<CouchSyncState>()
+        val engine = CouchSyncEngine(
+            CouchDbClient(server, database = "notes"), ipadStore, deviceId = "ipad",
+            onStateChange = { states += it },
+        )
+        ipadStore.set(pageId, CouchDocBody.Page(page(listOf(stroke("s1", 1, "ipad")), updatedAt = 5, by = "ipad")))
+        engine.markDirty(listOf(pageId))
+        assertTrue("the live engine should be persisting", states.isNotEmpty())
+
+        val persistedBefore = states.size
+        engine.invalidate()
+        val report = engine.flush()
+
+        assertEquals("work already committed may still finish", listOf(pageId), report.pushed)
+        assertEquals(
+            "but nothing an invalidated engine does may reach the state store",
+            persistedBefore,
+            states.size,
+        )
+    }
+
+    /**
      * A cleartext URL under Android's network security policy fails here — thrown by the platform
      * before a socket is opened, as an IOException like any other. Reported as [CouchError.Transport]
      * it becomes "you are offline", which is both wrong and unactionable: the retry loop then hides
