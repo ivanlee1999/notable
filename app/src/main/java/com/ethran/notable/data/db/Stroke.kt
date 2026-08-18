@@ -104,6 +104,16 @@ interface StrokeDao {
     @Query("SELECT COALESCE(SUM(LENGTH(points)), 0) FROM stroke WHERE pageId = :pageId")
     suspend fun sumPointsLength(pageId: String): Long
 
+    // Where this page's lowest-starting ink begins. The split asks this of every page on
+    // notebook open, so it has to be answerable without loading a single point blob.
+    @Query("SELECT MAX(top) FROM stroke WHERE pageId = :pageId")
+    suspend fun maxTop(pageId: String): Float?
+
+    // Which of these ids exist at all, on any page. Stroke ids are global (§6.6 moves ink
+    // between pages under a stable id), so "not on this page" does not mean "insertable".
+    @Query("SELECT id FROM stroke WHERE id IN (:ids)")
+    suspend fun existingIds(ids: List<String>): List<String>
+
     @Transaction
     @Query("SELECT * FROM stroke WHERE id =:strokeId")
     suspend fun getById(strokeId: String): Stroke
@@ -139,6 +149,16 @@ class StrokeRepository @Inject constructor(
     /** Summed compressed-blob byte size of a page's strokes; for pre-load cache cost estimation. */
     suspend fun sumPointsLength(pageId: String): Long {
         return db.sumPointsLength(pageId)
+    }
+
+    /** The top of the lowest-starting stroke on the page, or null when it holds none. */
+    suspend fun maxTop(pageId: String): Float? {
+        return db.maxTop(pageId)
+    }
+
+    /** The subset of [ids] that already exist, on whatever page. */
+    suspend fun existingIds(ids: List<String>): Set<String> {
+        return ids.chunked(900).flatMap { db.existingIds(it) }.toSet()
     }
 
     suspend fun getStrokeWithPointsById(strokeId: String): Stroke {

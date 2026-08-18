@@ -55,6 +55,13 @@ class AppRepository @Inject constructor(
     private val db: AppDatabase
 ) {
     /**
+     * One Room transaction around [block], for callers outside this class that have to make
+     * several repository writes land or fail together — the sync store dividing a page, most
+     * of all. Room joins nested transactions, so repositories that transact internally compose.
+     */
+    suspend fun <T> inTransaction(block: suspend () -> T): T = db.withTransaction { block() }
+
+    /**
      * The atomic sync commit point, at page granularity. In one Room
      * transaction: mark the notebook synced, upsert the freshly transferred pages' [PageSyncState]
      * rows, and delete rows for pages that left the notebook. Pages skipped this sync keep their

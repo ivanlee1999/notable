@@ -192,6 +192,26 @@ class CouchSyncHost @Inject constructor(
 
     // endregion
 
+    /**
+     * Divides every page of [notebookId] that outgrew its sheet — see
+     * [RoomCouchStore.splitOversizedPages], which this makes runnable whether or not any server
+     * is configured: what a page *is* does not depend on having somewhere to sync it, and a
+     * notebook that has never seen a server still needs its tall pages divided on open.
+     */
+    suspend fun splitOversizedPages(notebookId: String): Set<String> {
+        val store = stack()?.store ?: RoomCouchStore(
+            appRepository = appRepository,
+            kvDao = kvDao,
+            deviceId = kvProxy.getSyncSettings().deviceId.ifBlank { DEFAULT_DEVICE_ID },
+            // The same wiring the synced store gets: a division rewrites pages that the canvas
+            // or the page cache may be holding, exactly like a pull applying a peer's edit.
+            onPagesApplied = { pageIds ->
+                scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
+            },
+        )
+        return store.splitOversizedPages(notebookId)
+    }
+
     // region Assembly
 
     /**
