@@ -1,5 +1,6 @@
 package com.ethran.notable.sync.couch
 
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -340,7 +341,7 @@ class CouchSyncEngine(
      * written it. Reading, creating and recording run unconditionally; only blocking waits.
      */
     private val enforceDatabaseIdentity: Boolean = false,
-    private val nowIso: () -> String = { Instant.now().toString() },
+    private val nowIso: () -> String = SyncClock::nowIso,
     private val newGeneration: () -> String = { java.util.UUID.randomUUID().toString() },
     private val onStateChange: ((CouchSyncState) -> Unit)? = null,
     /**
@@ -1637,7 +1638,7 @@ class CouchSyncEngine(
                 continue
             }
 
-            val now = Instant.now().toString()
+            val now = SyncClock.nowIso()
             val asset = CouchAsset.of(
                 blob.bytes, at = now, updatedBy = deviceId, contentType = blob.contentType
             )

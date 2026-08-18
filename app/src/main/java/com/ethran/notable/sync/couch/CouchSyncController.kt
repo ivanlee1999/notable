@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import com.ethran.notable.di.ApplicationScope
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +63,16 @@ interface CouchSyncBackend {
      * Defaulted to nothing, because a backend with no engine behind it has nothing to forget.
      */
     suspend fun rearmRefusedRequests() {}
+
+    /**
+     * Persists the last measured clock skew, so [SyncClock] still corrects stamps in a process
+     * that has not reached the server yet — the offline edit after a sync is exactly the one that
+     * needs it, and it is made before any response could re-measure.
+     *
+     * Defaulted to a no-op: a skew nobody remembers is the behaviour before this existed, which is
+     * what a test double that does not care about clocks should get.
+     */
+    suspend fun rememberClockSkew(seconds: Long?) = Unit
 
     /**
      * "Yes, delete them on the server too": lets exactly [ids] past the mass-deletion guard on the
@@ -244,6 +255,21 @@ class CouchSyncController @Inject constructor(
          * user to ignore the one that matters.
          */
         val identityWarning: String? get() = describeDatabaseIdentity(databaseIdentity)
+
+        /**
+         * Whether the disagreement deserves a banner rather than a line in the footer.
+         *
+         * Above [SyncClock.WARNING_THRESHOLD_SECONDS] the clock is wrong in a way no network
+         * latency explains, and the damage is the kind nobody attributes to a clock: a notebook
+         * that keeps coming back out of the Trash, a rename that will not stick, ink that
+         * disappears when the other device syncs. Correcting new stamps stops it getting worse,
+         * but it cannot repair what is already stamped or reach the peer's copies — so the person
+         * who can actually fix it has to be told, not informed in passing.
+         */
+        val clockSkewNeedsAttention: Boolean
+            get() = clockSkewSeconds?.let {
+                kotlin.math.abs(it) >= SyncClock.WARNING_THRESHOLD_SECONDS
+            } == true
 
         /** One-line status for the settings footer. */
         val detail: String?
@@ -868,10 +894,20 @@ class CouchSyncController @Inject constructor(
      * with no follow-up leaves the reader unsure whether it still is.
      *
      * Never a [Status]: significant skew is a warning that rides alongside a sync that worked.
+     *
+     * This is also where the reading stops being merely reported and starts being *used*: every
+     * timestamp this device stamps from here on is taken from [SyncClock], corrected by exactly
+     * this number. The correction is applied when a stamp is made and never when one is applied,
+     * so the merge stays a pure function of the two documents and two devices still compute the
+     * same answer from the same pair.
      */
     private fun noteClockSkew(skewSeconds: Long?) {
         val previous = _state.value.clockSkewSeconds
         _state.update { it.copy(clockSkewSeconds = skewSeconds) }
+        SyncClock.note(skewSeconds)
+        // Written only when it moves: the change feed makes a request a minute, forever, and this
+        // is a database row.
+        if (skewSeconds != previous) scope.launch { backend.rememberClockSkew(skewSeconds) }
         val warning = _state.value.clockSkewWarning
         when {
             warning != null && warning != lastLoggedClockSkew -> SyncLogger.w(TAG, warning)

@@ -12,6 +12,7 @@ import androidx.room.Update
 import androidx.room.withTransaction
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchBookmark
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.sync.couch.CouchMerge
@@ -70,8 +71,8 @@ data class Notebook(
 
     // File that its linked to:
     val linkedExternalUri: String? = null,
-    val createdAt: Date = Date(),
-    val updatedAt: Date = Date(),
+    val createdAt: Date = SyncClock.nowDate(),
+    val updatedAt: Date = SyncClock.nowDate(),
 
     /**
      * When this notebook was moved to the Trash, or null while it is a normal notebook. The twin
@@ -197,7 +198,7 @@ class BookRepository @Inject constructor(
             notebookDao.create(notebook)
             pageDao.create(page)
 
-            notebookDao.setPageIds(notebook.id, listOf(page.id), Date())
+            notebookDao.setPageIds(notebook.id, listOf(page.id), SyncClock.nowDate())
             notebookDao.setOpenPageId(notebook.id, page.id)
             // Both documents, not just the notebook. The initial page is created here and nothing
             // else is ever going to touch it, so queueing the manifest alone shipped a notebook
@@ -216,7 +217,7 @@ class BookRepository @Inject constructor(
     suspend fun update(notebook: Notebook) {
         log.i("updating DB")
         // `updatedBy = null` for the same reason `updatedAt` is stamped: this write happened here.
-        val updatedNotebook = notebook.copy(updatedAt = Date(), updatedBy = null)
+        val updatedNotebook = notebook.copy(updatedAt = SyncClock.nowDate(), updatedBy = null)
         database.withTransaction {
             notebookDao.update(updatedNotebook)
             outbox.queue(CouchDocId.notebook(updatedNotebook.id))
@@ -273,7 +274,7 @@ class BookRepository @Inject constructor(
             val pageIds = notebook.pageIds.toMutableList()
             if (index != null) pageIds.add(index, pageId)
             else pageIds.add(pageId)
-            notebookDao.setPageIds(bookId, pageIds, Date())
+            notebookDao.setPageIds(bookId, pageIds, SyncClock.nowDate())
             outbox.queue(listOf(CouchDocId.notebook(bookId), CouchDocId.page(pageId)))
         }
     }
@@ -281,7 +282,7 @@ class BookRepository @Inject constructor(
     suspend fun removePage(id: String, pageId: String) {
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
-            val now = Date()
+            val now = SyncClock.nowDate()
             val updatedNotebook = notebook.copy(
                 // remove the page
                 pageIds = notebook.pageIds.filterNot { it == pageId },
@@ -325,7 +326,7 @@ class BookRepository @Inject constructor(
     suspend fun setBookmark(id: String, pageId: String, bookmarked: Boolean) {
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
-            val now = Date()
+            val now = SyncClock.nowDate()
             val entry = CouchBookmark(
                 pageId = pageId,
                 updatedAt = now.toInstant().toString(),
@@ -349,7 +350,7 @@ class BookRepository @Inject constructor(
     suspend fun addOutlineEntry(id: String, pageId: String, title: String, depth: Int = 0) {
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
-            val now = Date()
+            val now = SyncClock.nowDate()
             val entry = CouchOutlineEntry(
                 id = UUID.randomUUID().toString(),
                 pageId = pageId,
@@ -402,7 +403,7 @@ class BookRepository @Inject constructor(
             val outline = movedOutline(notebook.outline, notebook.pageIds, entryId, direction)
                 ?: return@withTransaction
             notebookDao.update(
-                notebook.copy(outline = outline, updatedAt = Date(), updatedBy = null)
+                notebook.copy(outline = outline, updatedAt = SyncClock.nowDate(), updatedBy = null)
             )
             outbox.queue(CouchDocId.notebook(id))
         }
@@ -414,7 +415,7 @@ class BookRepository @Inject constructor(
         database.withTransaction {
             val notebook = notebookDao.getById(id) ?: return@withTransaction
             if (notebook.outline.none { it.id == entryId }) return@withTransaction
-            val now = Date()
+            val now = SyncClock.nowDate()
             val outline = notebook.outline.map {
                 if (it.id == entryId) edit(it, now.toInstant().toString()) else it
             }
@@ -435,7 +436,7 @@ class BookRepository @Inject constructor(
 
             pageIds.remove(pageId)
             pageIds.add(correctedIndex, pageId)
-            notebookDao.setPageIds(id, pageIds, Date())
+            notebookDao.setPageIds(id, pageIds, SyncClock.nowDate())
             // A reorder is the case the "never sent" scan can never rescue: the notebook is one the
             // server already holds, so nothing about it looks unsent, and only the order changed.
             outbox.queue(CouchDocId.notebook(id))

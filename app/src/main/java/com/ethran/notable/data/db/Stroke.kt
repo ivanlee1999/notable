@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.geometry.Offset
 import androidx.room.*
 import com.ethran.notable.editor.utils.Pen
+import com.ethran.notable.sync.SyncClock
 import kotlinx.serialization.SerialName
 import java.util.Date
 import java.util.UUID
@@ -76,8 +77,8 @@ data class Stroke(
     @ColumnInfo(index = true)
     val pageId: String,
 
-    val createdAt: Date = Date(),
-    val updatedAt: Date = Date()
+    val createdAt: Date = SyncClock.nowDate(),
+    val updatedAt: Date = SyncClock.nowDate()
 )
 
 // DAO

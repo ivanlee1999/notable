@@ -30,6 +30,7 @@ import com.ethran.notable.editor.utils.PenSetting
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportTarget
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncOrchestrator
 import com.ethran.notable.sync.couch.CouchSyncHost
 import com.ethran.notable.utils.AppResult
@@ -491,13 +492,13 @@ class EditorViewModel @Inject constructor(
             val updatedPage = if (path == null) {
                 page.copy(
                     backgroundType = type,
-                    updatedAt = Date()
+                    updatedAt = SyncClock.nowDate()
                 )
             } else {
                 page.copy(
                     background = path,
                     backgroundType = type,
-                    updatedAt = Date()
+                    updatedAt = SyncClock.nowDate()
                 )
             }
             appRepository.pageRepository.update(updatedPage)

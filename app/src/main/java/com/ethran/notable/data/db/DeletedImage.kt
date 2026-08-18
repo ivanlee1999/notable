@@ -7,6 +7,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import com.ethran.notable.sync.SyncClock
 import java.util.Date
 import javax.inject.Inject
 
@@ -60,7 +61,7 @@ interface DeletedImageDao {
 class DeletedImageRepository @Inject constructor(
     private val db: DeletedImageDao
 ) {
-    suspend fun record(pageId: String, imageIds: List<String>, deletedAt: Date = Date()) {
+    suspend fun record(pageId: String, imageIds: List<String>, deletedAt: Date = SyncClock.nowDate()) {
         if (pageId.isEmpty() || imageIds.isEmpty()) return
         imageIds.chunked(900).forEach { batch ->
             db.insertAll(batch.map {

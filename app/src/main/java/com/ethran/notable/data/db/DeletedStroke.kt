@@ -7,6 +7,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import com.ethran.notable.sync.SyncClock
 import java.util.Date
 import javax.inject.Inject
 
@@ -61,7 +62,7 @@ interface DeletedStrokeDao {
 class DeletedStrokeRepository @Inject constructor(
     private val db: DeletedStrokeDao
 ) {
-    suspend fun record(pageId: String, strokeIds: List<String>, deletedAt: Date = Date()) {
+    suspend fun record(pageId: String, strokeIds: List<String>, deletedAt: Date = SyncClock.nowDate()) {
         if (pageId.isEmpty() || strokeIds.isEmpty()) return
         strokeIds.chunked(900).forEach { batch ->
             db.insertAll(batch.map { DeletedStroke(strokeId = it, pageId = pageId, deletedAt = deletedAt) })

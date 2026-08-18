@@ -13,6 +13,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
 import androidx.room.withTransaction
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.Flow
@@ -36,8 +37,8 @@ data class Folder(
     @ColumnInfo(index = true)
     val parentFolderId: String? = null,
 
-    val createdAt: Date = Date(),
-    val updatedAt: Date = Date(),
+    val createdAt: Date = SyncClock.nowDate(),
+    val updatedAt: Date = SyncClock.nowDate(),
 
     /**
      * When this folder was moved to the Trash, or null while it is a normal folder.
@@ -130,7 +131,7 @@ class FolderRepository @Inject constructor(
     suspend fun update(folder: Folder) {
         database.withTransaction {
             // `updatedBy = null` travels with the stamp: this write happened here.
-            db.update(folder.copy(updatedAt = Date(), updatedBy = null))
+            db.update(folder.copy(updatedAt = SyncClock.nowDate(), updatedBy = null))
             outbox.queue(CouchDocId.folder(folder.id))
         }
     }

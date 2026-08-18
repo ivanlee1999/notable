@@ -7,6 +7,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import com.ethran.notable.sync.SyncClock
 import java.util.Date
 import javax.inject.Inject
 
@@ -61,7 +62,7 @@ interface DeletedPageDao {
 class DeletedPageRepository @Inject constructor(
     private val db: DeletedPageDao
 ) {
-    suspend fun record(notebookId: String, pageIds: List<String>, deletedAt: Date = Date()) {
+    suspend fun record(notebookId: String, pageIds: List<String>, deletedAt: Date = SyncClock.nowDate()) {
         if (notebookId.isEmpty() || pageIds.isEmpty()) return
         pageIds.chunked(900).forEach { batch ->
             db.insertAll(batch.map {

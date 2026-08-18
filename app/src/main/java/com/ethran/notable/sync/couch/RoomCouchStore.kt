@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.data.db.DeletedImage
@@ -244,7 +245,7 @@ class RoomCouchStore(
         // and a folder quietly dropped here is a folder the user never learns went missing.
         CouchDocId.split(documentId) ?: return@runBlocking
 
-        val stamp = DAY_FORMAT.format(Instant.now())
+        val stamp = DAY_FORMAT.format(SyncClock.now())
         // Derived from the document and its bytes rather than minted fresh, so re-reading the same
         // unreadable document produces the same copy instead of another one. The feed is replayed
         // from the start whenever a checkpoint is lost — which this design treats as safe — and
@@ -255,7 +256,7 @@ class RoomCouchStore(
         )
         val notebookId = uuidShaped(identity.take(32))
         val pageId = uuidShaped(identity.takeLast(32))
-        val now = Date()
+        val now = SyncClock.nowDate()
 
         if (appRepository.bookRepository.getById(notebookId) != null) return@runBlocking
 
@@ -310,7 +311,7 @@ class RoomCouchStore(
      * Records a locally-initiated deletion so the engine pushes a tombstone. Survives a restart,
      * which is what makes deleting a notebook while offline work.
      */
-    fun recordDeletion(documentId: String, deletedAt: String = Instant.now().toString()) =
+    fun recordDeletion(documentId: String, deletedAt: String = SyncClock.nowIso()) =
         runBlocking { appRepository.couchDeletionRepository.record(documentId, deletedAt) }
 
     fun pendingDeletionIds(): List<String> =
@@ -414,7 +415,7 @@ class RoomCouchStore(
         }
         if (candidates.isEmpty()) return emptySet()
 
-        val now = Instant.now().toString()
+        val now = SyncClock.nowIso()
         val rewritten = mutableSetOf<String>()
         appRepository.inTransaction {
             val fresh = appRepository.bookRepository.getById(notebookId)

@@ -55,6 +55,7 @@ import javax.inject.Provider
 import java.time.Instant
 import java.util.Base64
 import java.util.Date
+import com.ethran.notable.sync.SyncClock
 import java.util.UUID
 import com.ethran.notable.testing.trashRepositoryFor
 
@@ -1424,6 +1425,60 @@ class RoomCouchStoreTest {
     }
 
     // endregion
+
+    /**
+     * §6.4's liveness signal reads the page clocks, and the page clocks are stamped by this device.
+     * So a skewed device must not be able to inflate its own liveness: a BOOX an hour fast that
+     * stamped ink an hour into the future would beat a deletion the iPad made *after* the ink,
+     * which is the failure §7.1a exists to stop. Pins the chain
+     * `touchUpdatedAt` -> `page.updatedAt` -> `RoomCouchStore.contentClock`, and the deletion
+     * ledger landing on the same corrected instant — correcting one without the other is worse
+     * than correcting neither.
+     */
+    @Test
+    fun theLivenessClockAndTheTombstoneAreBothStampedFromTheCorrectedClock() {
+        val notebookId = CouchDocId.notebook("nb1")
+        store.apply(
+            notebookId,
+            CouchDocBody.Notebook(
+                CouchNotebook(
+                    title = "notes", pageIds = listOf("p1"),
+                    createdAt = stamp(0), updatedAt = stamp(1), updatedBy = "boox",
+                )
+            )
+        )
+        store.apply(
+            CouchDocId.page("p1"),
+            CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 1)),
+        )
+
+        try {
+            SyncClock.note(3_600)
+            val corrected = SyncClock.nowMs()
+
+            runBlocking { repository.pageRepository.touchUpdatedAt("p1") }
+            val liveness = store.contentClock(notebookId)
+            assertNotNull("a notebook with a page must report a liveness clock", liveness)
+            assertEquals(
+                "the liveness clock must be the corrected instant, not this device's own",
+                corrected.toDouble(),
+                CouchMerge.millis(liveness!!).toDouble(),
+                5_000.0,
+            )
+
+            store.recordDeletion(notebookId)
+            val tombstone = store.load(notebookId) as? CouchDocBody.Deleted
+            assertNotNull(tombstone)
+            assertEquals(
+                corrected.toDouble(),
+                CouchMerge.millis(tombstone!!.tombstone.deletedAt).toDouble(),
+                5_000.0,
+            )
+        } finally {
+            SyncClock.reset()
+        }
+    }
+
 }
 
 /**
