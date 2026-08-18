@@ -324,6 +324,13 @@ class PageView(
                 // before that state is replaced.
                 loadingJob?.cancelAndJoin()
 
+                // A stroke finished just before the switch is still being processed on Main under
+                // drawingInProgress, and it reads page identity — currentPageId, scroll, zoom — at
+                // processing time (OnyxInputHandler, Mode.Draw/Line). Swapping the page out from
+                // under it filed that stroke onto the NEW page, at the new page's scroll and zoom.
+                // Wait it out the same way updateScroll/updateZoom do before touching page state.
+                waitForDrawingWithSnack()
+
                 pageDataManager.onExit(oldId, windowedBitmap)
                 pageDataManager.setPage(newPageId)
                 zoomLevel.value = initialZoom()
