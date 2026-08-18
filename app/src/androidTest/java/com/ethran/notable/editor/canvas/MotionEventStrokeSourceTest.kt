@@ -27,7 +27,23 @@ class MotionEventStrokeSourceTest {
     private val aboveTheRail = Rect(0, 0, 1000, 960)
 
     private var collected: TouchPointList? = null
-    private val source = MotionEventStrokeSource { collected = it }
+
+    /**
+     * The pen-down/pen-up bracket, recorded as it is called. The editor holds the view the stroke
+     * is being drawn on between the two, so the order matters as much as the count: the stroke has
+     * to be handed over while the view is still held. See
+     * [com.ethran.notable.editor.InkViewport].
+     */
+    private val bracket = mutableListOf<String>()
+
+    private val source = MotionEventStrokeSource(
+        onStrokeFinished = {
+            collected = it
+            bracket += "finished"
+        },
+        onStrokeStarted = { bracket += "started" },
+        onStrokeEnded = { bracket += "ended" },
+    )
 
     private data class Pointer(
         val id: Int,
@@ -220,5 +236,59 @@ class MotionEventStrokeSourceTest {
         )
 
         assertNull(collected)
+    }
+
+    @Test
+    fun a_stroke_is_bracketed_by_pen_down_and_pen_up() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f))), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, listOf(pen(20f, 20f))), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, listOf(pen(30f, 30f))), canvas)
+
+        // Handed over before the bracket closes, so the view it was drawn on is still held.
+        assertEquals(listOf("started", "finished", "ended"), bracket)
+    }
+
+    @Test
+    fun the_palm_lifting_first_leaves_the_bracket_open() {
+        // The stroke is still being drawn, so the view it is being drawn on is still the one it
+        // must be filed through — a hand leaving the glass does not end it.
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(palm, pen(10f, 10f)), actionIndex = 1),
+            canvas
+        )
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_UP, listOf(palm, pen(20f, 20f)), actionIndex = 0),
+            canvas
+        )
+
+        assertEquals(listOf("started"), bracket)
+
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, listOf(pen(30f, 30f))), canvas)
+        assertEquals(listOf("started", "finished", "ended"), bracket)
+    }
+
+    @Test
+    fun a_cancelled_stroke_closes_its_bracket() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f))), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_CANCEL, listOf(pen(20f, 20f))), canvas)
+
+        assertEquals(listOf("started", "ended"), bracket)
+    }
+
+    @Test
+    fun a_cancel_with_no_stroke_open_brackets_nothing() {
+        source.cancel()
+
+        assertTrue(bracket.isEmpty())
+    }
+
+    @Test
+    fun a_press_on_the_rail_holds_no_view() {
+        // Nothing opened, so nothing may be held: the editor would go on holding a view for a
+        // stroke that never started.
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(500f, 980f))), aboveTheRail)
+
+        assertTrue(bracket.isEmpty())
     }
 }

@@ -327,4 +327,57 @@ class PageViewportBoundsTest {
             1e-3f
         )
     }
+
+    /**
+     * The scroll and the picture move together or the pen goes astray: whatever the scroll
+     * advances by has to be exactly what the panel was blitted by, and the panel moves in whole
+     * pixels.
+     */
+    @Test
+    fun `the scroll advances by exactly what the picture moves`() {
+        val step = PageViewportBounds.scrollStep(Offset(0f, 12.7f), zoom = 1f)
+        assertEquals(12, step.movementPx.y)
+        assertEquals(12f, step.scrollDelta.y, 1e-3f)
+        assertEquals(0.7f, step.remainderPx.y, 1e-3f)
+    }
+
+    @Test
+    fun `travel worth less than a pixel moves nothing at all`() {
+        val step = PageViewportBounds.scrollStep(Offset(0f, 0.4f), zoom = 1f)
+        assertTrue(step.isStandingStill)
+        assertEquals(0f, step.scrollDelta.y, 1e-3f)
+        assertEquals(0.4f, step.remainderPx.y, 1e-3f)
+    }
+
+    /**
+     * Sub-pixel travel is carried, not dropped: a slow drag whose every sample is worth less than
+     * a pixel still scrolls, and the scroll it produces is still exactly what the picture moved.
+     *
+     * Losing the second half of that was the bug — the scroll took the full delta while the blit
+     * was skipped as too small, so the model crept away from the picture a fraction of a pixel at
+     * a time and every stroke after it was filed through a view nobody could see.
+     */
+    @Test
+    fun `sub-pixel steps accumulate into travel without drifting from the picture`() {
+        var remainder = Offset.Zero
+        var scrolled = 0f
+        var pictureMoved = 0
+        repeat(100) {
+            val requested = Offset(0f, 0.3f) + remainder
+            val step = PageViewportBounds.scrollStep(requested, zoom = 1f)
+            remainder = step.remainderPx
+            scrolled += step.scrollDelta.y
+            pictureMoved += step.movementPx.y
+        }
+        assertEquals(30, pictureMoved)
+        assertEquals(pictureMoved.toFloat(), scrolled, 1e-3f)
+    }
+
+    @Test
+    fun `zoom converts the picture's whole pixels back into page units`() {
+        val step = PageViewportBounds.scrollStep(Offset(0f, 10f), zoom = 2f)
+        // Ten page units is twenty pixels at this zoom, and twenty pixels is ten page units back.
+        assertEquals(20, step.movementPx.y)
+        assertEquals(10f, step.scrollDelta.y, 1e-3f)
+    }
 }

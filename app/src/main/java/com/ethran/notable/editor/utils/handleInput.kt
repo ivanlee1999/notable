@@ -1,7 +1,7 @@
 package com.ethran.notable.editor.utils
 
-import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.data.db.StrokePoint
+import com.ethran.notable.editor.InkViewport
 import com.ethran.notable.data.model.SimplePointF
 import com.onyx.android.sdk.data.note.TouchPoint
 
@@ -13,7 +13,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 // StrokePointConverter.DT_MAX_VALUE_INT.
 private const val DT_MAX_VALUE_MS = 65534L
 
-fun copyInput(touchPoints: List<TouchPoint>, scroll: Offset, scale: Float): List<StrokePoint> {
+fun copyInput(touchPoints: List<TouchPoint>, viewport: InkViewport): List<StrokePoint> {
     if (touchPoints.isEmpty()) return emptyList()
     // Capture per-point delta time (ms relative to the first point) into StrokePoint.dt so
     // it can be persisted. The firmware stamps each TouchPoint with an absolute timestamp;
@@ -23,20 +23,19 @@ fun copyInput(touchPoints: List<TouchPoint>, scroll: Offset, scale: Float): List
     val baseTime = touchPoints.first().timestamp
     return touchPoints.map {
         val deltaMs = (it.timestamp - baseTime).coerceIn(0L, DT_MAX_VALUE_MS)
-        it.toStrokePoint(scroll, scale).copy(dt = deltaMs.toUShort())
+        it.toStrokePoint(viewport).copy(dt = deltaMs.toUShort())
     }
 }
 
 
 fun copyInputToSimplePointF(
     touchPoints: List<TouchPoint>,
-    scroll: Offset,
-    scale: Float
+    viewport: InkViewport,
 ): List<SimplePointF> {
     val points = touchPoints.map {
         SimplePointF(
-            x = it.x / scale + scroll.x,
-            y = (it.y / scale + scroll.y),
+            x = viewport.pageX(it.x),
+            y = viewport.pageY(it.y),
         )
     }
     return points

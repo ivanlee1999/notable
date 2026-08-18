@@ -11,6 +11,7 @@ import androidx.core.graphics.toRegion
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.StrokePoint
+import com.ethran.notable.editor.InkViewport
 import com.ethran.notable.data.model.SimplePointF
 import com.onyx.android.sdk.data.note.TouchPoint
 
@@ -193,16 +194,15 @@ fun offsetImage(image: Image, offset: Offset): Image {
 
 fun getModifiedStrokeEndpoints(
     points: List<TouchPoint>,
-    scroll: Offset,
-    zoomLevel: Float
+    viewport: InkViewport,
 ): Pair<StrokePoint, StrokePoint> {
     if (points.isEmpty()) throw IllegalArgumentException("points list is empty")
 
     val startIdx = points.size / 10
     val endIdx = (9 * points.size) / 10
 
-    val baseStartPoint = points.first().toStrokePoint(scroll, zoomLevel)
-    val baseEndPoint = points.last().toStrokePoint(scroll, zoomLevel)
+    val baseStartPoint = points.first().toStrokePoint(viewport)
+    val baseEndPoint = points.last().toStrokePoint(viewport)
 
     val startPoint = baseStartPoint.copy(
         tiltX = points[startIdx].tiltX,

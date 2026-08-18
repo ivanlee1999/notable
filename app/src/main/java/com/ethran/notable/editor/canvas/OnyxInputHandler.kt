@@ -100,9 +100,15 @@ class OnyxInputHandler(
         // - erase :  `onBeginRawErasing()` -> `onRawErasingTouchPointMoveReceived()` -> `onRawErasingTouchPointListReceived()` -> `onEndRawErasing()`
 
         override fun onBeginRawDrawing(p0: Boolean, p1: TouchPoint?) {
+            // The firmware is about to paint on the picture that is on the panel now, so that is
+            // the view this stroke will be filed through however far the editor scrolls before the
+            // pen lifts. See InkViewport.
+            page.beginInkCapture()
         }
 
         override fun onEndRawDrawing(p0: Boolean, p1: TouchPoint?) {
+            // Fires after the point list, which is where the held view is read.
+            page.endInkCapture()
         }
 
         override fun onRawDrawingTouchPointMoveReceived(p0: TouchPoint?) {
@@ -115,6 +121,9 @@ class OnyxInputHandler(
         // Handle button/eraser tip of the pen:
         override fun onBeginRawErasing(p0: Boolean, p1: TouchPoint?) {
             if (touchHelper == null) return
+            // An erase track is aimed at the ink on the panel exactly as a stroke is, and is
+            // matched against stored ink the same way. Same view, same reason. See InkViewport.
+            page.beginInkCapture()
             // Re-assert the native eraser indicator because setRawDrawingEnabled(true) (called
             // on every resume) resets it to disabled internally. The track style follows the active
             // eraser type: the wide marker (style 8) for the pen/drag eraser, a dotted outline
@@ -129,6 +138,8 @@ class OnyxInputHandler(
         }
 
         override fun onEndRawErasing(p0: Boolean, p1: TouchPoint?) {
+            // Fires after the point list, which is where the held view is read.
+            page.endInkCapture()
             updatePenAndStroke()
         }
 
@@ -286,13 +297,17 @@ class OnyxInputHandler(
         // both sides of the comparison on one clock, whichever clock the path uses.
         plist.points.lastOrNull()?.let { lastStrokeEndTime = it.timestamp }
         val startTime = System.currentTimeMillis()
+        // Read here, on the callback, not inside the handlers below: they run on a coroutine or a
+        // thread that reaches the page later still, and every one of them has to agree with the
+        // others about where this stroke landed.
+        val viewport = page.inkViewport()
 
         when (toolbarState.mode) {
             Mode.Erase -> onRawErasingList(plist)
             Mode.Select -> {
                 thread {
                     val points =
-                        copyInputToSimplePointF(plist.points, page.scroll, page.zoomLevel.value)
+                        copyInputToSimplePointF(plist.points, viewport)
                     handleSelect(
                         scope = coroutineScope,
                         page = drawCanvas.page,
@@ -320,8 +335,7 @@ class OnyxInputHandler(
 
                         val (startPoint, endPoint) = getModifiedStrokeEndpoints(
                             plist.points,
-                            page.scroll,
-                            page.zoomLevel.value
+                            viewport,
                         )
                         val linePoints =
                             ShapeGeometry.points(toolbarState.shape, startPoint, endPoint)
@@ -362,7 +376,7 @@ class OnyxInputHandler(
                         log.d("lock obtained in ${lock - startTime} ms")
 
                         val scaledPoints =
-                            copyInput(plist.points, page.scroll, page.zoomLevel.value)
+                            copyInput(plist.points, viewport)
                         val firstPointTime = plist.points.first().timestamp
                         val erasedByScribbleDirtyRect = handleScribbleToErase(
                             page,
@@ -440,7 +454,7 @@ class OnyxInputHandler(
         isErasing = false
 
         if (plist == null) return
-        val points = copyInputToSimplePointF(plist.points, page.scroll, page.zoomLevel.value)
+        val points = copyInputToSimplePointF(plist.points, page.inkViewport())
 
         val padding = 10
         val boundingBox = (calculateBoundingBox(plist.points) { Pair(it.x, it.y) }).toRect()

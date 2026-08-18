@@ -25,6 +25,13 @@ import kotlin.math.sin
  */
 class MotionEventStrokeSource(
     private val onStrokeFinished: (TouchPointList) -> Unit,
+    /**
+     * Pen down and pen up, so the editor can hold the view this stroke is being drawn on for as
+     * long as it lasts — the firmware path brackets its strokes the same way. See
+     * [com.ethran.notable.editor.InkViewport].
+     */
+    private val onStrokeStarted: () -> Unit = {},
+    private val onStrokeEnded: () -> Unit = {},
 ) {
     private var pending: TouchPointList? = null
 
@@ -60,6 +67,7 @@ class MotionEventStrokeSource(
                 ) return false
                 penPointerId = event.getPointerId(index)
                 pending = TouchPointList().apply { add(event.toTouchPoint(index)) }
+                onStrokeStarted()
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -84,6 +92,8 @@ class MotionEventStrokeSource(
                 // A tap is not a stroke: two points are the minimum the handlers can take a
                 // bounding box from.
                 if (stroke.size() >= 2) onStrokeFinished(stroke)
+                // After the handler, which is where the held view is read.
+                onStrokeEnded()
             }
 
             MotionEvent.ACTION_CANCEL -> cancel()
@@ -95,8 +105,10 @@ class MotionEventStrokeSource(
 
     /** Drops a stroke in progress — the surface went away, or drawing was switched off under it. */
     fun cancel() {
+        val wasDrawing = pending != null
         pending = null
         penPointerId = MotionEvent.INVALID_POINTER_ID
+        if (wasDrawing) onStrokeEnded()
     }
 }
 

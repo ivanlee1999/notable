@@ -1,6 +1,7 @@
 package com.ethran.notable.editor
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
 import com.ethran.notable.gestures.MAX_ZOOM
 import com.ethran.notable.gestures.MIN_ZOOM
 import kotlin.math.ceil
@@ -113,6 +114,45 @@ object PageViewportBounds {
             0f, maxVerticalScroll(pageHeight, viewHeight, zoom, overshootIntoNextPage)
         )
     )
+
+    /**
+     * One scroll of the view: how far the picture moves, how far the scroll moves with it, and
+     * what is left over.
+     *
+     * The panel can only be shifted by whole pixels — the shift is a bitmap blit — so the scroll
+     * has to move by whole pixels too. It used not to: the scroll was advanced by the full
+     * requested delta and the blit was then skipped when that delta came to less than a pixel, so
+     * the model crept away from the picture on screen and stayed there. Every pen stroke after
+     * that is filed through the model, which is to say somewhere the writer was not looking.
+     *
+     * [remainderPx] is the sub-pixel tail, to be added to the next request rather than dropped:
+     * that is what keeps a slow drag moving at all, since each of its samples on its own may be
+     * worth less than a pixel. It comes back as zero once the bound refuses the travel, so it
+     * cannot pile up against the edge of the page.
+     *
+     * [boundedDeltaInPage] is the page-unit travel that [boundScroll] has already allowed.
+     * Movement truncates toward zero, never away from it, so the scroll cannot be rounded past
+     * the bound that was just applied to it.
+     */
+    data class ScrollStep(
+        val movementPx: IntOffset,
+        val scrollDelta: Offset,
+        val remainderPx: Offset,
+    ) {
+        val isStandingStill: Boolean get() = movementPx == IntOffset.Zero
+    }
+
+    fun scrollStep(boundedDeltaInPage: Offset, zoom: Float): ScrollStep {
+        val scale = zoom.coerceAtLeast(SMALLEST_USABLE_ZOOM)
+        val wantedPx = Offset(boundedDeltaInPage.x * scale, boundedDeltaInPage.y * scale)
+        val movement = IntOffset(wantedPx.x.toInt(), wantedPx.y.toInt())
+        return ScrollStep(
+            movementPx = movement,
+            // Exactly what the picture moves, converted back — not what was asked for.
+            scrollDelta = Offset(movement.x / scale, movement.y / scale),
+            remainderPx = Offset(wantedPx.x - movement.x, wantedPx.y - movement.y),
+        )
+    }
 
     /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */
     const val CONTENT_SLACK = 50

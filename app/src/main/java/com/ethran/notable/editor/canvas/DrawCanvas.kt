@@ -115,7 +115,11 @@ class DrawCanvas(
 
     /** Only ever used when the firmware raw channel is absent; see [collectStrokeWithoutFirmware]. */
     private val fallbackStrokeSource =
-        MotionEventStrokeSource(onStrokeFinished = inputHandler::onStrokeCollected)
+        MotionEventStrokeSource(
+            onStrokeFinished = inputHandler::onStrokeCollected,
+            onStrokeStarted = page::beginInkCapture,
+            onStrokeEnded = page::endInkCapture,
+        )
 
 
     private val observers = CanvasObserverRegistry(
