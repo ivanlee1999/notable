@@ -175,6 +175,12 @@ class CouchSyncController @Inject constructor(
         val waitingImages: Int = 0,
         /** Of those, the ones whose bytes did not match the id that named them. */
         val unverifiedImages: Int = 0,
+        /**
+         * What the last flush or pull said the database is (§1.2), or null before anything has.
+         * Reported even while identity is not enforced — this is what makes the staged rollout
+         * observable before it is switched on, and what [identityWarning] is read from.
+         */
+        val databaseIdentity: CouchSyncEngine.DatabaseIdentity? = null,
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
 
@@ -220,6 +226,16 @@ class CouchSyncController @Inject constructor(
                     "the wrong one can win until the clocks agree."
             }
 
+        /**
+         * The database-identity warning, or null. Same construction as [clockSkewWarning]:
+         * non-blocking by design — identity is observed, not enforced, so sync carries on and this
+         * rides alongside whatever it did. [CouchSyncEngine.DatabaseIdentity.Unknown] is
+         * deliberately not surfaced here: a database that predates the metadata is the normal
+         * state of the world for older servers, and a standing warning about it would train the
+         * user to ignore the one that matters.
+         */
+        val identityWarning: String? get() = describeDatabaseIdentity(databaseIdentity)
+
         /** One-line status for the settings footer. */
         val detail: String?
             get() {
@@ -236,7 +252,7 @@ class CouchSyncController @Inject constructor(
                 // Appended rather than substituted: sync is working, and the caption still has to
                 // say so. The warning is extra information about *how well*, not a replacement for
                 // what happened.
-                return listOfNotNull(line, assetWarning, clockSkewWarning)
+                return listOfNotNull(line, assetWarning, clockSkewWarning, identityWarning)
                     .joinToString(" ").ifEmpty { null }
             }
     }
@@ -484,6 +500,7 @@ class CouchSyncController @Inject constructor(
         }
         logFlush(report)
         noteClockSkew(report.clockSkewSeconds)
+        noteDatabaseIdentity(report.databaseIdentity)
         synchronized(jobs) {
             when {
                 // Reset on a push that actually succeeded, and on nothing else. A successful *pull*
@@ -755,6 +772,7 @@ class CouchSyncController @Inject constructor(
     private fun apply(report: CouchSyncEngine.PullReport) {
         logPull(report)
         noteClockSkew(report.clockSkewSeconds)
+        noteDatabaseIdentity(report.databaseIdentity)
         for ((assetId, reason) in report.assetFailures) {
             SyncLogger.w("CouchSync", "asset $assetId unavailable: $reason")
         }
@@ -833,6 +851,40 @@ class CouchSyncController @Inject constructor(
     private var lastLoggedClockSkew: String? = null
 
     /**
+     * Records what the database said about itself (§1.2). Every flush and pull report carries the
+     * observation "which is what makes the staged rollout observable" — but until now nothing
+     * consumed it: the controller read failures, held deletions and clock skew, and the identity
+     * field fell on the floor. A wiped-and-recreated database was detectable and detected, and
+     * nobody was told.
+     *
+     * Same shape as [noteClockSkew], for the same reason: the feed loop reports every minute
+     * forever, so each non-Matched observation is written once per change rather than once per
+     * pass, and never as a [Status] — sync carried on, and the caption still has to say so.
+     */
+    private fun noteDatabaseIdentity(identity: CouchSyncEngine.DatabaseIdentity?) {
+        // A report with nothing to say (the check could not complete — offline, usually) is not an
+        // observation; keep the last real one rather than flapping.
+        if (identity == null) return
+        _state.update { it.copy(databaseIdentity = identity) }
+        val line = when (identity) {
+            is CouchSyncEngine.DatabaseIdentity.Matched -> null
+            CouchSyncEngine.DatabaseIdentity.Unknown ->
+                "The sync database carries no identity record yet (§1.2); treating it as " +
+                    "not-yet-known."
+            else -> describeDatabaseIdentity(identity)
+        }
+        if (line != null && line != lastLoggedIdentity) SyncLogger.w(TAG, line)
+        if (line == null && lastLoggedIdentity != null) {
+            SyncLogger.i(TAG, "The sync database's identity matches this device's again.")
+        }
+        lastLoggedIdentity = line
+    }
+
+    /** The last identity sentence written to the log, so an unchanged one is not written again. */
+    @Volatile
+    private var lastLoggedIdentity: String? = null
+
+    /**
      * Runs a fire-and-forget pump body, turning any failure into reported state.
      *
      * These coroutines are launched on the application scope, whose `SupervisorJob` isolates
@@ -859,6 +911,9 @@ class CouchSyncController @Inject constructor(
             "The sync server has no such database. Check the database name in the sync settings."
         is CouchError.MalformedResponse ->
             "The sync server answered with something this app could not read."
+        is CouchError.DatabaseIdentity ->
+            describeDatabaseIdentity(error.identity)
+                ?: "Sync stopped over a database identity check. See the sync log."
         is CouchError.Blocked ->
             "Android refused this address: sync needs an https:// server. A plain http:// one " +
                 "would send your password in the clear, so it is not allowed."
@@ -878,4 +933,32 @@ class CouchSyncController @Inject constructor(
     private companion object {
         const val TAG = "CouchSync"
     }
+}
+
+/**
+ * One sentence for a database-identity observation worth the user's attention, or null for the two
+ * usable states ([CouchSyncEngine.DatabaseIdentity.Matched] and
+ * [CouchSyncEngine.DatabaseIdentity.Unknown]). Shared by the settings footer, where it rides as a
+ * non-blocking warning beside whatever sync did, and by the failure wording for the day identity
+ * enforcement turns the observation into a refusal — the user should meet the same sentence in
+ * both places.
+ */
+internal fun describeDatabaseIdentity(
+    identity: CouchSyncEngine.DatabaseIdentity?,
+): String? = when (identity) {
+    null,
+    is CouchSyncEngine.DatabaseIdentity.Matched,
+    CouchSyncEngine.DatabaseIdentity.Unknown,
+    -> null
+
+    is CouchSyncEngine.DatabaseIdentity.GenerationChanged ->
+        "The database at the sync address is not the one this device has been syncing with — it " +
+            "looks wiped or replaced. Check Settings → Sync before trusting what is on the server."
+
+    is CouchSyncEngine.DatabaseIdentity.Locked ->
+        "The sync database is locked" +
+            (identity.reason?.let { ": $it" } ?: " while another device rebuilds it") + "."
+
+    is CouchSyncEngine.DatabaseIdentity.ClientTooOld ->
+        "The sync server requires a newer version of this app (protocol ${identity.minimum})."
 }

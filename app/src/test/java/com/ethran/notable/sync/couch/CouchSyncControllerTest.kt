@@ -263,6 +263,73 @@ class CouchSyncControllerTest {
         )
     }
 
+    /**
+     * FlushReport and PullReport carry the §1.2 identity observation "which is what makes the
+     * staged rollout observable" — and nothing consumed it: a wiped-and-recreated database was
+     * detected and nobody was told. The three states a user can act on ride the footer as a
+     * non-blocking warning, the same way clock skew does.
+     */
+    @Test
+    fun `a generation change reaches the footer as a warning, not a failure`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            pushed = listOf("page:a"),
+            databaseIdentity =
+                CouchSyncEngine.DatabaseIdentity.GenerationChanged("gen-old", "gen-new"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val state = controller.state.value
+        assertTrue(
+            "identity is observed, not enforced: the sync itself succeeded",
+            state.status is CouchSyncController.Status.Idle,
+        )
+        val warning = state.identityWarning
+        assertTrue("expected a warning, got null", warning != null)
+        assertTrue(
+            "the footer line has to carry it: ${state.detail}",
+            state.detail.orEmpty().contains(warning!!),
+        )
+    }
+
+    /** Unknown is the normal state of an older server; warning about it would train blindness. */
+    @Test
+    fun `an unknown identity is recorded but not surfaced`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            pushed = listOf("page:a"),
+            databaseIdentity = CouchSyncEngine.DatabaseIdentity.Unknown,
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val state = controller.state.value
+        assertEquals(CouchSyncEngine.DatabaseIdentity.Unknown, state.databaseIdentity)
+        assertEquals("no warning line for the normal case", null, state.identityWarning)
+    }
+
+    /** The pull path reports the same observation; it must land the same way. */
+    @Test
+    fun `a locked database observed on pull reaches the footer`() {
+        val backend = BackendSpy()
+        backend.pullReport = CouchSyncEngine.PullReport(
+            databaseIdentity = CouchSyncEngine.DatabaseIdentity.Locked("rebuilding from the iPad"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.syncNow() }
+
+        val warning = controller.state.value.identityWarning
+        assertTrue("expected the lock to surface, got null", warning != null)
+        assertTrue(
+            "the reason should be shown: $warning",
+            warning!!.contains("rebuilding from the iPad"),
+        )
+    }
+
     /** A report without typed causes (an older engine, a fake) still surfaces its raw detail. */
     @Test
     fun `a failure without a typed cause falls back to the raw detail`() {
