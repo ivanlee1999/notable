@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.lang.ref.SoftReference
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -634,7 +635,9 @@ class PageDataManager @Inject constructor(
             val nextPageId =
                 appRepository.getNextPageIdFromBookAndPage(pageId = currentPage, notebookId = bookId)
             log.d("Caching next page $nextPageId")
+            recordNextOf(currentPage, nextPageId)
             nextPageId?.let {
+                recordNativeBackground(it)
                 getOrStartLoadingJob(it, null, isPrefetch = true)
                 ensureNeighborBackground(it)
             }
@@ -645,6 +648,7 @@ class PageDataManager @Inject constructor(
                     notebookId = bookId
                 )
             log.d("Caching prev page $prevPageId")
+            recordPreviousOf(currentPage, prevPageId)
             prevPageId?.let {
                 getOrStartLoadingJob(it, null, isPrefetch = true)
                 ensureNeighborBackground(it)
@@ -658,6 +662,63 @@ class PageDataManager @Inject constructor(
             )
         }
     }
+
+    /**
+     * The book order around each page, as last resolved by [cacheNeighbors] — the only place the
+     * order is read from the repository. Kept so the renderer and the gesture path can ask "what
+     * comes after this page" without a database round-trip: the seam between two pages is drawn
+     * on the scroll path, which can afford neither a suspend point nor a query.
+     *
+     * Recorded symmetrically — learning `next` of A also records `previous` of that page — so the
+     * page just scrolled *to* already knows the page it was scrolled *from* before its own
+     * prefetch has run. Deliberately never cleared: a stale entry can only briefly draw the wrong
+     * seam or route a stroke to a page that then moved, and the very next load of any involved
+     * page overwrites it. Page *turns* never navigate by these ids — they resolve through the
+     * repository as they always have.
+     */
+    private val neighborNextIds = ConcurrentHashMap<String, String>()
+    private val neighborPreviousIds = ConcurrentHashMap<String, String>()
+
+    /**
+     * The native background template ("blank", "lined", …) of pages seen as neighbors, so the
+     * seam can draw the next page's ruling without a database read on the render path. Only
+     * native backgrounds are recorded: a PDF or image page draws as plain paper under the seam
+     * until it is entered.
+     */
+    private val neighborNativeBackgrounds = ConcurrentHashMap<String, String>()
+
+    fun nativeBackgroundOf(pageId: String): String? = neighborNativeBackgrounds[pageId]
+
+    private suspend fun recordNativeBackground(pageId: String) {
+        val row = appRepository.pageRepository.getById(pageId) ?: return
+        if (row.getBackgroundType() == BackgroundType.Native) {
+            neighborNativeBackgrounds[pageId] = row.background
+        } else {
+            neighborNativeBackgrounds.remove(pageId)
+        }
+    }
+
+    private fun recordNextOf(pageId: String, next: String?) {
+        if (next != null) {
+            neighborNextIds[pageId] = next
+            neighborPreviousIds[next] = pageId
+        } else {
+            // The page learned it is (now) the last one; forget any old successor.
+            neighborNextIds.remove(pageId)
+        }
+    }
+
+    private fun recordPreviousOf(pageId: String, previous: String?) {
+        if (previous != null) {
+            neighborPreviousIds[pageId] = previous
+            neighborNextIds[previous] = pageId
+        } else {
+            neighborPreviousIds.remove(pageId)
+        }
+    }
+
+    fun nextPageIdOf(pageId: String): String? = neighborNextIds[pageId]
+    fun previousPageIdOf(pageId: String): String? = neighborPreviousIds[pageId]
 
     /**
      * Warms a neighbor's background only when its page is already resident: in that case its own
@@ -1099,6 +1160,34 @@ class PageDataManager @Inject constructor(
         val entry = getOrCreateEntryLocked(pageId)
         entry.strokes = strokes.toMutableList()
         recomputeEntrySizeLocked(entry)
+    }
+
+    /**
+     * Files strokes onto a page that is *not* the current one — the cross-page half of continuous
+     * scrolling, for ink that starts below the seam while the next page is visible under it.
+     *
+     * The cache is only appended to when that page's strokes are already resident (the neighbor
+     * prefetch makes that the ordinary case); a page whose load has not run yet will pick the
+     * rows up from the database like any of its other strokes. The write path is the same one
+     * every stroke takes — [saveStrokesToDb] reads each stroke's own pageId.
+     */
+    fun addStrokesToPage(pageId: String, strokes: List<Stroke>) {
+        if (strokes.isEmpty()) return
+        synchronized(lock) {
+            val entry = entries[pageId]
+            // Copy-on-write like appendStrokesLocked: a lock-free reader on the drawing thread
+            // iterates the snapshot it took, never a list being mutated under it. Only appended
+            // when the strokes are resident — seeding a half-loaded page here would make its
+            // later load "join" these rows in twice.
+            val existing = entry?.strokes
+            if (entry != null && existing != null) {
+                entry.strokes = ArrayList<Stroke>(existing.size + strokes.size).apply {
+                    addAll(existing); addAll(strokes)
+                }
+                recomputeEntrySizeLocked(entry)
+            }
+        }
+        saveStrokesToDb(strokes)
     }
 
     fun getImages(pageId: String): List<Image> = synchronized(lock) {

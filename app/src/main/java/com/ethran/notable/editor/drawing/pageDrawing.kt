@@ -197,9 +197,103 @@ fun drawOnCanvasFromPage(
             pageDrawingLog.e("PageView.kt: ${error.userMessage}", e)
             persistentError = persistentError?.let { it + error } ?: error
         }
+        try {
+            drawBeyondPageEnd(page, this)
+        } catch (e: Exception) {
+            pageDrawingLog.e("Failed drawing beyond the page's end", e)
+        }
     }
     pageDrawingLog.d(
         "drawOnCanvasFromPage, finished drawing to canvas: ${canvas.hashCode()}"
     )
     return persistentError?.let { AppResult.Error(it) } ?: AppResult.Success(Unit)
+}
+
+/** The ground of everything that is not page: visibly not paper, visibly not writable. */
+private val offPagePaint = Paint().apply {
+    color = Color.rgb(0xD8, 0xD8, 0xD8)
+    style = Paint.Style.FILL
+}
+
+/** The seam between two pages under continuous scrolling. */
+private val pageSeamPaint = Paint().apply {
+    color = Color.DKGRAY
+    strokeWidth = 3f
+    style = Paint.Style.STROKE
+}
+
+/**
+ * Draws whatever lies past the page's own end, in the page's viewport coordinates (the canvas is
+ * already scaled by the zoom, and everything here is offset by the scroll like the strokes above).
+ *
+ * Two things can be there:
+ *
+ * - **The next page**, when continuous scrolling is on and the view has run past this page's
+ *   bottom: its white ground, its ink and its images, under a seam line — so scrolling reads as
+ *   one long surface rather than a jump. Only its resident cache is consulted; a neighbor whose
+ *   prefetch has not landed yet draws as blank paper and fills in on the next redraw.
+ *
+ * - **Dead space**, on a page with a declared sheet: gray, not white. A declared page ends at its
+ *   paper, and the old white fill made that region look like more page — ink aimed at it went
+ *   nowhere, which read as "the margin is broken" rather than "the page is over". Gray is the
+ *   difference between the two. An undeclared (legacy) page has no edge to mark, so it keeps its
+ *   endless white canvas.
+ *
+ * Never on the export path: exports render through PageContentRenderer, which does not come here.
+ */
+fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
+    val zoom = page.zoomLevel.value
+    if (zoom <= 0f) return
+    val scroll = page.scroll
+    val viewWidthUnits = canvas.width / zoom
+    val viewHeightUnits = canvas.height / zoom
+    val pageEndY = page.height - scroll.y
+    val pageEndX = page.pannableWidth() - scroll.x
+
+    // Right of the page's pannable width. Rarely visible at all — the zoom floor keeps a bounded
+    // sheet filling the view's width — but a render wider than the page marks the edge honestly.
+    if (page.hasHardBounds && pageEndX < viewWidthUnits) {
+        canvas.drawRect(pageEndX, 0f, viewWidthUnits, viewHeightUnits, offPagePaint)
+    }
+
+    if (pageEndY >= viewHeightUnits) return
+
+    if (page.crossPageScrollActive) {
+        val nextId = page.nextPageId ?: return
+        val zoom2 = page.zoomLevel.value
+        canvas.save()
+        try {
+            canvas.clipRect(0f, pageEndY, viewWidthUnits, viewHeightUnits)
+            // From here down, canvas coordinates *are* the next page's own coordinates at
+            // horizontal scroll [scroll.x] — its y=0 sits at the seam.
+            canvas.translate(0f, pageEndY)
+            canvas.drawColor(Color.WHITE)
+            when (page.pageDataManager.nativeBackgroundOf(nextId)) {
+                "dotted" -> drawDottedBg(canvas, Offset(scroll.x, 0f), zoom2)
+                "lined" -> drawLinedBg(canvas, Offset(scroll.x, 0f), zoom2)
+                "squared" -> drawSquaredBg(canvas, Offset(scroll.x, 0f), zoom2)
+                "hexed" -> drawHexedBg(canvas, Offset(scroll.x, 0f), zoom2)
+                // "blank", an unknown template, or a non-native background (PDF, image — whose
+                // bitmaps are per-current-page state): plain paper until the page is entered.
+                else -> {}
+            }
+            val offset = Offset(-scroll.x, 0f)
+            val visibleDepth = viewHeightUnits - pageEndY
+            page.pageDataManager.getStrokes(nextId).forEach { stroke ->
+                if (stroke.top <= visibleDepth) {
+                    StrokeRenderers.current.drawStroke(canvas, stroke, offset)
+                }
+            }
+            page.pageDataManager.getImages(nextId).forEach { image ->
+                if (image.y <= visibleDepth) {
+                    drawImage(page.context, canvas, image, offset)
+                }
+            }
+        } finally {
+            canvas.restore()
+        }
+        canvas.drawLine(0f, pageEndY, viewWidthUnits, pageEndY, pageSeamPaint)
+    } else if (page.hasHardBounds) {
+        canvas.drawRect(0f, pageEndY, viewWidthUnits, viewHeightUnits, offPagePaint)
+    }
 }

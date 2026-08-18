@@ -92,11 +92,28 @@ class EditorControlTower(
     override fun requestScroll(delta: Offset) {
         if (delta == Offset.Zero) return
         if (!page.isTransformationAllowed) return
+        // Continuous scrolling: dragging up past the top of the page slides the previous page in
+        // above it rather than turning by a whole screen. The switch itself lands the previous
+        // page at *exactly* the state that draws the same pixels — its scroll past its own end,
+        // with this page under the seam — so nothing on screen moves except by the finger.
+        if (page.crossPageScrollActive && delta.x == 0f && delta.y > 0 &&
+            page.scroll.y <= 0f && page.previousPageId != null
+        ) {
+            if (crossTurnAllowed()) {
+                crossTurnAnnouncedFrom = page.currentPageId
+                enterPreviousPageAtItsEnd()
+            }
+            return
+        }
         // Dragging on when the page has no more to give is how you turn it, when that is the
         // direction the reader chose. Asked before the scroll is queued: once it is in the
         // accumulator it has been coalesced with other movement and the edge is no longer legible.
+        // Under continuous scrolling the downward edge is past the *next page's seam* and the
+        // commit below handles it — this jump remains only for the last page, where dragging past
+        // the end still creates a fresh page to keep writing on.
         if (GlobalAppSettings.current.pageTurn.isVertical &&
-            delta.x == 0f && page.isAtVerticalEdge(-delta.y)
+            delta.x == 0f && page.isAtVerticalEdge(-delta.y) &&
+            !(page.crossPageScrollActive && delta.y < 0)
         ) {
             if (!edgeTurnTaken) {
                 edgeTurnTaken = true
@@ -108,6 +125,65 @@ class EditorControlTower(
             return
         }
         pendingScroll.update { it + delta }
+    }
+
+    /**
+     * Whether a page switch has been announced but the [page] has not landed on it yet. Between
+     * the two, the scroll consumer must not announce another switch: the edge condition still
+     * reads true against the page being left, and a second announcement would skip a page.
+     */
+    private fun pageSwitchInFlight(): Boolean =
+        viewModel.toolbarState.value.pageId?.let { it != page.currentPageId } ?: false
+
+    /**
+     * The page a continuous-scrolling turn was last announced from, or null. Its own latch rather
+     * than [edgeTurnTaken] because a fling keeps scrolling after [onGestureEnd]: a turn committed
+     * mid-fling under the gesture latch stayed taken until the *next* gesture ended, deadening one
+     * whole drag. This one releases itself the moment scrolling is observed on any other page, and
+     * [onGestureEnd] clears it too as a backstop.
+     */
+    @Volatile
+    private var crossTurnAnnouncedFrom: String? = null
+
+    private fun crossTurnAllowed(): Boolean {
+        if (crossTurnAnnouncedFrom != null && crossTurnAnnouncedFrom != page.currentPageId) {
+            // The announced switch has landed; the latch has done its job.
+            crossTurnAnnouncedFrom = null
+        }
+        return crossTurnAnnouncedFrom == null && !pageSwitchInFlight()
+    }
+
+    /**
+     * The continuous-scrolling page turn, committed only when the seam has left the screen — the
+     * moment the next page's pixels and the current page's pixels are the same picture, so the
+     * switch costs no visible movement. The next page inherits this zoom and starts at its top,
+     * which is where the seam handed over.
+     */
+    private fun maybeCommitCrossPageTurn() {
+        if (!page.crossPageScrollActive || !crossTurnAllowed()) return
+        val nextId = page.nextPageId ?: return
+        if (page.scroll.y < page.height.toFloat()) return
+        crossTurnAnnouncedFrom = page.currentPageId
+        page.pageDataManager.setPageZoom(nextId, page.zoomLevel.value)
+        page.pageDataManager.setPageScroll(
+            nextId, Offset(page.scroll.x, page.scroll.y - page.height)
+        )
+        goToNextPage()
+    }
+
+    /**
+     * Enters the previous page positioned past its own end, so this page shows under the seam and
+     * the screen does not change — the upward mirror of [maybeCommitCrossPageTurn]. The scroll is
+     * preset far past any real extent and clamped on entry by the same bound every scroll takes,
+     * which lands it exactly at the previous page's end.
+     */
+    private fun enterPreviousPageAtItsEnd() {
+        val prevId = page.previousPageId ?: return
+        page.pageDataManager.setPageZoom(prevId, page.zoomLevel.value)
+        // Far past any real page extent, small enough to stay safe in float arithmetic until
+        // the entry clamp lands it on the page's true end.
+        page.pageDataManager.setPageScroll(prevId, Offset(page.scroll.x, 1e7f))
+        goToPreviousPage()
     }
 
     /**
@@ -152,6 +228,10 @@ class EditorControlTower(
                         onOpenPageCut(delta / page.zoomLevel.value)
                     } else {
                         onPageScroll(-delta)
+                        // Only after the scroll has actually landed: the commit reads the bounded
+                        // scroll, and firing it from the input side would read a value the bound
+                        // had not seen yet.
+                        maybeCommitCrossPageTurn()
                     }
                 }
                 CanvasEventBus.refreshUiImmediately.emit(Unit)
@@ -199,6 +279,7 @@ class EditorControlTower(
 
     override fun onGestureEnd() {
         edgeTurnTaken = false
+        crossTurnAnnouncedFrom = null
     }
 
     override fun undo() {
