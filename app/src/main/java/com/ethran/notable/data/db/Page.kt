@@ -192,13 +192,16 @@ class PageRepository @Inject constructor(
      * `updatedAt` moved with the page, so a page pushed alone lands on the peer as a document no
      * manifest names.
      *
-     * A page outside a notebook is still queued on its own, which is what `markPageDirty` does for
-     * a quick page today.
+     * A page outside a notebook — a quick page — queues **nothing**, matching
+     * `RoomCouchStore.allDocumentIds`, which deliberately never offers quick pages for sync: the
+     * protocol has no standalone page lifecycle (§6.4 — pages live and die with a notebook's
+     * `pageIds`, and bopa drops orphan pages on receipt). Queueing one pushed it into a void on
+     * every edit: never enumerable on the peer, never deletable remotely. It joins sync the
+     * moment it is adopted into a notebook, which queues page and notebook together.
      */
     private suspend fun queuePage(pageId: String, notebookId: String?) {
-        val ids = mutableListOf(CouchDocId.page(pageId))
-        if (notebookId != null) ids += CouchDocId.notebook(notebookId)
-        outbox.queue(ids)
+        if (notebookId == null) return
+        outbox.queue(listOf(CouchDocId.page(pageId), CouchDocId.notebook(notebookId)))
     }
 
     suspend fun create(page: Page): Long = database.withTransaction {

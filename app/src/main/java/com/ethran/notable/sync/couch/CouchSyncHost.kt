@@ -110,13 +110,17 @@ class CouchSyncHost @Inject constructor(
      *
      * The notebook goes too because its `pageIds` manifest and `updatedAt` both moved: a page
      * pushed without it lands on the peer as a document no notebook points at.
+     *
+     * A page with no notebook queues nothing — the same rule as `PageRepository.queuePage`,
+     * matching [RoomCouchStore.allDocumentIds]: quick pages are deliberately not offered for
+     * sync, because the protocol has no standalone page lifecycle (§6.4) and pushing one lands a
+     * document no manifest will ever name. A page whose row is already gone also queues nothing:
+     * its removal travels inside the notebook's manifest, not as a page push.
      */
     override suspend fun markPageDirty(pageId: String) {
         val engine = stack()?.engine ?: return
-        val ids = mutableListOf(CouchDocId.page(pageId))
-        appRepository.pageRepository.getById(pageId)?.notebookId
-            ?.let { ids += CouchDocId.notebook(it) }
-        engine.markDirty(ids)
+        val notebookId = appRepository.pageRepository.getById(pageId)?.notebookId ?: return
+        engine.markDirty(listOf(CouchDocId.page(pageId), CouchDocId.notebook(notebookId)))
     }
 
     override suspend fun markDocumentDirty(documentId: String) {

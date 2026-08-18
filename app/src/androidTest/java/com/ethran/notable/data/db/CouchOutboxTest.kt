@@ -268,6 +268,62 @@ class CouchOutboxTest {
 
     // endregion
 
+    // region Quick pages
+
+    /**
+     * Quick pages are deliberately not offered for sync (`RoomCouchStore.allDocumentIds`): the
+     * protocol has no standalone page lifecycle — pages live and die with a notebook's `pageIds`,
+     * and the peer drops orphan pages on receipt. Queueing one anyway pushed it into a void on
+     * every edit: never enumerable on the peer, never deletable remotely. The exclusion has to be
+     * symmetric: what enumeration never offers, editing must not queue.
+     */
+    @Test
+    fun creating_a_quick_page_queues_nothing() = runBlocking {
+        repository.pageRepository.create(Page(notebookId = null))
+
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    @Test
+    fun editing_a_quick_page_queues_nothing() = runBlocking {
+        val page = Page(notebookId = null)
+        repository.pageRepository.create(page)
+        clearQueue()
+
+        repository.pageRepository.touchUpdatedAt(page.id)
+        repository.pageRepository.rename(page.id, "Groceries")
+        repository.pageRepository.update(
+            repository.pageRepository.getById(page.id)!!.copy(background = "grid")
+        )
+
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    /**
+     * The moment a quick page is adopted into a notebook it joins sync whole: the page document
+     * and the manifest that names it, together. This is what makes the exclusion above safe —
+     * nothing is lost, it just travels once it has somewhere to live.
+     */
+    @Test
+    fun adopting_a_quick_page_queues_the_page_and_the_notebook() = runBlocking {
+        val (notebookId, _) = seedNotebook()
+        val page = Page(notebookId = null)
+        repository.pageRepository.create(page)
+        clearQueue()
+
+        repository.pageRepository.update(
+            repository.pageRepository.getById(page.id)!!.copy(notebookId = notebookId)
+        )
+        repository.bookRepository.addPage(notebookId, page.id)
+
+        assertEquals(
+            setOf(CouchDocId.notebook(notebookId), CouchDocId.page(page.id)),
+            queued(),
+        )
+    }
+
+    // endregion
+
     // region What must not be queued
 
     /**
