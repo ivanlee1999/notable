@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.24.0
+
+The dividing of pages that outgrew their sheet now happens on this device too, and ink can no
+longer be lost to a turn of the page.
+
+- **A notebook that never left this device is divided on open.** 0.22.0 made a page one sheet and
+  called the division of old, tall pages here "still to come"; it has come. Opening a notebook —
+  or its page overview — turns every sheet its pages had grown past into a page of its own: the
+  same division the iPad performs, down to the identity of the pages produced, so a notebook
+  divided on each device while they were apart comes back as one set of pages.
+- **The division settles everywhere.** A divided page now tells the other device which ink moved,
+  so a copy from before the division no longer brings the tall page back — the two devices used
+  to trade the tall and divided versions forever. A page that grows again after dividing folds
+  into its existing pages instead of writing over them.
+- **Undo stays on the page it belongs to.** Turning the page by dragging past its edge carried
+  the previous page's undo history along, and undoing then deleted that page's ink where nothing
+  showed it. History now ends where the page does, whichever way the page was turned.
+- **Dragging past the edge turns one page.** A sustained drag used to turn several, and at the
+  end of the book it minted a blank page for every twitch of the finger.
+- Pages holding ink below their first sheet show all of it again on first open instead of
+  stopping at the sheet, the saved reading position survives reopening, and a page prepared
+  next door is measured against its own paper rather than this screen's.
+
 ## 0.23.0
 
 Which way the page turns is now yours to choose, and the page is fitted to match.
