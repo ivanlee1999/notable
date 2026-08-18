@@ -241,7 +241,14 @@ class SelectionState {
         val selectedStrokesCopy = selectedStrokes
         val selectedImagesCopy = selectedImages
         val offset = selectionDisplaceOffset!!
-        val finalZone = selectionRect!!
+        // A COPY of the stored rect: android.graphics.Rect is mutable, and offsetting the stored
+        // instance itself shifted the selection's baseline on every commit. The state model is
+        // "baselines captured at selection time plus one cumulative displacement" — selectedStrokes
+        // and selectionStartOffset keep their at-creation values too — so the stored rect must
+        // stay where the selection was made. Mutating it made duplicateSelection commit its redraw
+        // zone one displacement further than the pasted strokes, which left the copy invisible
+        // until an unrelated full redraw.
+        val finalZone = Rect(selectionRect!!)
         finalZone.offset(offset.x, offset.y)
 
         // collect undo operations for strokes and images together, as a single change
