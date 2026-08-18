@@ -1016,7 +1016,8 @@ class PageDataManager @Inject constructor(
             currentPageNumber = -1
             return
         }
-        pageFromDb?.notebookId?.let { notebookId ->
+        pageFromDb?.let { page ->
+            val notebookId = page.notebookId
             currentPageNumber = appRepository.getPageNumber(notebookId, pageId)
             // Known before anything clamps a scroll or draws a seam, not only after the full
             // load: the entry clamp runs against the continuous-scroll bound, and with the

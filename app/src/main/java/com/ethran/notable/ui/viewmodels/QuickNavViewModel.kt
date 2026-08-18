@@ -101,7 +101,7 @@ class QuickNavViewModel(
             }
 
             // Load Scrubber data if it belongs to a book
-            page?.notebookId?.let { loadBookData(it, currentPageId, favorites) }
+            page?.let { loadBookData(it.notebookId, currentPageId, favorites) }
         }
     }
 

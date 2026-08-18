@@ -73,12 +73,10 @@ class PageContentRenderer @Inject constructor(
     }
 
     suspend fun resolveExportBackgroundType(data: PageWithData): BackgroundType {
-        return data.page.notebookId?.let { bookId ->
-            val pageNumber = withContext(Dispatchers.IO) {
-                appRepository.getPageNumber(bookId, data.page.id)
-            }
-            data.page.getBackgroundType().resolveForExport(pageNumber)
-        } ?: Native
+        val pageNumber = withContext(Dispatchers.IO) {
+            appRepository.getPageNumber(data.page.notebookId, data.page.id)
+        }
+        return data.page.getBackgroundType().resolveForExport(pageNumber)
     }
 
     suspend fun drawPage(

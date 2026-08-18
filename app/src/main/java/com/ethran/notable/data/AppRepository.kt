@@ -191,15 +191,13 @@ class AppRepository @Inject constructor(
                     createdAt = SyncClock.nowDate()
                 )
             })
-            val notebookId = pageWithData.page.notebookId
-            if (notebookId != null) {
-                val book = bookRepository.getById(notebookId) ?: return@withTransaction
-                val pageIndex = book.getPageIndex(pageWithData.page.id)
-                if (pageIndex == -1) return@withTransaction
-                val pageIds = book.pageIds.toMutableList()
-                pageIds.add(pageIndex + 1, duplicatedPage.id)
-                bookRepository.update(book.copy(pageIds = pageIds))
-            }
+            val book = bookRepository.getById(pageWithData.page.notebookId)
+                ?: return@withTransaction
+            val pageIndex = book.getPageIndex(pageWithData.page.id)
+            if (pageIndex == -1) return@withTransaction
+            val pageIds = book.pageIds.toMutableList()
+            pageIds.add(pageIndex + 1, duplicatedPage.id)
+            bookRepository.update(book.copy(pageIds = pageIds))
         }
     }
 
