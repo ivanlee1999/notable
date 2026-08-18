@@ -155,6 +155,7 @@ fun setupSurface(
     touchHelper: TouchHelper?,
     toolbarThickness: Int,
     titleBarHeight: Int,
+    zoom: Float = 1f,
 ) {
     if (touchHelper == null) return
     // Takes at least 50ms on Note 4c,
@@ -183,7 +184,7 @@ fun setupSurface(
     // Enable the firmware's native eraser indicator. MUST be called after setRawDrawingEnabled(true)
     // because that call internally resets it to disabled. Also re-asserted in onBeginRawErasing.
     // See docs/onyx-sdk/onyx-native-eraser-indicator.md.
-    enableNativeEraser(touchHelper)
+    enableNativeEraser(touchHelper, zoom = zoom)
     log.i("Setup editable surface completed")
 
 }
@@ -197,12 +198,10 @@ fun setupSurface(
  */
 private const val ERASER_STROKE_STYLE = 8
 
-/**
- * Native eraser indicator thickness. Bound to [ERASER_SWATH_WIDTH] so the indicator is drawn at
- * exactly the diameter [handleErase] deletes — the stock app likewise draws the indicator at the
- * eraser's full width (kreader: eraserWidth*2).
- */
-private const val ERASER_STROKE_WIDTH = ERASER_SWATH_WIDTH
+// Native eraser indicator thickness comes from [eraserIndicatorWidth]: the swath the eraser
+// deletes ([ERASER_SWATH_WIDTH]) is in page units, the firmware track is drawn in screen pixels,
+// and only the caller's zoom relates the two. The stock app likewise draws the indicator at the
+// eraser's full width (kreader: eraserWidth*2).
 
 /**
  * Style 8's 2nd/3rd SurfaceFlinger shape params (kreader passes {width, 0.5, 0.1}). These are
@@ -245,21 +244,28 @@ private val SELECT_ERASER_PARAMS = floatArrayOf(5f, 9f, 9f, 0f)
  * these params and falls back to the pen's global width, bringing the bug back.
  * See docs/onyx-sdk/onyx-native-eraser-indicator.md.
  */
-fun enableNativeEraser(touchHelper: TouchHelper?, eraser: Eraser = Eraser.PEN) {
+fun enableNativeEraser(touchHelper: TouchHelper?, eraser: Eraser = Eraser.PEN, zoom: Float = 1f) {
     if (touchHelper == null) return
     try {
         when (eraser) {
-            // Lasso/select erase: a dotted outline (firmware DASH style 5).
+            // Lasso/select erase: a dotted outline (firmware DASH style 5). Not zoom-scaled: it
+            // traces the lasso line, it does not promise an erased diameter.
             Eraser.SELECT -> {
                 Device.currentDevice()
                     .setStrokeParameters(SELECT_ERASER_STYLE, SELECT_ERASER_PARAMS)
                 touchHelper.setEraserRawDrawingEnabled(true, SELECT_ERASER_STYLE)
             }
-            // Drag/pen erase: the wide marker track (style 8), width from its own params.
+            // Drag/pen erase: the wide marker track (style 8), width from its own params — scaled
+            // by the caller's zoom the way the Draw path scales a pen's live width, so the track
+            // matches the 30-page-unit swath handleErase actually deletes. Re-asserted on every
+            // erase-gesture begin and after every erase commit, so a zoom change is picked up
+            // before the next track is drawn.
             Eraser.PEN -> {
                 Device.currentDevice().setStrokeParameters(
                     ERASER_STROKE_STYLE,
-                    floatArrayOf(ERASER_STROKE_WIDTH, ERASER_STROKE_PARAM1, ERASER_STROKE_PARAM2)
+                    floatArrayOf(
+                        eraserIndicatorWidth(zoom), ERASER_STROKE_PARAM1, ERASER_STROKE_PARAM2
+                    )
                 )
                 touchHelper.setEraserRawDrawingEnabled(true, ERASER_STROKE_STYLE)
 //                touchHelper.setEraserRawDrawingEnabled(true, TouchHelper.STROKE_STYLE_MARKER)

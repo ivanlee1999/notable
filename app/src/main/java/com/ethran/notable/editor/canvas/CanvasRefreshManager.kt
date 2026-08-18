@@ -96,7 +96,9 @@ class CanvasRefreshManager(
             //    style, so re-assert both (matches the official C(true) path).
             if (viewModel.toolbarState.value.isDrawing) {
                 touchHelper?.setRawDrawingEnabled(true)
-                enableNativeEraser(touchHelper, viewModel.toolbarState.value.eraser)
+                enableNativeEraser(
+                    touchHelper, viewModel.toolbarState.value.eraser, page.zoomLevel.value
+                )
                 drawCanvas.inputHandler.updatePenAndStroke()
                 touchHelper?.setRawInputReaderEnable(true)
             } else {

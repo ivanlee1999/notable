@@ -36,6 +36,11 @@ import javax.inject.Singleton
 @Singleton
 class PageViewportState @Inject constructor() {
     private val heights = mutableStateMapOf<String, Int>()
+
+    // The horizontal twin of [heights]: the pannable width the page's content needs, under the
+    // same grow-stop. Session-scoped for the same reason the height is — the ceiling "never wider
+    // than the page already was" only exists while something remembers what the page already was.
+    private val widths = mutableStateMapOf<String, Int>()
     private val scrolls = mutableStateMapOf<String, Offset>()
 
     // Zoom is the one of the three not read from composition today (the editor mirrors it into a
@@ -81,6 +86,7 @@ class PageViewportState @Inject constructor() {
                         // The lock makes this check-and-remove atomic against a concurrent setter.
                         if (generation[pageId] == scheduledGeneration) {
                             heights.remove(pageId)
+                            widths.remove(pageId)
                             scrolls.remove(pageId)
                             zooms.remove(pageId)
                             generation.remove(pageId)
@@ -110,6 +116,18 @@ class PageViewportState @Inject constructor() {
         synchronized(removalLock) {
             mutateUiState {
                 heights[pageId] = height
+                generation[pageId] = generationSeq.incrementAndGet()
+            }
+        }
+    }
+
+    /** Stored pannable width, or null if this page has none yet. Lock-free; safe in composition. */
+    fun width(pageId: String): Int? = widths[pageId]
+
+    fun setWidth(pageId: String, width: Int) {
+        synchronized(removalLock) {
+            mutateUiState {
+                widths[pageId] = width
                 generation[pageId] = generationSeq.incrementAndGet()
             }
         }

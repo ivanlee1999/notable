@@ -324,6 +324,13 @@ class PageView(
                 // before that state is replaced.
                 loadingJob?.cancelAndJoin()
 
+                // A stroke finished just before the switch is still being processed on Main under
+                // drawingInProgress, and it reads page identity — currentPageId, scroll, zoom — at
+                // processing time (OnyxInputHandler, Mode.Draw/Line). Swapping the page out from
+                // under it filed that stroke onto the NEW page, at the new page's scroll and zoom.
+                // Wait it out the same way updateScroll/updateZoom do before touching page state.
+                waitForDrawingWithSnack()
+
                 pageDataManager.onExit(oldId, windowedBitmap)
                 pageDataManager.setPage(newPageId)
                 zoomLevel.value = initialZoom()
@@ -731,18 +738,28 @@ class PageView(
 
 
     /**
-     * How far right the view may reach, in page units.
+     * How far right the view may reach, in page units: the sheet, or the ink, whichever reaches
+     * further — held by the same grow-stop the vertical extent uses.
      *
-     * On a page that declares a size this is the sheet's own width, full stop — there is no canvas
-     * beyond the paper to pan into, which is what makes the page edge an edge rather than a
-     * suggestion.
+     * This used to be the sheet's width, full stop, for any page that declared a size. But
+     * PageSplit stamps a sheet onto every page it touches without moving or clipping x, so a
+     * formerly-endless page holding ink past the new sheet's right edge became a declared page
+     * whose ink was *unreachable*: the pan clamped at the sheet and the zoom floor forbade zooming
+     * out to it. The vertical axis got its legacy exemption for exactly this (see
+     * [PageDataManager.recomputeHeight]); this is the missing horizontal twin. A declared page
+     * whose content lives within its sheet still clamps at the sheet — the grow-stop means new
+     * writes at the edge cannot ratchet it wider — while one holding wider legacy ink extends far
+     * enough to reach it.
      *
-     * An undeclared page has no such edge, so it keeps the old rule: the sheet or the ink,
-     * whichever reaches further, so ink written past this screen's width stays reachable.
+     * Before the session's first measurement lands, falls back to the raw measured extent, which
+     * is the sheet for any page whose ink is inside it.
+     *
+     * Not private: the page-cut selection spans exactly this width (see `handleSelect`), and the
+     * definition of "how wide the page is" must live in one place.
      */
-    private fun pannableWidth(): Float =
-        if (hasHardBounds) sheet.width.toFloat()
-        else pageDataManager.computeWidth(currentPageId).toFloat()
+    fun pannableWidth(): Float =
+        (pageDataManager.getPageWidth(currentPageId)
+            ?: pageDataManager.computeWidth(currentPageId)).toFloat()
 
     private fun maxHorizontalScroll(zoom: Float = zoomLevel.value): Float =
         PageViewportBounds.maxHorizontalScroll(pannableWidth(), viewWidth, zoom)
@@ -1053,7 +1070,10 @@ class PageView(
             scroll = scroll,
             resourceBitmap = bgImage,
             scale = scale,
-            repeat = false,
+            // The real flag, matching what export passes (PageContentRenderer): a repeating
+            // background tiles on screen the same way it does in the PDF. This was hardcoded
+            // false, so ImageRepeating pages never tiled on screen at all.
+            repeat = backgroundType is BackgroundType.ImageRepeating,
             clipRect = clipRect
         )
     }

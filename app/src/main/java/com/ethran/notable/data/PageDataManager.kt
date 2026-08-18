@@ -1002,19 +1002,40 @@ class PageDataManager @Inject constructor(
     fun recomputeHeight(pageId: String, sheet: PageSize = getSheet(pageId)): Int {
         val sheetHeight = sheet.height
         // Measure under [lock], publish outside it — [PageViewportState.setHeight] commits a Compose
-        // snapshot, which must never run with this hot drawing-path lock held.
-        val measured = synchronized(lock) {
-            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId))
+        // snapshot, which must never run with this hot drawing-path lock held. Both extents are
+        // re-measured together: every trigger for one ("this page's content changed") is a trigger
+        // for the other.
+        val (measuredHeight, measuredWidth) = synchronized(lock) {
+            PageViewportBounds.contentExtent(sheetHeight, bottomEdgesLocked(pageId)) to
+                PageViewportBounds.contentExtent(sheet.width, rightEdgesLocked(pageId))
         }
         // Grow-stop: a page never gets taller than its sheet, or than it already was. The rule —
         // and why the first measurement of a session must come through unclamped — lives with its
         // tests in [PageHeightGrowStop].
-        val newHeight = PageHeightGrowStop.clamp(measured, sheetHeight, getPageHeight(pageId))
+        val newHeight = PageHeightGrowStop.clamp(measuredHeight, sheetHeight, getPageHeight(pageId))
         viewport.setHeight(pageId, newHeight)
+        // The horizontal twin, same rule, same reasons: never wider than the sheet or than the
+        // page already was this session — but a page already holding ink past its sheet's right
+        // edge (written on a wider screen before page sizes) keeps that extent reachable. Without
+        // this, PageSplit stamping a sheet onto a formerly-endless page turned its wide ink from
+        // off-page into unreachable: the hard bound clamped the pan at the sheet and the zoom
+        // floor forbade zooming out to it.
+        val newWidth = PageHeightGrowStop.clamp(measuredWidth, sheet.width, getPageWidth(pageId))
+        viewport.setWidth(pageId, newWidth)
         return newHeight
     }
 
-    /** The scrollable width, by the same rule as [recomputeHeight]. */
+    /**
+     * The session's pannable width for [pageId], or null before its first measurement.
+     * Maintained by [recomputeHeight] alongside the height, under the same grow-stop.
+     */
+    fun getPageWidth(pageId: String): Int? = viewport.width(pageId)
+
+    /**
+     * The raw measured width — sheet or ink, whichever reaches further — with no session clamp.
+     * [PageView.pannableWidth] falls back to this before the first [recomputeHeight] of a session
+     * has stored a clamped width.
+     */
     fun computeWidth(pageId: String): Int = synchronized(lock) {
         PageViewportBounds.contentExtent(getSheet(pageId).width, rightEdgesLocked(pageId))
     }
@@ -1147,6 +1168,25 @@ class PageDataManager @Inject constructor(
     }
 
     /**
+     * Tail of each page's write chain: the most recently submitted write that touches the page.
+     *
+     * This is what makes writes to one page apply in submission order. Each write is still its own
+     * coroutine on [dataScope] (writes to *different* pages stay concurrent), but before it runs it
+     * joins the write submitted before it for each of its pages. Without this, the writes were
+     * independent fire-and-forget coroutines with per-write retry, and erase-right-after-draw could
+     * invert: the insert sat in its retry backoff while the delete ran to completion, and the
+     * insert then landed *after* the delete — resurrecting the stroke's row against its own
+     * tombstone. A failing write now retries at the head of its page's chain and everything queued
+     * behind it on that page waits its turn.
+     *
+     * Guarded by [writeChainLock] (a plain monitor — taken only for map reads/writes, never across
+     * anything blocking). Entries are removed when their job completes and is still the tail, so
+     * the map only ever holds in-flight chains.
+     */
+    private val writeChainTails = HashMap<String, Job>()
+    private val writeChainLock = Any()
+
+    /**
      * Runs a DB content-write on [dataScope], and keeps trying until it lands.
      *
      * A failure used to be logged and dropped. The stroke was already in the in-memory list by the
@@ -1164,59 +1204,88 @@ class PageDataManager @Inject constructor(
      *
      * Constraint violations are not retried: they are a statement about the data, and the tenth
      * attempt will fail exactly like the first.
+     *
+     * Writes for the same page apply in submission order — see [writeChainTails]. The predecessors
+     * are captured and the tails replaced atomically at submission time (under [writeChainLock]),
+     * not when the coroutine happens to be dispatched, so two writes launched back-to-back from the
+     * editor cannot race each other onto the IO pool in the wrong order.
      */
     private fun launchDbWrite(op: String, pageIds: Collection<String>, block: suspend () -> Unit) {
-        dataScope.launch {
-            pendingWrites.incrementAndGet()
-            publishSaveState()
-            var failing = false
-            var backoff = SAVE_RETRY_FLOOR_MS
-            try {
-                while (true) {
-                    try {
-                        block()
-                        break
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: SQLiteConstraintException) {
-                        // Never going to succeed; retrying is a spin, not a recovery. Counted as
-                        // abandoned rather than failing, so the state does not fall back to Saved
-                        // the moment the queue drains — the write did not land, and saying it did
-                        // is the failure mode this whole mechanism exists to remove.
-                        log.e("DB write '$op' rejected on page $currentPage: ${e.message}", e)
-                        abandonedWrites.incrementAndGet()
-                        recordSaveFailure(op, e, retrying = false)
-                        return@launch
-                    } catch (e: SQLException) {
-                        if (!failing) {
-                            failing = true
-                            failingWrites.incrementAndGet()
-                            recordSaveFailure(op, e, retrying = true)
-                        }
-                        log.e(
-                            "DB write '$op' failed on page $currentPage " +
-                                "(notebook ${pageFromDb?.notebookId}), retrying in ${backoff}ms: " +
-                                "${e.message}", e
-                        )
-                        delay(backoff)
-                        backoff = (backoff * 2).coerceAtMost(SAVE_RETRY_CEILING_MS)
-                    }
-                }
-                if (failing) {
-                    failing = false
-                    failingWrites.decrementAndGet()
-                    log.i("DB write '$op' finally landed")
-                }
-                // The write landed, so the pages it touched are now out of step with the server.
-                // Queueing them and starting the debounce here is what makes a stroke leave the
-                // device without anyone pressing anything; the call is fire-and-forget so no
-                // drawing path ever waits on the database, let alone on the network.
-                for (pageId in pageIds.distinct()) couchSync.notePageEdited(pageId)
-            } finally {
-                if (failing) failingWrites.decrementAndGet()
-                pendingWrites.decrementAndGet()
-                publishSaveState()
+        val pages = pageIds.distinct()
+        val job: Job
+        synchronized(writeChainLock) {
+            val predecessors = pages.mapNotNull { writeChainTails[it] }
+            job = dataScope.launch {
+                runDbWrite(op, pages, predecessors, block)
             }
+            for (page in pages) writeChainTails[page] = job
+        }
+        job.invokeOnCompletion {
+            synchronized(writeChainLock) {
+                for (page in pages) if (writeChainTails[page] === job) writeChainTails.remove(page)
+            }
+        }
+    }
+
+    private suspend fun runDbWrite(
+        op: String,
+        pages: List<String>,
+        predecessors: List<Job>,
+        block: suspend () -> Unit,
+    ) {
+        pendingWrites.incrementAndGet()
+        publishSaveState()
+        var failing = false
+        var backoff = SAVE_RETRY_FLOOR_MS
+        try {
+            // Wait for every earlier write that touches one of this write's pages, including
+            // one stuck in its retry backoff: order is the point. join() rather than await —
+            // a predecessor that was abandoned (or cancelled) still unblocks its successors.
+            predecessors.forEach { it.join() }
+            while (true) {
+                try {
+                    block()
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: SQLiteConstraintException) {
+                    // Never going to succeed; retrying is a spin, not a recovery. Counted as
+                    // abandoned rather than failing, so the state does not fall back to Saved
+                    // the moment the queue drains — the write did not land, and saying it did
+                    // is the failure mode this whole mechanism exists to remove.
+                    log.e("DB write '$op' rejected on page $currentPage: ${e.message}", e)
+                    abandonedWrites.incrementAndGet()
+                    recordSaveFailure(op, e, retrying = false)
+                    return
+                } catch (e: SQLException) {
+                    if (!failing) {
+                        failing = true
+                        failingWrites.incrementAndGet()
+                        recordSaveFailure(op, e, retrying = true)
+                    }
+                    log.e(
+                        "DB write '$op' failed on page $currentPage " +
+                            "(notebook ${pageFromDb?.notebookId}), retrying in ${backoff}ms: " +
+                            "${e.message}", e
+                    )
+                    delay(backoff)
+                    backoff = (backoff * 2).coerceAtMost(SAVE_RETRY_CEILING_MS)
+                }
+            }
+            if (failing) {
+                failing = false
+                failingWrites.decrementAndGet()
+                log.i("DB write '$op' finally landed")
+            }
+            // The write landed, so the pages it touched are now out of step with the server.
+            // Queueing them and starting the debounce here is what makes a stroke leave the
+            // device without anyone pressing anything; the call is fire-and-forget so no
+            // drawing path ever waits on the database, let alone on the network.
+            for (pageId in pages) couchSync.notePageEdited(pageId)
+        } finally {
+            if (failing) failingWrites.decrementAndGet()
+            pendingWrites.decrementAndGet()
+            publishSaveState()
         }
     }
 
@@ -1770,8 +1839,9 @@ class PageDataManager @Inject constructor(
 }
 
 /**
- * The grow-stop for a page's scrollable height, on its own so the rule is testable without the
- * cache around it.
+ * The grow-stop for a page's scrollable extent, on its own so the rule is testable without the
+ * cache around it. Named for the height it was written for, but the rule is axis-agnostic and
+ * clamps the pannable width the same way (measured width, sheet width, session width).
  *
  * A page never gets taller than its sheet, or than it already was. Writing near the bottom used to
  * extend the page, which is how a notebook ended up with screenfuls of notes that were not pages —
