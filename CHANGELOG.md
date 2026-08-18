@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.26.0
+
+Everything now happens where you can see it, in the order you did it, at whatever zoom you read at
+— and the two devices can no longer disagree about who won a tie.
+
+- **Selection, page-cut, and the eraser's cursor are exact at every zoom.** Each mixed screen
+  pixels with page units somewhere: the lasso's page-cut fired at the wrong edges, a duplicated
+  selection landed invisibly outside the refreshed area, and the eraser's circle showed a
+  different width than it erased. One coordinate space now, all three.
+- **Backgrounds hold still.** Ruled and grid paper never tiled past the first screenful, and a
+  PDF or image background wrapped around to page one's paper when you scrolled past its end. The
+  screen now draws paper exactly the way export always did.
+- **A page's ink past the sheet's right edge is reachable again**, the sideways twin of 0.24.0's
+  bottom-edge fix — and the scroll indicators now say true things at every zoom.
+- **A stroke finished in the same instant as a page turn stays on its page**, instead of being
+  filed onto the page you turned to.
+- **Quick pages stop syncing into a void.** They were pushed on every edit to a place no other
+  device could ever list them, and could never be deleted remotely; they now stay local until
+  they join a notebook, which is when the other device can actually receive them.
+- **Ties break the same way on both devices.** The rulebook always said conflicts written in the
+  same instant break by comparing device names as raw bytes; each app was using its own
+  language's idea of alphabetical instead, and an accent or an emoji in a device name could make
+  each device pick a *different* winner — permanent, quiet disagreement. Both now read bytes.
+- **Old erasures stop weighing pages down.** The record of every erased stroke was kept forever
+  so the other device could not resurrect the ink; entries older than thirty days are now swept
+  — long past the point both devices have seen them.
+- **Drawing no longer competes with renames at all.** 0.25.0 stopped a stroke from rewriting the
+  whole notebook record; now it does not touch the notebook record at all, so a rename, move, or
+  reordering from the other device can never again lose to ink. "Last edited" ordering reads the
+  pages themselves — so a notebook still rises when you draw in it, including when the ink
+  arrives from the other device, which it never did before.
+
 ## 0.25.0
 
 What you do on one device can no longer be quietly undone by what you draw on the other, and the
