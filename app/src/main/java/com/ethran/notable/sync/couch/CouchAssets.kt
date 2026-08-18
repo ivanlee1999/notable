@@ -115,10 +115,18 @@ object CouchImageFiles {
      * The bytes decide when they are here; the filename decides when they are not yet. An image
      * whose file is missing and whose name says nothing about its content is genuinely unknown —
      * null, rather than a guess that would travel as a reference to bytes nobody has.
+     *
+     * [hashOf] is where a caller puts the memory of having read the file — `RoomCouchStore`
+     * passes its mtime+size-keyed cache, because this is asked for every image on every load of
+     * every page, per push *and* per apply, and re-reading unchanged pictures each time is the
+     * difference between a sync and an ordeal on e-ink storage.
      */
-    fun assetIdFor(uri: String?): String? {
+    fun assetIdFor(
+        uri: String?,
+        hashOf: (File) -> String? = { CouchAssetId.sha256Hex(it) },
+    ): String? {
         val file = fileFor(uri) ?: return null
-        CouchAssetId.sha256Hex(file)?.let { return CouchDocId.asset(it) }
+        hashOf(file)?.let { return CouchDocId.asset(it) }
         return if (CouchAssetId.isSha256Hex(file.name)) CouchDocId.asset(file.name) else null
     }
 }

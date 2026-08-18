@@ -191,6 +191,74 @@ class RoomCouchStoreTest {
         assertArrayEquals(pictureBytes, asset!!.asset.bytes)
     }
 
+    /**
+     * The hash of a placed image is asked for on every load of every page — per push and per
+     * apply — and used to be recomputed from the bytes each time. The mtime+size-keyed cache that
+     * already spared backgrounds covers images now: an unchanged file is digested once, ever.
+     */
+    @Test
+    fun anUnchangedImageIsHashedOnceAcrossLoads() {
+        var hashes = 0
+        val counting = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images },
+            backgroundsFolder = { backgrounds },
+            hashFile = { file ->
+                hashes += 1
+                CouchAssetId.sha256Hex(file)
+            },
+        )
+        val file = File(images, "holiday.png").apply { writeBytes(pictureBytes) }
+        val pageId = CouchDocId.page("p1")
+        counting.apply(
+            pageId,
+            CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)),
+        )
+        runBlocking {
+            repository.imageRepository.create(
+                Image(
+                    id = "i1", x = 1, y = 2, width = 3, height = 4,
+                    uri = file.absolutePath, pageId = "p1",
+                )
+            )
+        }
+
+        val first = counting.load(pageId) as? CouchDocBody.Page
+        assertEquals(listOf(pictureAssetId), first!!.page.images.map { it.assetId })
+        assertTrue("the first look has to read the file", hashes >= 1)
+
+        val afterFirst = hashes
+        val second = counting.load(pageId) as? CouchDocBody.Page
+        assertEquals(listOf(pictureAssetId), second!!.page.images.map { it.assetId })
+        assertEquals(
+            "the second load of an unchanged image must not re-read its bytes",
+            afterFirst,
+            hashes,
+        )
+
+        // An incoming apply consults the held-bytes map over the same cache: still no re-read.
+        counting.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 9).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 1, y = 2, width = 3,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(9),
+                        )
+                    )
+                )
+            ),
+            basedOn = first,
+        )
+        assertEquals("an apply must not re-hash unchanged pictures", afterFirst, hashes)
+
+        // A changed file is a different picture and must be re-read.
+        file.writeBytes("different bytes entirely".toByteArray())
+        counting.load(pageId)
+        assertTrue("an edited file has to be re-read", hashes > afterFirst)
+    }
+
     /** The window this whole mechanism exists for: the page has arrived, the picture has not. */
     @Test
     fun anIncomingImageIsOwedUntilItsBytesArrive() {
