@@ -226,6 +226,46 @@ class CouchOutboxTest {
         )
     }
 
+    /**
+     * The ink-save bump is a single-column write now. It used to be getById-then-update — a
+     * whole-row read-modify-write on unserialized Dispatchers.IO, racing the sync engine's
+     * applyNotebook: a remote change (title, pageIds, parentFolderId, deletedAt) applied between
+     * the read and the write was reverted by the stale full row, and the freshly bumped updatedAt
+     * made the stale scalars win the next merge as well. Pinned by asserting the bump leaves
+     * every other column exactly as a peer's verbatim write left them.
+     */
+    @Test
+    fun the_ink_save_bump_touches_only_the_timestamp_columns() = runBlocking {
+        val (notebookId, _) = seedNotebook()
+        // A peer's write, landed the way the sync store lands it: the remote author kept.
+        val remote = repository.bookRepository.getById(notebookId)!!.copy(
+            title = "From the iPad",
+            updatedAt = Date(1_700_000_000_000L),
+            updatedBy = "ipad",
+        )
+        repository.bookRepository.updateVerbatim(remote)
+        clearQueue()
+
+        repository.bookRepository.touchUpdatedAt(notebookId)
+
+        val after = repository.bookRepository.getById(notebookId)!!
+        assertTrue("the bump must advance updatedAt", after.updatedAt.after(remote.updatedAt))
+        assertNull("the bump was made here, whoever wrote last", after.updatedBy)
+        assertEquals(
+            "every other column must be exactly what the peer wrote",
+            remote.copy(updatedAt = after.updatedAt, updatedBy = null),
+            after,
+        )
+        assertEquals(setOf(CouchDocId.notebook(notebookId)), queued())
+    }
+
+    @Test
+    fun bumping_a_notebook_that_does_not_exist_queues_nothing() = runBlocking {
+        repository.bookRepository.touchUpdatedAt(UUID.randomUUID().toString())
+
+        assertEquals(emptySet<String>(), queued())
+    }
+
     // endregion
 
     // region What must not be queued

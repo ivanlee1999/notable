@@ -125,6 +125,14 @@ interface NotebookDao {
     @Query("UPDATE notebook SET openPageId=:pageId WHERE id=:notebookId")
     suspend fun setOpenPageId(notebookId: String, pageId: String)
 
+    // Bump only the edit timestamp, without a read-modify-write of the whole row — the notebook
+    // twin of [PageDao.touchUpdatedAt], and on the same hot path: every ink save advances the
+    // owning notebook's updatedAt. `updatedBy` is cleared with it, because the two describe one
+    // event and the edit was made here. Returns the number of rows updated, so the caller can
+    // tell "bumped" from "no such notebook".
+    @Query("UPDATE notebook SET updatedAt=:updatedAt, updatedBy=NULL WHERE id=:id")
+    suspend fun touchUpdatedAt(id: String, updatedAt: Date): Int
+
     // Advances updatedAt alongside pageIds so a structural change (add/remove/reorder) marks the
     // notebook dirty for sync — otherwise the change would not be detected and could be lost.
     // `updatedBy` is cleared alongside `updatedAt`: adding, removing or reordering pages here is
@@ -260,6 +268,31 @@ class BookRepository @Inject constructor(
      */
     suspend fun setOpenPageId(id: String, pageId: String) {
         notebookDao.setOpenPageId(id, pageId)
+    }
+
+    /**
+     * Advance the notebook's edit timestamp — the per-notebook dirty signal every ink save sends
+     * through `PageDataManager.bumpEditTimestamps`.
+     *
+     * A single-column write, like [PageRepository.touchUpdatedAt] one level down and for the same
+     * reason. This path used to do [getById] then [update] — a whole-row read-modify-write on
+     * unserialized Dispatchers.IO — which raced the sync engine's applyNotebook: a remote change
+     * (title, parentFolderId, deletedAt, pageIds) applied between the read and the write was
+     * reverted by the stale full row, and the freshly bumped `updatedAt` then made those stale
+     * scalars win the next merge as well. An UPDATE that names its two columns has nothing stale
+     * to write back.
+     *
+     * The outbox row lands in the same transaction, matching every other mutating method here.
+     * Queued only when a row was actually bumped: a notebook that does not exist has nothing to
+     * offer a peer.
+     */
+    suspend fun touchUpdatedAt(id: String) {
+        if (id.isEmpty()) return
+        database.withTransaction {
+            if (notebookDao.touchUpdatedAt(id, Date()) > 0) {
+                outbox.queue(CouchDocId.notebook(id))
+            }
+        }
     }
 
     suspend fun addPage(bookId: String, pageId: String, index: Int? = null) {
