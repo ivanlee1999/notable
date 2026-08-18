@@ -174,6 +174,11 @@ fun PageHorizontalSliderWithReturn(
                     .pointerInput(pageCount, currentIndex, quantization, favIndexes) {
                         if (pageCount <= 0) return@pointerInput
                         detectTapGestures { offset ->
+                            // A tap is a whole scrub in one touch, so it runs the same lifecycle
+                            // as a drag: start, preview, end. Skipping the start skipped the
+                            // pre-jump save and left the previous drag's dedupe target standing,
+                            // which swallowed any tap on the page last scrubbed to.
+                            onDragStart()
                             val newIndexRaw = indexFromX(offset.x)
 
                             // --- proximity detection for favorites ---
