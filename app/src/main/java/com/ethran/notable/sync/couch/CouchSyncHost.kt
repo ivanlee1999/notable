@@ -76,14 +76,44 @@ class CouchSyncHost @Inject constructor(
      * of order and resurrect an older `lastSeq`; a conflated channel keeps only the newest state
      * and writes them in order.
      */
-    private val stateWrites = Channel<Pair<String, CouchSyncState>>(Channel.CONFLATED)
+    private val stateWrites = Channel<StateWrite>(Channel.CONFLATED)
+
+    /**
+     * One checkpoint save, stamped with when it was requested. The stamp is what lets the
+     * synchronous path (see [writeState]) jump the queue safely: a stale save still sitting in the
+     * conflated channel must not land *after* — and therefore on top of — a newer state that was
+     * written directly.
+     */
+    private class StateWrite(val seq: Long, val key: String, val state: CouchSyncState)
+
+    private val stateWriteSeq = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Per state key, the [StateWrite.seq] of the newest state actually on disk. */
+    private val newestWrittenSeq = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Serializes the kv writes themselves, so the sync path and the channel cannot interleave. */
+    private val kvWriteMutex = Mutex()
 
     init {
         scope.launch {
-            for ((key, state) in stateWrites) {
-                runCatching { kvProxy.setKv(key, state, CouchSyncState.serializer()) }
+            for (write in stateWrites) {
+                runCatching { writeState(write) }
                     .onFailure { log.w("Could not persist couch sync state: ${it.message}") }
             }
+        }
+    }
+
+    /**
+     * Lands one checkpoint on disk — unless a newer one for the same key already has. The engine's
+     * ordinary saves ride the conflated channel and can be a moment behind; `discardHeldDeletions`
+     * writes through here directly because its rewind must be durable before the tombstones are
+     * dropped, and the guard is what keeps a stale channel write from undoing that.
+     */
+    private suspend fun writeState(write: StateWrite) {
+        kvWriteMutex.withLock {
+            if (write.seq <= (newestWrittenSeq[write.key] ?: Long.MIN_VALUE)) return
+            kvProxy.setKv(write.key, write.state, CouchSyncState.serializer())
+            newestWrittenSeq[write.key] = write.seq
         }
     }
 
@@ -249,6 +279,9 @@ class CouchSyncHost @Inject constructor(
             // misconfigured CouchDB looks exactly like one that is working and has nothing to do.
             if (stack != null) SyncLogger.i(TAG, "CouchDB no longer active; sync stack released")
             else SyncLogger.d(TAG, couchInactiveReason(settings))
+            // Retired, not merely dropped: an in-flight flush or pull on the old engine keeps
+            // running after this returns, and its persist would land on the shared state key.
+            stack?.engine?.invalidate()
             stack = null
             publish(null)
             return@withLock null
@@ -256,6 +289,12 @@ class CouchSyncHost @Inject constructor(
 
         val key = settingsKey(settings)
         stack?.takeIf { it.settingsKey == key }?.let { return@withLock it }
+        // The settings changed under the old engine. Invalidate it *before* the replacement is
+        // built: the state key excludes credentials and the device id, so a password or
+        // device-name change rebuilds onto the very same key — and an old engine allowed to
+        // finish its flush would persist its stale checkpoint over the successor's. bopa's
+        // `SyncBackendHost` does the same, for the same reason.
+        stack?.engine?.invalidate()
         val stateKey = stateKey(settings)
 
         val deviceId = settings.deviceId.ifBlank { DEFAULT_DEVICE_ID }
@@ -300,17 +339,24 @@ class CouchSyncHost @Inject constructor(
             // see [BackgroundFileWatcher.noteChanged].
             onAssetFileWritten = backgroundFileWatcher::noteChanged,
         )
-        val initial = loadState(stateKey)
+        val initial = loadState(settings, stateKey)
         val engine = CouchSyncEngine(
             client = CouchDbClient(transport, database = settings.couchDatabase),
             store = store,
             deviceId = deviceId,
             state = initial,
             onStateChange = {
-                stateWrites.trySend(stateKey to it)
+                stateWrites.trySend(StateWrite(stateWriteSeq.incrementAndGet(), stateKey, it))
                 // The badge follows the engine, not the persisted copy: it should change the moment
                 // a document is queued or accepted, not once the checkpoint write lands.
                 publish(it)
+            },
+            // The one save that may not be fire-and-forget: discarding held deletions must have its
+            // checkpoint rewind on disk before the tombstones go. Failures propagate — the engine
+            // aborts the discard rather than proceeding on a write that never landed.
+            onStateChangeSync = { state ->
+                writeState(StateWrite(stateWriteSeq.incrementAndGet(), stateKey, state))
+                publish(state)
             },
         )
         publish(initial)
@@ -348,28 +394,48 @@ class CouchSyncHost @Inject constructor(
      *
      * Credentials and the device id are deliberately *not* part of the name: changing a password
      * does not change what is on the server, and discarding the checkpoint would mean replaying the
-     * whole feed for nothing.
-     *
-     * Hashed to keep a URL's punctuation out of the key. Anyone upgrading replays from the start
-     * once, which is slow and correct rather than fast and wrong.
+     * whole feed for nothing. The URL is normalized first ([endpointIdentity]) for the same reason
+     * seen from the other side: a trailing slash or a re-typed hostname's case does not change
+     * what is on the server either — and `user:pass@` in the URL is a credential, not a place, so
+     * it must be neither part of the key's identity nor able to discard the checkpoint by
+     * appearing.
      */
-    private fun stateKey(settings: SyncSettings): String {
-        val identity = listOf(settings.couchUrl, settings.couchDatabase).joinToString("\u0000")
-        return "$COUCH_SYNC_STATE_KEY:" + CouchAssetId.sha256Hex(identity.toByteArray())
-    }
+    private fun stateKey(settings: SyncSettings): String =
+        couchStateKey(settings.couchUrl, settings.couchDatabase)
 
     /**
      * A missing or unreadable checkpoint is not an error: every document re-pushes and the feed
      * replays from the start, which is slow but correct because every merge is idempotent.
+     *
+     * Before settling for that, one look under the key the *raw* URL used to hash to: state
+     * written before normalization is moved to the normalized key, so nobody loses their
+     * checkpoint to this update — and the legacy row is pruned, because nothing will read it
+     * again. Other `COUCH_SYNC_STATE:` rows are left alone: a hash that matches neither
+     * derivation is indistinguishable from another server's live checkpoint, which switching
+     * back must still find.
      */
-    private suspend fun loadState(key: String): CouchSyncState =
-        runCatching { kvProxy.get(key, CouchSyncState.serializer()) }
-            .getOrNull()
-            ?: CouchSyncState().also {
-                // Correct but expensive, and it looks identical to a hung sync from outside: every
-                // document re-pushes and the feed replays from the start.
-                SyncLogger.w(TAG, "No readable sync checkpoint; replaying the whole feed")
-            }
+    private suspend fun loadState(settings: SyncSettings, key: String): CouchSyncState {
+        runCatching { kvProxy.get(key, CouchSyncState.serializer()) }.getOrNull()?.let { return it }
+
+        migrateLegacyCouchState(
+            key = key,
+            legacyKey = legacyCouchStateKey(settings.couchUrl, settings.couchDatabase),
+            read = { runCatching { kvProxy.get(it, CouchSyncState.serializer()) }.getOrNull() },
+            write = { k, state ->
+                runCatching { kvProxy.setKv(k, state, CouchSyncState.serializer()) }
+                    .onFailure { log.w("Could not migrate the sync checkpoint: ${it.message}") }
+            },
+            remove = { runCatching { kvDao.delete(it) } },
+        )?.let {
+            SyncLogger.i(TAG, "Moved this server's sync checkpoint to its normalized key")
+            return it
+        }
+
+        // Correct but expensive, and it looks identical to a hung sync from outside: every
+        // document re-pushes and the feed replays from the start.
+        SyncLogger.w(TAG, "No readable sync checkpoint; replaying the whole feed")
+        return CouchSyncState()
+    }
 
     // endregion
 
@@ -394,3 +460,64 @@ internal fun redactUserInfo(url: String): String =
 
 /** `scheme://` then everything up to the first `@` that is still inside the authority. */
 private val USER_INFO = Regex("""^([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#]*@""")
+
+/**
+ * Where the checkpoint for ([url], [database]) lives: the normalized endpoint identity, hashed to
+ * keep a URL's punctuation out of the key. bopa's `CouchSyncStack.stateFileName` is the twin.
+ */
+internal fun couchStateKey(url: String, database: String): String {
+    // NUL-separated, so a value that contains the separator cannot forge a key matching a
+    // different configuration.
+    val identity = listOf(endpointIdentity(url), database).joinToString("\u0000")
+    return "$COUCH_SYNC_STATE_KEY:" + CouchAssetId.sha256Hex(identity.toByteArray())
+}
+
+/**
+ * The key the same pair hashed to before the URL was normalized — read once at load so an update
+ * migrates the checkpoint instead of silently replaying the whole feed.
+ */
+internal fun legacyCouchStateKey(url: String, database: String): String {
+    val identity = listOf(url, database).joinToString("\u0000")
+    return "$COUCH_SYNC_STATE_KEY:" + CouchAssetId.sha256Hex(identity.toByteArray())
+}
+
+/**
+ * The part of a server address that says *which server*, with the differences that are not
+ * differences folded away: a trailing slash and the case of the scheme and host are how the same
+ * endpoint gets typed twice, and re-typing it must not throw the checkpoint away. Userinfo is
+ * dropped for the same reason the password is not in the key at all — it is a credential, not a
+ * place. bopa's `CouchSettings.endpointIdentity` is the twin of this function; an address that
+ * does not parse is used as typed (trimmed), which is exactly as good as the old behaviour.
+ */
+internal fun endpointIdentity(serverUrl: String): String {
+    val trimmed = serverUrl.trim()
+    val uri = runCatching { java.net.URI(trimmed) }.getOrNull() ?: return trimmed
+    val scheme = uri.scheme?.lowercase() ?: return trimmed
+    val host = uri.host?.lowercase() ?: return trimmed
+    val port = if (uri.port >= 0) ":${uri.port}" else ""
+    var path = uri.rawPath.orEmpty()
+    while (path.endsWith("/")) path = path.dropLast(1)
+    val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+    return "$scheme://$host$port$path$query"
+}
+
+/**
+ * The migration half of [couchStateKey]'s introduction, kept pure so a JVM test can drive it with
+ * a map: when nothing lives under the normalized [key] but [legacyKey] (the raw-URL hash) holds
+ * state, that state is copied to [key], the legacy row is removed, and the state is returned.
+ * Returns null when there was nothing to migrate — including when the two keys coincide, which is
+ * every URL normalization does not change.
+ */
+internal suspend fun migrateLegacyCouchState(
+    key: String,
+    legacyKey: String,
+    read: suspend (String) -> CouchSyncState?,
+    write: suspend (String, CouchSyncState) -> Unit,
+    remove: suspend (String) -> Unit,
+): CouchSyncState? {
+    if (legacyKey == key) return null
+    val legacy = read(legacyKey) ?: return null
+    write(key, legacy)
+    remove(legacyKey)
+    return legacy
+}

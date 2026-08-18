@@ -67,8 +67,10 @@ class RoomCouchStore(
     private val deviceId: String,
     /**
      * The pages an applied change rewrote, so anything holding them in memory can re-read them.
-     * Never called for reads, and never with an empty set — a change that touched no page's rows
-     * (a folder, an asset's bytes) leaves nothing cached to correct.
+     * Never called for reads, and never with an empty set — a change that touched no page (a
+     * folder, an asset no page places) leaves nothing cached to correct. An image blob landing
+     * for a page that is already applied counts: the page's rows did not move, but what the
+     * canvas shows for them did — see [applyAsset].
      */
     private val onPagesApplied: ((Set<String>) -> Unit)? = null,
     /**
@@ -90,6 +92,11 @@ class RoomCouchStore(
      * showing a blank page until the notebook is closed and reopened.
      */
     private val onAssetFileWritten: ((String) -> Unit)? = null,
+    /**
+     * How a file's bytes are hashed on a cache miss — see [hashOf]. Injectable so a test can
+     * count the reads; production always digests the file.
+     */
+    private val hashFile: (File) -> String? = { CouchAssetId.sha256Hex(it) },
 ) : CouchLocalStore {
 
     private val log = ShipBook.getLogger("RoomCouchStore")
@@ -155,7 +162,11 @@ class RoomCouchStore(
 
             // Where the bytes go was decided when the page that places them was applied: under
             // the hash that names them, which is the path that page's rows already point at.
-            is CouchDocBody.Asset -> applyAsset(documentId, body.asset)
+            // The pages drawing those rows are rewritten pages in every sense that matters: they
+            // were applied moments earlier with the file missing, the canvas drew its load-error
+            // placeholder, and nothing else will ever repaint them — the file watcher announces
+            // backgrounds, but a *picture's* path maps to nobody there.
+            is CouchDocBody.Asset -> rewrittenPages += applyAsset(documentId, body.asset)
 
             is CouchDocBody.Folder -> {
                 applyFolder(id, body.folder)
@@ -535,7 +546,7 @@ class RoomCouchStore(
         }
         named.firstOrNull { it.exists() }?.let { return it }
 
-        images?.listFiles()?.firstOrNull { CouchAssetId.sha256Hex(it) == sha }?.let { return it }
+        images?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
         // Backgrounds sit one level down, in `pdfs/` or `images/`, so this walks rather than lists.
         // Hashes are remembered ([hashOf]), so a notebook's own PDF is read once and not once per
         // page that names it.
@@ -602,22 +613,27 @@ class RoomCouchStore(
         CouchBackgroundFiles.assetIdFor(background, backgroundType, ::hashOf) ?: background
 
     /** Path -> ((size, modified), hash). See [hashOf]. */
-    private val hashedBackgrounds = ConcurrentHashMap<String, Pair<Pair<Long, Long>, String>>()
+    private val hashedFiles = ConcurrentHashMap<String, Pair<Pair<Long, Long>, String>>()
 
     /**
-     * The hash of a background file, remembered for as long as the file does not change.
+     * The hash of a file this store keeps re-asking about, remembered for as long as the file does
+     * not change.
      *
      * Every page of an imported book names the same PDF, and every push and every incoming page
      * asks what it is. Reading a sixty-megabyte document once per page — two hundred times for a
      * scanned book, on a device with an e-ink processor and a slow card — is the difference between
-     * a sync and an ordeal. Size and modification time are what a local edit moves, so keying on
-     * them means an externally-edited PDF (the whole point of a linked notebook) still re-reads.
+     * a sync and an ordeal. The same question is asked of every *placed image* too: [couchImage]
+     * hashes each picture on every load of every page, and [applyPage]'s held-bytes map hashes
+     * every existing image per incoming apply, so those go through here as well rather than
+     * digesting unchanged pictures once per sync pass. Size and modification time are what a local
+     * edit moves, so keying on them means an externally-edited file (the whole point of a linked
+     * notebook) still re-reads.
      */
     private fun hashOf(file: File): String? {
         val stamp = file.length() to file.lastModified()
-        hashedBackgrounds[file.path]?.let { (known, hash) -> if (known == stamp) return hash }
-        val hash = CouchAssetId.sha256Hex(file) ?: return null
-        hashedBackgrounds[file.path] = stamp to hash
+        hashedFiles[file.path]?.let { (known, hash) -> if (known == stamp) return hash }
+        val hash = hashFile(file) ?: return null
+        hashedFiles[file.path] = stamp to hash
         return hash
     }
 
@@ -625,7 +641,7 @@ class RoomCouchStore(
         id = image.id,
         // The wire names bytes, not a path: where this device keeps the file is its own business,
         // and the peer's copy lives somewhere else entirely.
-        assetId = CouchImageFiles.assetIdFor(image.uri),
+        assetId = CouchImageFiles.assetIdFor(image.uri, ::hashOf),
         x = image.x,
         y = image.y,
         width = image.width,
@@ -799,7 +815,9 @@ class RoomCouchStore(
         // were imported with — the row points at the file that has them rather than at one nothing
         // will ever write.
         val held = existing?.images.orEmpty()
-            .mapNotNull { image -> CouchImageFiles.assetIdFor(image.uri)?.let { it to image.uri } }
+            .mapNotNull { image ->
+                CouchImageFiles.assetIdFor(image.uri, ::hashOf)?.let { it to image.uri }
+            }
             .toMap()
         val incomingImages = page.images.map { imageRow(it, id, held[it.assetId]) }
         val incomingImageIds = incomingImages.map { it.id }.toSet()
@@ -1007,10 +1025,19 @@ class RoomCouchStore(
         return PendingAsset(CouchDocId.asset(sha), file)
     }
 
-    /** Files the bytes of an asset, at every path a row is currently pointing at for them. */
-    private suspend fun applyAsset(documentId: String, asset: CouchAsset) {
-        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return
-        val bytes = asset.bytes ?: return
+    /**
+     * Files the bytes of an asset, at every path a row is currently pointing at for them.
+     *
+     * Returns the ids of the pages whose *image rows* point at a path just written. Those pages
+     * were applied while the file was still on its way — the canvas decoded a missing file and
+     * cached the failure — and this arrival is the only event that can say so: the file watcher
+     * ([onAssetFileWritten]) covers backgrounds, and a picture's path deliberately maps to nobody
+     * there. Reporting them lets [apply] fold them into the same `onPagesApplied` notification a
+     * page apply produces, which is exactly what they need: a re-read and a repaint.
+     */
+    private suspend fun applyAsset(documentId: String, asset: CouchAsset): Set<String> {
+        val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return emptySet()
+        val bytes = asset.bytes ?: return emptySet()
         // Nothing waiting means an image whose row already resolves — the fetch that asked for
         // these bytes expects them in the images folder, under the hash that names them.
         val destinations = pendingAssets().filter { it.assetId == documentId }.map { it.file }
@@ -1018,6 +1045,7 @@ class RoomCouchStore(
             .ifEmpty {
                 listOfNotNull(runCatching { imagesFolder() }.getOrNull()?.let { File(it, sha) })
             }
+        val written = mutableSetOf<String>()
         for (file in destinations) {
             runCatching {
                 file.parentFile?.mkdirs()
@@ -1025,9 +1053,15 @@ class RoomCouchStore(
             }.onFailure {
                 log.e("Could not store asset $sha at ${file.name}: ${it.message}")
             }.onSuccess {
+                written += file.absolutePath
                 onAssetFileWritten?.invoke(file.absolutePath)
             }
         }
+        if (written.isEmpty()) return emptySet()
+        return appRepository.imageRepository.getPageUris()
+            .filter { row -> CouchImageFiles.fileFor(row.uri)?.absolutePath in written }
+            .map { it.pageId }
+            .toSet()
     }
 
     // endregion

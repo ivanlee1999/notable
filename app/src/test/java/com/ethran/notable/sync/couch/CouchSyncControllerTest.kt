@@ -224,13 +224,128 @@ class CouchSyncControllerTest {
         backend.flushReport = CouchSyncEngine.FlushReport(
             stillDirty = listOf("page:a", "page:b"),
             failures = mapOf("page:a" to "transport(offline)"),
+            failureCauses = mapOf("page:a" to CouchError.Transport("offline")),
         )
         val controller = controller(backend, FakeSleeper(allowedTicks = 10))
 
         runBlocking { controller.pushNow() }
 
         assertEquals(2, controller.pendingCount)
-        assertEquals("transport(offline) 2 waiting to sync.", controller.state.value.detail)
+        assertEquals(
+            "Offline — changes are saved and will sync when you reconnect. 2 waiting to sync.",
+            controller.state.value.detail,
+        )
+    }
+
+    /**
+     * Flush failures store the engine's stable detail strings, and those used to be put straight
+     * into the status caption — the user read "unauthorized" while describe()'s friendly wording
+     * sat as dead code on this path. The typed cause travels with the report now, and the caption
+     * maps it; the raw detail still goes to the log.
+     */
+    @Test
+    fun `a flush failure reaches the user in words, not engine strings`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "unauthorized"),
+            failureCauses = mapOf("page:a" to CouchError.Unauthorized),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val status = controller.status
+        assertTrue("expected a failure, got $status", status is CouchSyncController.Status.Failed)
+        assertEquals(
+            "Sync rejected the username or password.",
+            (status as CouchSyncController.Status.Failed).message,
+        )
+    }
+
+    /**
+     * FlushReport and PullReport carry the §1.2 identity observation "which is what makes the
+     * staged rollout observable" — and nothing consumed it: a wiped-and-recreated database was
+     * detected and nobody was told. The three states a user can act on ride the footer as a
+     * non-blocking warning, the same way clock skew does.
+     */
+    @Test
+    fun `a generation change reaches the footer as a warning, not a failure`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            pushed = listOf("page:a"),
+            databaseIdentity =
+                CouchSyncEngine.DatabaseIdentity.GenerationChanged("gen-old", "gen-new"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val state = controller.state.value
+        assertTrue(
+            "identity is observed, not enforced: the sync itself succeeded",
+            state.status is CouchSyncController.Status.Idle,
+        )
+        val warning = state.identityWarning
+        assertTrue("expected a warning, got null", warning != null)
+        assertTrue(
+            "the footer line has to carry it: ${state.detail}",
+            state.detail.orEmpty().contains(warning!!),
+        )
+    }
+
+    /** Unknown is the normal state of an older server; warning about it would train blindness. */
+    @Test
+    fun `an unknown identity is recorded but not surfaced`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            pushed = listOf("page:a"),
+            databaseIdentity = CouchSyncEngine.DatabaseIdentity.Unknown,
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        val state = controller.state.value
+        assertEquals(CouchSyncEngine.DatabaseIdentity.Unknown, state.databaseIdentity)
+        assertEquals("no warning line for the normal case", null, state.identityWarning)
+    }
+
+    /** The pull path reports the same observation; it must land the same way. */
+    @Test
+    fun `a locked database observed on pull reaches the footer`() {
+        val backend = BackendSpy()
+        backend.pullReport = CouchSyncEngine.PullReport(
+            databaseIdentity = CouchSyncEngine.DatabaseIdentity.Locked("rebuilding from the iPad"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.syncNow() }
+
+        val warning = controller.state.value.identityWarning
+        assertTrue("expected the lock to surface, got null", warning != null)
+        assertTrue(
+            "the reason should be shown: $warning",
+            warning!!.contains("rebuilding from the iPad"),
+        )
+    }
+
+    /** A report without typed causes (an older engine, a fake) still surfaces its raw detail. */
+    @Test
+    fun `a failure without a typed cause falls back to the raw detail`() {
+        val backend = BackendSpy()
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "something bespoke"),
+        )
+        val controller = controller(backend, FakeSleeper(allowedTicks = 10))
+
+        runBlocking { controller.pushNow() }
+
+        assertEquals(
+            "something bespoke",
+            (controller.status as CouchSyncController.Status.Failed).message,
+        )
     }
 
     @Test
@@ -461,6 +576,52 @@ class CouchSyncControllerTest {
         assertTrue(
             (status as CouchSyncController.Status.Failed).message.lowercase().contains("offline"),
             )
+    }
+
+    /**
+     * The feed loop drains the outbox after every successful pull, and a longpoll comes round
+     * forever — so with a retry already waiting out its backoff, an unconditional drain re-sent
+     * the same failing documents at feed pace and made the push backoff a fiction. The drain now
+     * yields to a scheduled retry; fresh push-back content still sends immediately.
+     */
+    @Test
+    fun `the feed drain does not preempt a scheduled push retry`() {
+        val backend = BackendSpy()
+        backend.pending = 1
+        backend.flushReport = CouchSyncEngine.FlushReport(
+            stillDirty = listOf("page:a"),
+            failures = mapOf("page:a" to "conflict(page:a)"),
+            hasRetriableFailure = true,
+        )
+        val controller = CouchSyncController(
+            scope = scope,
+            backend = backend,
+            clock = CouchSyncClock(
+                editQuietPeriodMs = 3_000,
+                retryFloorMs = 1_000,
+                retryCeilingMs = 60_000,
+                idleFloorMs = 500,
+                // The retry's wait (>= 850ms with jitter) parks forever, so the retry stays
+                // genuinely pending while the feed keeps coming round at test speed.
+                sleep = { ms ->
+                    if (ms >= 800) kotlinx.coroutines.awaitCancellation() else delay(10)
+                },
+            ),
+        )
+
+        controller.start()
+        settle(400)
+        controller.stop()
+
+        assertTrue(
+            "the feed should have come round more than once, got ${backend.pullCalls.size}",
+            backend.pullCalls.size >= 2,
+        )
+        assertEquals(
+            "the drain must wait out the scheduled retry instead of re-flushing at feed pace",
+            1,
+            backend.flushCount,
+        )
     }
 
     // region Backgrounding

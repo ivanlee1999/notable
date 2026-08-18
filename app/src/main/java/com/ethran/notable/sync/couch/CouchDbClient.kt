@@ -37,12 +37,15 @@ sealed class CouchError(val detail: String) : Exception(detail) {
 
     /**
      * Any other status the client does not handle specially. [retryAfterMs] carries the server's
-     * own answer to "when should I come back", when it sent one.
+     * own answer to "when should I come back", when it sent one. [requestBytes] is how large the
+     * request body was, when there was one — for a 413 that *is* the diagnosis, and the number the
+     * user needs to hear ("too large" without saying how large sends them guessing).
      */
     class Server(
         val status: Int,
         val path: String,
         val retryAfterMs: Long? = null,
+        val requestBytes: Long? = null,
     ) : CouchError("server($status, $path)")
 
     /** Offline, DNS failure, timeout: keep the work queued and back off. */
@@ -278,7 +281,9 @@ class CouchDbClient(
                 body = payload,
             )
         )
-        return revFromWriteResponse(response, documentId, "PUT $documentId")
+        return revFromWriteResponse(
+            response, documentId, "PUT $documentId", requestBytes = payload.size.toLong()
+        )
     }
 
     // endregion
@@ -455,6 +460,7 @@ class CouchDbClient(
         response: CouchResponse,
         documentId: String,
         what: String,
+        requestBytes: Long? = null,
     ): String = when (response.status) {
         HTTP_OK, HTTP_CREATED, HTTP_ACCEPTED -> {
             val rev = jsonObject(response.body, what)["rev"]?.jsonPrimitive?.contentOrNullSafe
@@ -462,7 +468,7 @@ class CouchDbClient(
         }
 
         HTTP_CONFLICT -> throw CouchError.Conflict(documentId)
-        else -> throw errorFor(response, path(documentId))
+        else -> throw errorFor(response, path(documentId), requestBytes)
     }
 
     private suspend fun send(request: CouchRequest): CouchResponse = withContext(Dispatchers.IO) {
@@ -521,7 +527,11 @@ class CouchDbClient(
         throw CouchError.MalformedResponse("$what is not a JSON object: $e")
     }
 
-    private fun errorFor(response: CouchResponse, path: String): CouchError = when (response.status) {
+    private fun errorFor(
+        response: CouchResponse,
+        path: String,
+        requestBytes: Long? = null,
+    ): CouchError = when (response.status) {
         HTTP_UNAUTHORIZED, HTTP_FORBIDDEN -> CouchError.Unauthorized
         HTTP_NOT_FOUND -> CouchError.NotFound(path)
         HTTP_CONFLICT -> CouchError.Conflict(path)
@@ -533,6 +543,7 @@ class CouchDbClient(
                     .firstOrNull { it.key.equals("Retry-After", ignoreCase = true) }
                     ?.value
             ),
+            requestBytes = requestBytes,
         )
     }
 

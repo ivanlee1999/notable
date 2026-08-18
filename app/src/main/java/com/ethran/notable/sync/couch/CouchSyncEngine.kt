@@ -1,5 +1,6 @@
 package com.ethran.notable.sync.couch
 
+import com.ethran.notable.sync.SyncLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -283,6 +284,14 @@ class CouchSyncEngine(
     state: CouchSyncState = CouchSyncState(),
     private val maxPushAttempts: Int = DEFAULT_MAX_PUSH_ATTEMPTS,
     /**
+     * The pause before conflict retry *n* is `n × this`. A 409 means another device is writing
+     * the same document right now, and retrying in a tight loop mostly re-loses the same race —
+     * five attempts in single-digit milliseconds — while a beat's pause lets the peer's burst of
+     * writes finish. Injectable so tests can observe the pacing instead of paying it.
+     */
+    private val conflictBackoffMs: Long = CONFLICT_BACKOFF_MS,
+    private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    /**
      * Whether a database-identity problem stops sync (§1.2 stage 3) or is merely reported.
      *
      * Off by default, and that is the whole point of the staged rollout: a client that *required*
@@ -293,6 +302,15 @@ class CouchSyncEngine(
     private val nowIso: () -> String = { Instant.now().toString() },
     private val newGeneration: () -> String = { java.util.UUID.randomUUID().toString() },
     private val onStateChange: ((CouchSyncState) -> Unit)? = null,
+    /**
+     * Persists the state and does not return until the write has durably landed — or throws when
+     * it could not. [onStateChange] is fire-and-forget by design (the host conflates the writes
+     * onto one consumer), which is right for every routine save and wrong for exactly one thing:
+     * a state that *must* be on disk before the next destructive step is allowed to happen. See
+     * [discardHeldDeletions]. Null falls back to [onStateChange], which is what the JVM engine
+     * tests and any host without a synchronous path get.
+     */
+    private val onStateChangeSync: (suspend (CouchSyncState) -> Unit)? = null,
 ) {
 
     data class FlushReport(
@@ -300,6 +318,13 @@ class CouchSyncEngine(
         val merged: List<String> = emptyList(),
         val stillDirty: List<String> = emptyList(),
         val failures: Map<String, String> = emptyMap(),
+        /**
+         * The typed error behind each entry in [failures], same keys. [failures] keeps the stable
+         * raw detail (`unauthorized`, `server(413, …)`) for the log; anything user-facing maps
+         * these through the controller's friendly wording instead, so an engine string never
+         * reaches the screen verbatim.
+         */
+        val failureCauses: Map<String, Throwable> = emptyMap(),
         /**
          * The tombstones the mass-deletion guard held back (protocol §6.7) — notebooks and the
          * folders deleted with them — **which** ones, not merely how many.
@@ -403,6 +428,15 @@ class CouchSyncEngine(
     }
 
     private val mutex = Mutex()
+
+    /**
+     * Set once this engine's configuration has been replaced — see [invalidate]. Checked wherever
+     * state is handed out for persistence, never around the work itself: a PUT already in flight is
+     * a real write and may finish, but nothing this engine does from here on may reach the state
+     * store, because the state store now belongs to the successor.
+     */
+    private val invalidated = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private var lastSeq: String = state.lastSeq
     private val revs: MutableMap<String, String> = LinkedHashMap(state.revs)
     private val dirty: MutableSet<String> = LinkedHashSet(state.dirty)
@@ -439,6 +473,20 @@ class CouchSyncEngine(
      * pruned below, so this cannot accumulate.
      */
     private val approvedDeletions: MutableSet<String> = LinkedHashSet()
+
+    /**
+     * Documents the server refused as too large (413), by id, with the `updatedAt` of the exact
+     * copy it refused. A 413 is terminal for that content — the server will keep saying it — but
+     * the document sat in the outbox being re-derived and re-sent in full on every flush,
+     * megabytes a pass for an oversized asset, only to hear the same refusal. Later flushes skip
+     * an entry here until the document's `updatedAt` moves, which is the one thing that makes the
+     * answer worth asking for again; the entry then leaves and the document gets one real attempt.
+     *
+     * In-memory on purpose: an engine lives as long as one configuration, and after a restart the
+     * single re-send re-learns the entry. Guarded by [mutex] like everything else here.
+     */
+    private class Oversized(val updatedAt: String, val requestBytes: Long?)
+    private val oversized = LinkedHashMap<String, Oversized>()
 
     init {
         // The checkpoint blob's copy of the outbox is written asynchronously (see
@@ -501,7 +549,7 @@ class CouchSyncEngine(
 
         val stored = databaseGeneration
         val metadata = try {
-            client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())?.body
+            readDatabaseMetadata()
         } catch (e: CouchError.NotFound) {
             null
         }
@@ -547,19 +595,55 @@ class CouchSyncEngine(
     }
 
     /**
+     * The identity document as live metadata, or null when the server effectively holds none.
+     *
+     * Read raw rather than through the typed `get`, because two shapes of tombstone must read as
+     * *absent* and used not to:
+     *
+     * - A `_deleted` document written with its body intact (a `PUT` tombstone) decoded cleanly and
+     *   was treated as live metadata — a deleted identity resurrected as an authoritative one.
+     * - A bare tombstone from a plain HTTP `DELETE` carries no `generation`, so the typed decode
+     *   threw [CouchError.MalformedResponse] straight through [verifyDatabaseIdentity]'s
+     *   NotFound-only catch — and since [pull] calls the check unconditionally, one deleted
+     *   identity document permanently failed every pull.
+     *
+     * A deleted identity document is somebody having reset the database's bookkeeping, not a
+     * statement about whose database it is: the null routes into the existing no-metadata branch —
+     * claim it when empty, [DatabaseIdentity.Unknown] otherwise. An identity document that exists
+     * but will not decode is treated the same way, for the same reason: refusing to sync forever
+     * over unreadable bookkeeping is strictly worse than treating it as not-yet-known.
+     */
+    private suspend fun readDatabaseMetadata(): CouchDatabaseMetadata? {
+        val raw = client.getRaw(CouchMetaDocId.DATABASE) ?: return null
+        if (raw.deleted) return null
+        return runCatching {
+            couchJson.decodeFromJsonElement(CouchDatabaseMetadata.serializer(), raw.json)
+        }.getOrNull()
+    }
+
+    /**
      * Names an empty database, or returns null when it turns out not to be empty.
      *
      * `PUT` with no `_rev` is the whole concurrency story: two devices reaching a fresh database
      * together both try to create the document, and CouchDB gives exactly one of them the write.
      * The loser re-reads and adopts the winner's generation rather than retrying, because the
-     * question "which of us names it" has already been answered.
+     * question "which of us names it" has already been answered — but only a loser with no prior
+     * identity of its own may adopt (§1.2); one that was already syncing a different generation
+     * reports the mismatch instead of quietly becoming a client of a database it never knew.
      */
     private suspend fun claimEmptyDatabase(): DatabaseIdentity? {
         // Pre-existing library, no metadata: record nothing and block nothing.
         if (!isDatabaseEmpty()) return null
 
+        val stored = databaseGeneration
+        // Always minted fresh, never `stored`: §1.2 says a generation is minted *with the
+        // database*, and this database is demonstrably not the one `stored` named — it is empty
+        // where that one held a library. Re-writing the old generation onto the new database made
+        // the wipe invisible: the stored checkpoint stayed "matched" and never replayed, the local
+        // library was never re-offered, and every device reported healthy while the server copy
+        // was silently gone.
         val metadata = CouchDatabaseMetadata(
-            generation = databaseGeneration ?: newGeneration(),
+            generation = newGeneration(),
             updatedAt = nowIso(),
         )
         return try {
@@ -571,6 +655,7 @@ class CouchSyncEngine(
             )
             mutex.withLock {
                 databaseGeneration = metadata.generation
+                if (stored != null) restartAgainstRecreatedDatabase(stored, metadata.generation)
                 persist()
             }
             DatabaseIdentity.Matched(metadata.generation)
@@ -578,12 +663,45 @@ class CouchSyncEngine(
             // Another device got there first in the moment between the read and the write.
             val winner = client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())
                 ?.body ?: return null
+            if (stored != null && stored != winner.generation) {
+                // The racing peer named the recreated database before this device could. That
+                // makes it the §1.2 generation change it always was — a human decides what
+                // happens to the two libraries, exactly as if the metadata had been found.
+                return DatabaseIdentity.GenerationChanged(stored, winner.generation)
+            }
             mutex.withLock {
                 databaseGeneration = winner.generation
                 persist()
             }
             DatabaseIdentity.Matched(winner.generation)
         }
+    }
+
+    /**
+     * The stored state described a database that no longer exists — same address, same name, but
+     * this device just watched an *empty* database answer where [stored] named a populated one.
+     * That is §1.2's generation change with this device holding the only surviving copy, so the
+     * recovery is the "rebuild the server from this device" arm, applied automatically because
+     * claiming an empty database destroys nothing:
+     *
+     * - the checkpoint rewinds to `"0"` — `lastSeq` was a position in the dead database's feed;
+     * - the revision cache clears — its entries would suppress every re-upload's echo wrongly;
+     * - everything this device holds queues for push, because the server holds nothing.
+     *
+     * Callers hold [mutex] and persist afterwards.
+     */
+    private fun restartAgainstRecreatedDatabase(stored: String, minted: String) {
+        SyncLogger.w(
+            "CouchSync",
+            "The sync database at this address is empty but was generation $stored when last " +
+                "seen — it was wiped or recreated. Named it $minted and queueing this device's " +
+                "whole library for re-upload."
+        )
+        lastSeq = "0"
+        revs.clear()
+        val everything = runCatching { store.allDocumentIds() }.getOrNull().orEmpty()
+        dirty += everything
+        runCatching { store.enqueueOutbox(everything) }
     }
 
     /**
@@ -656,11 +774,9 @@ class CouchSyncEngine(
      * is the undo, and the caller must have said so before getting here (protocol §6.7).
      */
     suspend fun discardHeldDeletions(ids: List<String>) = mutex.withLock {
-        for (documentId in ids) {
-            runCatching { store.discardDeletion(documentId) }
-            clearDirty(documentId)
-        }
-        // ...and rewind the checkpoint, or the promise made to the user is not kept.
+        if (ids.isEmpty()) return@withLock
+
+        // The checkpoint is rewound, or the promise made to the user is not kept.
         //
         // "They come back on the next pull" is only true if the server mentions them again, and the
         // change feed does not repeat itself: these documents were announced long ago, the
@@ -683,11 +799,40 @@ class CouchSyncEngine(
         // notebooks came back as empty shells. With the checkpoint at "0" the map rebuilds itself
         // over the replay; the cost is the 409-then-merge round trip on the next push of each
         // still-held document, which resolves to "nothing to send".
-        if (ids.isNotEmpty()) {
-            revs.clear()
-            lastSeq = "0"
+        revs.clear()
+        lastSeq = "0"
+
+        // ...and the rewind lands durably BEFORE a single tombstone is dropped. The two halves of
+        // this method compensate each other — dropping the tombstones is what forgets the deletion,
+        // replaying the feed is what brings the documents back — and the routine persist path is an
+        // asynchronous, conflated channel. A crash after the drops but before that write left the
+        // tombstones forgotten AND the checkpoint still past the documents: the promised restore
+        // simply never happened. Written the other way round, a crash in the window costs a feed
+        // replay while the tombstones are still held — safe, and the user's answer still stands to
+        // be given again. A rewind that cannot be written durably aborts the discard entirely, for
+        // the same reason.
+        persistDurably()
+
+        for (documentId in ids) {
+            runCatching { store.discardDeletion(documentId) }
+            clearDirty(documentId)
         }
         persist()
+    }
+
+    /**
+     * Persists through the synchronous path when the host provides one, suspending until the write
+     * has landed; falls back to the ordinary fire-and-forget persist otherwise. Throws when the
+     * durable write failed — callers use this precisely because proceeding without the write on
+     * disk would be unsafe. An invalidated engine refuses outright, for [persist]'s reason.
+     */
+    private suspend fun persistDurably() {
+        val write = onStateChangeSync ?: run {
+            persist()
+            return
+        }
+        check(!invalidated.get()) { "this engine's configuration has been replaced" }
+        write(currentState)
     }
 
     /**
@@ -726,11 +871,11 @@ class CouchSyncEngine(
         val identity = runCatching { verifyDatabaseIdentity() }.getOrNull()
         if (enforceDatabaseIdentity && identity != null && !identity.isUsable) {
             return mutex.withLock {
+                val refusal = CouchError.DatabaseIdentity(identity)
                 FlushReport(
                     stillDirty = dirty.sorted(),
-                    failures = mapOf(
-                        CouchMetaDocId.DATABASE to CouchError.DatabaseIdentity(identity).detail
-                    ),
+                    failures = mapOf(CouchMetaDocId.DATABASE to refusal.detail),
+                    failureCauses = mapOf(CouchMetaDocId.DATABASE to refusal),
                     // Terminal on purpose: no amount of retrying resolves whose library this is.
                     // The outbox keeps everything, and the user's answer is what releases it.
                     hasRetriableFailure = false,
@@ -747,6 +892,7 @@ class CouchSyncEngine(
         val merged = mutableListOf<String>()
         val stillDirty = mutableListOf<String>()
         val failures = LinkedHashMap<String, String>()
+        val failureCauses = LinkedHashMap<String, Throwable>()
         var hasRetriableFailure = false
         var retryAfterMs: Long? = null
         // The table, not only what `markDirty` was told. A repository queues a document by writing
@@ -777,7 +923,20 @@ class CouchSyncEngine(
             queue = queue - held.toSet()
         }
 
+        // Documents this pass may not push because something they name was just refused — see
+        // [suppressDependents]. Only ever ids later in [queue] than the failure that put them
+        // here, because the push order sorts dependencies first.
+        val suppressed = mutableSetOf<String>()
+
         for ((index, documentId) in queue.withIndex()) {
+            if (documentId in suppressed) {
+                stillDirty += documentId
+                continue
+            }
+            if (skipAsOversized(documentId, queue, index, suppressed, failures, failureCauses)) {
+                stillDirty += documentId
+                continue
+            }
             try {
                 when (push(documentId)) {
                     PushOutcome.PUSHED -> pushed += documentId
@@ -786,12 +945,37 @@ class CouchSyncEngine(
                 }
             } catch (error: CouchError) {
                 failures[documentId] = error.detail
+                failureCauses[documentId] = error
                 stillDirty += documentId
+                if (error is CouchError.Server && error.status == 413) {
+                    // Remember exactly what was refused, so later flushes stop re-deriving and
+                    // re-sending it until the content changes — see [oversized].
+                    runCatching { store.load(documentId) }.getOrNull()?.let { body ->
+                        oversized[documentId] = Oversized(body.updatedAt, error.requestBytes)
+                    }
+                }
                 if (error.isRetriable) {
                     hasRetriableFailure = true
                     (error as? CouchError.Server)?.retryAfterMs?.let {
                         retryAfterMs = maxOf(retryAfterMs ?: 0L, it)
                     }
+                } else if (error is CouchError.Conflict) {
+                    // Exhausted its conflict retries: the peer is writing this document faster
+                    // than this device can merge. That resolves itself the moment the peer's
+                    // burst ends, so it is retriable-with-backoff — reporting it terminal left
+                    // the controller scheduling nothing while the feed loop re-triggered a push
+                    // for the still-dirty document on every pull, an immediate-retry spin with
+                    // no backoff anywhere.
+                    hasRetriableFailure = true
+                } else if (error !is CouchError.Unauthorized && error !is CouchError.Blocked) {
+                    // The server refused this document on its merits and will keep refusing it.
+                    // Whatever is queued behind it that *names* it must not push this pass: the
+                    // push order exists so a manifest never precedes its documents, and a 413'd
+                    // page with its notebook still in the queue used to break that invariant
+                    // permanently. (A conflict is contention, not a refusal — the document is
+                    // demonstrably on the server — and unauthorized/blocked stop the whole loop
+                    // below anyway.)
+                    suppressDependents(documentId, queue, index, suppressed)
                 }
                 // Offline or a server fault applies to every remaining document too; stopping
                 // keeps one dead connection from turning into a burst of doomed requests.
@@ -815,6 +999,7 @@ class CouchSyncEngine(
                 }
             } catch (error: Exception) {
                 failures[documentId] = error.toString()
+                failureCauses[documentId] = error
                 stillDirty += documentId
                 // Not a `CouchError` at all — a store read that failed, most likely. Local faults
                 // are usually transient (a row locked, a device briefly out of space), and the
@@ -828,6 +1013,7 @@ class CouchSyncEngine(
             merged = merged,
             stillDirty = stillDirty,
             failures = failures,
+            failureCauses = failureCauses,
             hasRetriableFailure = hasRetriableFailure,
             retryAfterMs = retryAfterMs,
             databaseIdentity = identity,
@@ -838,11 +1024,81 @@ class CouchSyncEngine(
         )
     }
 
+    /**
+     * Whether [documentId] is denylisted as oversized and unchanged — in which case the refusal is
+     * reported exactly as the wire would have, minus the round trip that re-sends megabytes to be
+     * told the same thing, and its dependents are held back the same way. A changed document
+     * leaves the denylist and earns one real attempt.
+     */
+    private fun skipAsOversized(
+        documentId: String,
+        queue: List<String>,
+        index: Int,
+        suppressed: MutableSet<String>,
+        failures: MutableMap<String, String>,
+        failureCauses: MutableMap<String, Throwable>,
+    ): Boolean {
+        val entry = oversized[documentId] ?: return false
+        val current = runCatching { store.load(documentId) }.getOrNull()
+        if (current == null || current.updatedAt != entry.updatedAt) {
+            oversized.remove(documentId)
+            return false
+        }
+        val refusal = CouchError.Server(413, documentId, requestBytes = entry.requestBytes)
+        failures[documentId] = refusal.detail
+        failureCauses[documentId] = refusal
+        suppressDependents(documentId, queue, index, suppressed)
+        return true
+    }
+
+    /**
+     * Holds back, for this pass alone, everything queued after [index] that names [documentId].
+     *
+     * The push order — assets, then folders and pages, then notebooks — exists precisely so a
+     * reader never sees a manifest pointing at documents that have not landed. That invariant is
+     * only as strong as the failure handling: the loop used to continue past a non-retriable
+     * per-document refusal, so a 413'd page's notebook pushed moments later and every peer then
+     * held a manifest naming a page the server will never have. A failed page holds back its
+     * owning notebook; a failed asset holds back the queued pages and notebooks that reference it
+     * (and those pages' notebooks). Nothing is dropped — the held documents stay dirty and go out
+     * the moment their dependency does, or is edited down to size.
+     */
+    private fun suppressDependents(
+        documentId: String,
+        queue: List<String>,
+        index: Int,
+        suppressed: MutableSet<String>,
+    ) {
+        when (CouchDocId.split(documentId)?.first) {
+            CouchDocType.PAGE -> owningNotebookOf(documentId)?.let { suppressed += it }
+
+            CouchDocType.ASSET -> for (later in queue.subList(index + 1, queue.size)) {
+                val type = CouchDocId.split(later)?.first
+                if (type != CouchDocType.PAGE && type != CouchDocType.NOTEBOOK) continue
+                val body = runCatching { store.load(later) }.getOrNull() ?: continue
+                if (documentId !in body.referencedAssetIds) continue
+                suppressed += later
+                if (type == CouchDocType.PAGE) owningNotebookOf(later)?.let { suppressed += it }
+            }
+
+            else -> Unit
+        }
+    }
+
+    private fun owningNotebookOf(pageDocumentId: String): String? {
+        val body = runCatching { store.load(pageDocumentId) }.getOrNull() as? CouchDocBody.Page
+        return body?.page?.notebookId?.let { CouchDocId.notebook(it) }
+    }
+
     private enum class PushOutcome { PUSHED, MERGED_THEN_PUSHED, NOTHING_TO_PUSH }
 
     private suspend fun push(documentId: String): PushOutcome {
         var didMerge = false
-        repeat(maxPushAttempts) {
+        repeat(maxPushAttempts) { attempt ->
+            // A growing pause between conflict rounds, not before the first attempt. Immediate
+            // retries mostly re-lose the same race against a peer mid-burst; a beat is usually
+            // enough for its writes to land so the next merge is against a settled document.
+            if (attempt > 0 && conflictBackoffMs > 0) sleep(conflictBackoffMs * attempt)
             val local = store.load(documentId)
             if (local == null) {
                 // Nothing locally: the document was never created, or was cleaned up after being
@@ -1358,7 +1614,23 @@ class CouchSyncEngine(
     private fun <T> decodeOrNull(json: JsonObject, serializer: KSerializer<T>): T? =
         runCatching { couchJson.decodeFromJsonElement(serializer, json) }.getOrNull()
 
+    /**
+     * Retires this engine. Called by the host before the stack it belongs to is replaced — a
+     * settings change, or CouchDB being switched off. Requests already in flight may still finish;
+     * what stops is persistence: an invalidated engine's state describes a configuration that no
+     * longer exists, and the state key deliberately excludes credentials and the device id, so a
+     * password change rebuilds onto the *same* key — a late write from the old engine would land
+     * squarely on top of whatever the replacement has persisted since. bopa's
+     * `CouchSyncEngine.invalidate()` is the twin of this method.
+     */
+    fun invalidate() {
+        invalidated.set(true)
+    }
+
     private fun persist() {
+        // An invalidated engine's state describes a configuration that no longer exists; writing
+        // it would overwrite whatever the replacement engine has persisted since.
+        if (invalidated.get()) return
         onStateChange?.invoke(currentState)
     }
 
@@ -1366,6 +1638,9 @@ class CouchSyncEngine(
 
     companion object {
         private const val DEFAULT_MAX_PUSH_ATTEMPTS = 5
+
+        /** See [conflictBackoffMs]: retry *n* of a conflicted push waits `n × this`. */
+        private const val CONFLICT_BACKOFF_MS = 250L
 
         /** Protocol §6.7: below this many notebook tombstones, a flush is never refused. */
         private const val MASS_DELETION_FLOOR = 10

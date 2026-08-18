@@ -191,6 +191,128 @@ class RoomCouchStoreTest {
         assertArrayEquals(pictureBytes, asset!!.asset.bytes)
     }
 
+    /**
+     * The page landed while its picture was still on its way, so the canvas decoded a missing
+     * file and cached the failure. The blob's arrival is the only event that can correct that —
+     * the file watcher announces backgrounds, but a picture's path maps to nobody there — so
+     * applying the asset must notify `onPagesApplied` with the pages whose rows point at the
+     * file, exactly as a page apply would.
+     */
+    @Test
+    fun anArrivingImageBlobNotifiesThePagesShowingIt() {
+        val applied = mutableListOf<Set<String>>()
+        val notifying = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images },
+            backgroundsFolder = { backgrounds },
+            onPagesApplied = { applied += it },
+        )
+        val pageId = CouchDocId.page("p1")
+        notifying.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 5).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 0, y = 0, width = 4,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(1),
+                        )
+                    )
+                )
+            ),
+        )
+        assertEquals(listOf(pictureAssetId), notifying.missingAssetIds())
+        applied.clear()
+
+        notifying.apply(
+            pictureAssetId,
+            CouchDocBody.Asset(CouchAsset.of(pictureBytes, at = stamp(2), updatedBy = "boox")),
+        )
+
+        assertEquals(
+            "the page showing the picture has to be told to re-read",
+            listOf(setOf("p1")),
+            applied,
+        )
+
+        // An asset nobody places writes its bytes and stays silent: there is no stale canvas.
+        applied.clear()
+        val strayBytes = "an image no page has placed".toByteArray()
+        notifying.apply(
+            CouchAssetId.forBytes(strayBytes),
+            CouchDocBody.Asset(CouchAsset.of(strayBytes, at = stamp(3), updatedBy = "boox")),
+        )
+        assertTrue("no page shows this file; nobody needs telling", applied.isEmpty())
+    }
+
+    /**
+     * The hash of a placed image is asked for on every load of every page — per push and per
+     * apply — and used to be recomputed from the bytes each time. The mtime+size-keyed cache that
+     * already spared backgrounds covers images now: an unchanged file is digested once, ever.
+     */
+    @Test
+    fun anUnchangedImageIsHashedOnceAcrossLoads() {
+        var hashes = 0
+        val counting = RoomCouchStore(
+            repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images },
+            backgroundsFolder = { backgrounds },
+            hashFile = { file ->
+                hashes += 1
+                CouchAssetId.sha256Hex(file)
+            },
+        )
+        val file = File(images, "holiday.png").apply { writeBytes(pictureBytes) }
+        val pageId = CouchDocId.page("p1")
+        counting.apply(
+            pageId,
+            CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)),
+        )
+        runBlocking {
+            repository.imageRepository.create(
+                Image(
+                    id = "i1", x = 1, y = 2, width = 3, height = 4,
+                    uri = file.absolutePath, pageId = "p1",
+                )
+            )
+        }
+
+        val first = counting.load(pageId) as? CouchDocBody.Page
+        assertEquals(listOf(pictureAssetId), first!!.page.images.map { it.assetId })
+        assertTrue("the first look has to read the file", hashes >= 1)
+
+        val afterFirst = hashes
+        val second = counting.load(pageId) as? CouchDocBody.Page
+        assertEquals(listOf(pictureAssetId), second!!.page.images.map { it.assetId })
+        assertEquals(
+            "the second load of an unchanged image must not re-read its bytes",
+            afterFirst,
+            hashes,
+        )
+
+        // An incoming apply consults the held-bytes map over the same cache: still no re-read.
+        counting.apply(
+            pageId,
+            CouchDocBody.Page(
+                page(emptyList(), notebookId = "nb1", updatedAt = 9).copy(
+                    images = listOf(
+                        CouchImage(
+                            id = "i1", assetId = pictureAssetId, x = 1, y = 2, width = 3,
+                            height = 4, createdAt = stamp(1), updatedAt = stamp(9),
+                        )
+                    )
+                )
+            ),
+            basedOn = first,
+        )
+        assertEquals("an apply must not re-hash unchanged pictures", afterFirst, hashes)
+
+        // A changed file is a different picture and must be re-read.
+        file.writeBytes("different bytes entirely".toByteArray())
+        counting.load(pageId)
+        assertTrue("an edited file has to be re-read", hashes > afterFirst)
+    }
+
     /** The window this whole mechanism exists for: the page has arrived, the picture has not. */
     @Test
     fun anIncomingImageIsOwedUntilItsBytesArrive() {

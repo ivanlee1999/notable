@@ -164,6 +164,128 @@ class CouchDatabaseIdentityTest {
         assertEquals("gen-first", second.currentState.databaseGeneration)
     }
 
+    /**
+     * §1.2: a generation is minted *with the database*. A device that finds an empty, unnamed
+     * database where its stored generation named a populated one is looking at a wipe-and-recreate
+     * — re-writing the old generation onto it would make the wipe invisible: the checkpoint stays
+     * "matched" and never replays, the library is never re-offered, and every device reports
+     * healthy while the server copy is silently gone.
+     */
+    @Test
+    fun `claiming an empty database over a prior identity mints fresh and re-uploads`() =
+        runBlocking {
+            store.set(
+                CouchDocId.notebook("nb1"),
+                CouchDocBody.Notebook(
+                    CouchNotebook(
+                        title = "held here", pageIds = listOf("p1"),
+                        createdAt = "2026-01-01T00:00:00Z", updatedAt = "2026-01-01T00:00:00Z",
+                        updatedBy = "boox",
+                    )
+                ),
+            )
+            store.set(
+                CouchDocId.page("p1"),
+                CouchDocBody.Page(
+                    CouchPage(
+                        notebookId = "nb1",
+                        createdAt = "2026-01-01T00:00:00Z", updatedAt = "2026-01-01T00:00:00Z",
+                        updatedBy = "boox",
+                    )
+                ),
+            )
+            val engine = engine(
+                state = CouchSyncState(
+                    lastSeq = "42",
+                    revs = mapOf(CouchDocId.notebook("nb1") to "3-abc"),
+                    databaseGeneration = "gen-old",
+                ),
+                generation = "gen-minted",
+            )
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                "the new database gets a new name, never the dead one's",
+                CouchSyncEngine.DatabaseIdentity.Matched("gen-minted"),
+                identity,
+            )
+            val state = engine.currentState
+            assertEquals("gen-minted", state.databaseGeneration)
+            assertEquals("the checkpoint described the dead database's feed", "0", state.lastSeq)
+            assertTrue("stale revs would suppress the re-upload as echoes", state.revs.isEmpty())
+            assertEquals(
+                "everything this device holds has to be re-offered",
+                store.allDocumentIds().toSet(),
+                state.dirty,
+            )
+        }
+
+    /** A fresh install has no prior claim and no library: the claim stays quiet. */
+    @Test
+    fun `a fresh install claims an empty database without queueing anything`() = runBlocking {
+        val engine = engine(generation = "gen-new")
+
+        val identity = engine.verifyDatabaseIdentity()
+
+        assertEquals(CouchSyncEngine.DatabaseIdentity.Matched("gen-new"), identity)
+        assertTrue("nothing to re-upload, nothing queued", engine.currentState.dirty.isEmpty())
+        assertEquals("0", engine.currentState.lastSeq)
+    }
+
+    /**
+     * The 409-loser arm of the claim. §1.2 lets the loser adopt the winner's generation only when
+     * it has no prior identity of its own — a device that was syncing a different generation has
+     * met a generation change, and a human decides what happens to the two libraries.
+     */
+    @Test
+    fun `losing the claim race with a prior identity is a generation change, not adoption`() =
+        runBlocking {
+            var raced = false
+            val racing = object : CouchTransport {
+                override fun send(request: CouchRequest): CouchResponse {
+                    if (!raced && request.method == "PUT" &&
+                        request.path.endsWith(CouchMetaDocId.DATABASE)
+                    ) {
+                        raced = true
+                        // The peer names the recreated database in the gap between this device's
+                        // read and its write.
+                        seedMetadata(generation = "gen-winner")
+                        return CouchResponse(
+                            status = 409,
+                            body = """{"error":"conflict"}""".toByteArray(),
+                        )
+                    }
+                    return server.send(request)
+                }
+            }
+            val engine = CouchSyncEngine(
+                CouchDbClient(racing, database = "notes"),
+                store,
+                deviceId = "boox",
+                state = CouchSyncState(lastSeq = "42", databaseGeneration = "gen-old"),
+                nowIso = { "2026-08-13T00:00:00Z" },
+                newGeneration = { "gen-mine" },
+            )
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                CouchSyncEngine.DatabaseIdentity.GenerationChanged("gen-old", "gen-winner"),
+                identity,
+            )
+            assertEquals(
+                "the stored identity must not be overwritten by the winner's",
+                "gen-old",
+                engine.currentState.databaseGeneration,
+            )
+            assertEquals(
+                "and the checkpoint must not be reset on this device's own",
+                "42",
+                engine.currentState.lastSeq,
+            )
+        }
+
     // endregion
 
     // region Refusing
@@ -266,6 +388,60 @@ class CouchDatabaseIdentityTest {
             assertEquals(
                 CouchSyncEngine.DatabaseIdentity.Locked("rebuilding from the iPad"), e.identity)
         }
+    }
+
+    /**
+     * A `_deleted` identity document is somebody having reset the database's bookkeeping, not live
+     * metadata and not an error. A PUT-style tombstone keeps its body, so the typed read used to
+     * decode it and treat a deleted identity as an authoritative one; it reads as absent now —
+     * claim if empty, Unknown otherwise.
+     */
+    @Test
+    fun `a tombstoned identity document reads as absent and an empty database is re-claimed`() =
+        runBlocking {
+            seedMetadata(generation = "gen-dead")
+            server.seed(
+                CouchMetaDocId.DATABASE,
+                CouchDatabaseMetadata(generation = "gen-dead", updatedAt = "2026-08-13T00:00:00Z"),
+                CouchDatabaseMetadata.serializer(),
+                deleted = true,
+            )
+            val engine = engine(generation = "gen-reborn")
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                "an empty database whose identity was deleted is named afresh",
+                CouchSyncEngine.DatabaseIdentity.Matched("gen-reborn"),
+                identity,
+            )
+        }
+
+    /**
+     * The worse half of the same defect: a tombstone from a plain HTTP `DELETE` keeps no body, so
+     * the typed decode threw `MalformedResponse` straight through the NotFound-only catch — and
+     * `pull` checks identity unconditionally, so one deleted identity document permanently failed
+     * every pull.
+     */
+    @Test
+    fun `a bare identity tombstone does not fail the pull`() = runBlocking {
+        // What a DELETE-verb tombstone looks like when read back: `_deleted` and nothing else.
+        server.seedRaw(CouchMetaDocId.DATABASE, buildJsonObject { }, deleted = true)
+        server.seedRaw(CouchDocId.notebook("nb1"), notebookJson())
+        val engine = engine()
+
+        val report = engine.pull()
+
+        assertEquals(
+            "the pull must proceed and deliver the library",
+            listOf(CouchDocId.notebook("nb1")),
+            report.applied,
+        )
+        assertEquals(
+            "a populated database with only tombstoned bookkeeping is Unknown, not renamed",
+            CouchSyncEngine.DatabaseIdentity.Unknown,
+            report.databaseIdentity,
+        )
     }
 
     // endregion
