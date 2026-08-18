@@ -407,6 +407,52 @@ class MergeTest {
         )
     }
 
+    /**
+     * §6.4 liveness: ink no longer moves a notebook's envelope, so the deletion comparison reads
+     * the newest page clock too — and a survival the envelope does not show stamps the envelope
+     * to that instant, so the refusal travels to peers that never consult a content clock (every
+     * build before this one).
+     */
+    @Test
+    fun a_deletion_yields_to_newer_ink_the_envelope_does_not_show() {
+        val tombstone = CouchDeletedDoc(
+            type = "notebook", deletedAt = "2026-08-10T06:05:00Z", updatedBy = "ipad",
+        )
+        val notebook = CouchNotebook(
+            title = "Field notes", pageIds = listOf("p1"),
+            createdAt = "2026-08-01T00:00:00Z", updatedAt = "2026-08-10T06:00:00Z",
+            updatedBy = "boox",
+        )
+
+        // Ink at 06:10 outlives the 06:05 deletion even though the envelope says 06:00.
+        val survived = CouchMerge.mergeBodies(
+            CouchDocBody.Deleted(tombstone), CouchDocBody.Notebook(notebook),
+            contentClock = "2026-08-10T06:10:00Z",
+        )
+        assertEquals(
+            "the envelope is stamped to the instant that justified survival",
+            "2026-08-10T06:10:00Z",
+            (survived as CouchDocBody.Notebook).notebook.updatedAt,
+        )
+
+        // Without the clock the old envelope loses — the regression this guards against.
+        assertEquals(
+            CouchDocBody.Deleted(tombstone),
+            CouchMerge.mergeBodies(
+                CouchDocBody.Deleted(tombstone), CouchDocBody.Notebook(notebook),
+            ),
+        )
+
+        // Ink older than the deletion does not resurrect: liveness is a fact, not a veto.
+        assertEquals(
+            CouchDocBody.Deleted(tombstone),
+            CouchMerge.mergeBodies(
+                CouchDocBody.Deleted(tombstone), CouchDocBody.Notebook(notebook),
+                contentClock = "2026-08-10T06:02:00Z",
+            ),
+        )
+    }
+
     // endregion
 
     /**

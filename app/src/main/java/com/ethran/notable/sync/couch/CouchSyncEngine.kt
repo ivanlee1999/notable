@@ -114,9 +114,19 @@ sealed class CouchDocBody {
  *
  * Mismatched shapes (a page against a notebook) cannot arise from a well-formed database — the id
  * prefix fixes the type — so they are reported as null rather than guessed at.
+ *
+ * [contentClock] is the newest content instant the *store* holds for this document beyond its
+ * envelope — for a notebook, the newest `updatedAt` among its local pages (see
+ * [CouchLocalStore.contentClock]). §6.4's delete-vs-edit question is "was there work after the
+ * deletion", and since an ink save deliberately no longer advances the notebook's envelope (the
+ * envelope is what renames and moves are decided by, and ink used to clobber them), the envelope
+ * alone can no longer answer it: ink drawn after a peer's purge would be destroyed by a deletion
+ * it outlived. The clock restores the signal without touching the envelope semantics.
  */
 @Suppress("UnusedReceiverParameter")
-fun CouchMerge.mergeBodies(a: CouchDocBody, b: CouchDocBody): CouchDocBody? = when {
+fun CouchMerge.mergeBodies(
+    a: CouchDocBody, b: CouchDocBody, contentClock: String? = null
+): CouchDocBody? = when {
     a is CouchDocBody.Page && b is CouchDocBody.Page ->
         CouchDocBody.Page(CouchMerge.mergePage(a.page, b.page))
 
@@ -134,8 +144,8 @@ fun CouchMerge.mergeBodies(a: CouchDocBody, b: CouchDocBody): CouchDocBody? = wh
         CouchDocBody.Deleted(mergeTombstones(a.tombstone, b.tombstone))
 
     // An edit made after the deletion resurrects the document; otherwise the delete stands.
-    a is CouchDocBody.Deleted -> resolveTombstoneAgainstLive(a.tombstone, b)
-    b is CouchDocBody.Deleted -> resolveTombstoneAgainstLive(b.tombstone, a)
+    a is CouchDocBody.Deleted -> resolveTombstoneAgainstLive(a.tombstone, b, contentClock)
+    b is CouchDocBody.Deleted -> resolveTombstoneAgainstLive(b.tombstone, a, contentClock)
 
     else -> null
 }
@@ -170,11 +180,30 @@ private fun mergeTombstones(x: CouchDeletedDoc, y: CouchDeletedDoc): CouchDelete
 private fun resolveTombstoneAgainstLive(
     tombstone: CouchDeletedDoc,
     live: CouchDocBody,
-): CouchDocBody = when (
-    CouchMerge.resolveDeletion(live.updatedAt, tombstone.deletedAt.ifEmpty { null })
-) {
-    CouchMerge.DeletionOutcome.RESURRECT -> live
-    CouchMerge.DeletionOutcome.APPLY_DELETION -> CouchDocBody.Deleted(tombstone)
+    contentClock: String?,
+): CouchDocBody {
+    // The document's liveness: its envelope, or the newest content the applier holds for it —
+    // whichever is later. Ink no longer moves a notebook's envelope, so the envelope alone would
+    // let a deletion destroy pages written after it.
+    val liveness =
+        if (contentClock == null) live.updatedAt
+        else CouchMerge.later(live.updatedAt, contentClock)
+    return when (CouchMerge.resolveDeletion(liveness, tombstone.deletedAt.ifEmpty { null })) {
+        CouchMerge.DeletionOutcome.RESURRECT ->
+            if (live is CouchDocBody.Notebook &&
+                CouchMerge.millis(live.notebook.updatedAt) < CouchMerge.millis(liveness)
+            ) {
+                // The survival was justified by content the envelope does not show. Stamp the
+                // envelope to that instant — the resurrection edit — so the refusal travels: a
+                // peer that already applied the deletion compares this envelope against its
+                // tombstone and resurrects too, whatever build it runs. Without the stamp the
+                // refusal would be re-litigated (and could be lost) on every later merge.
+                CouchDocBody.Notebook(live.notebook.copy(updatedAt = liveness))
+            } else {
+                live
+            }
+        CouchMerge.DeletionOutcome.APPLY_DELETION -> CouchDocBody.Deleted(tombstone)
+    }
 }
 
 // endregion
@@ -188,6 +217,18 @@ private fun resolveTombstoneAgainstLive(
 interface CouchLocalStore {
     /** Current local content, or null when this device has never held the document. */
     fun load(documentId: String): CouchDocBody?
+
+    /**
+     * The newest content instant this device holds for the document *beyond* its envelope — for
+     * a notebook, the newest `updatedAt` among its local pages; null for every other type and
+     * for a notebook with no pages here.
+     *
+     * Read only by §6.4's delete-vs-edit comparison (see [mergeBodies]). Deliberately not folded
+     * into [load]'s envelope: what [load] returns is what gets pushed, and inflating a pushed
+     * envelope with ink time would hand ink the power to overwrite renames again — the exact
+     * defect removing the ink-save bump fixed.
+     */
+    fun contentClock(documentId: String): String? = null
 
     /**
      * Every document this device holds, including tombstones it has yet to push. The denominator
@@ -1134,7 +1175,8 @@ class CouchSyncEngine(
                     return@repeat
                 }
                 revs[documentId] = remote.first
-                val merged = CouchMerge.mergeBodies(local, remote.second)
+                val merged =
+                    CouchMerge.mergeBodies(local, remote.second, store.contentClock(documentId))
                 if (merged == null) {
                     // Shapes disagree — do not overwrite either side.
                     client.getRaw(documentId)?.let { store.applyConflictCopy(documentId, it.json) }
@@ -1438,7 +1480,7 @@ class CouchSyncEngine(
             val local = store.load(row.id)
             val merged: CouchDocBody
             if (local != null) {
-                val result = CouchMerge.mergeBodies(local, incoming)
+                val result = CouchMerge.mergeBodies(local, incoming, store.contentClock(row.id))
                 if (result == null) {
                     // Nothing to preserve when the body never arrived; the tombstone is the fact,
                     // and the revision still has to be recorded so the next push builds on it.
