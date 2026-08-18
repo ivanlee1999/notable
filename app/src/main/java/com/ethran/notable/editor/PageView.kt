@@ -499,11 +499,20 @@ class PageView(
         return pageDataManager.getStrokes(strokeIds, currentPageId)
     }
 
+    /**
+     * Re-measures the page after strokes landed, through the same grow-stop the load path uses.
+     *
+     * This used to nudge [height] directly — `stroke.bottom + 50`, no ceiling — so a stroke
+     * touching the visible bottom of a declared page always grew it, and each such stroke
+     * unlocked another ~50px of scroll past the sheet. The overflow only lived until the next
+     * open: the load-time measurement clamps to the sheet, which turned that ink from off-page
+     * into unreachable. [PageDataManager.recomputeHeight] applies the identical rule live —
+     * never taller than the sheet, or than the page already was this session, which is also the
+     * exemption that keeps a legacy tall page's below-sheet ink reachable.
+     */
     fun updateHeightForChange(strokesChanged: List<Stroke>) {
-        strokesChanged.forEach {
-            val bottomPlusPadding = it.bottom + 50
-            if (bottomPlusPadding > height) height = bottomPlusPadding.toInt()
-        }
+        if (strokesChanged.isEmpty()) return
+        pageDataManager.recomputeHeight(currentPageId)
     }
 
     private fun saveStrokesToPersistLayer(strokes: List<Stroke>) =

@@ -1,6 +1,7 @@
 package com.ethran.notable.data
 
 import com.ethran.notable.data.model.PageSizePreset
+import com.ethran.notable.editor.PageViewportBounds
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -60,5 +61,30 @@ class PageHeightGrowStopTest {
     fun `a stale session height below the sheet cannot pull the page under it`() {
         // Whatever the session claims, the page is at least its sheet.
         assertEquals(sheet, PageHeightGrowStop.clamp(sheet, sheet, sessionHeight = sheet / 2))
+    }
+
+    @Test
+    fun `writing at the bottom edge repeatedly cannot ratchet the page taller`() {
+        // The live-write path. PageView used to grow the height directly on each stroke —
+        // `bottom + 50`, no ceiling — so a stroke touching the visible bottom of a declared page
+        // always exceeded the height and unlocked another ~50px of scroll, stroke after stroke.
+        // Writing now re-measures through contentExtent and this clamp, exactly like the load
+        // path, so a session of writing at the edge holds the line the sheet draws.
+        var height: Int? = sheet // a declared page, loaded and already measured at its sheet
+        repeat(5) {
+            val strokeBottom = height!!.toFloat() // ink touching the visible bottom
+            val measured = PageViewportBounds.contentExtent(sheet, listOf(strokeBottom))
+            height = PageHeightGrowStop.clamp(measured, sheet, height)
+        }
+        assertEquals(sheet, height)
+    }
+
+    @Test
+    fun `writing at the bottom of a legacy tall page keeps its extent, not more`() {
+        // The same live write on a page that already holds ink below its sheet: the measured
+        // extent may exceed the sheet, but never what the page already was.
+        val tall = sheet * 3
+        val measured = PageViewportBounds.contentExtent(sheet, listOf(tall.toFloat()))
+        assertEquals(tall, PageHeightGrowStop.clamp(measured, sheet, sessionHeight = tall))
     }
 }
