@@ -22,6 +22,7 @@ import com.ethran.notable.editor.utils.configureCalligraphyLiveAngle
 import com.ethran.notable.editor.utils.copyInputToSimplePointF
 import com.ethran.notable.editor.utils.ERASER_INDICATOR_COLOR
 import com.ethran.notable.editor.utils.enableNativeEraser
+import com.ethran.notable.editor.utils.eraserIndicatorWidth
 import com.ethran.notable.editor.utils.getModifiedStrokeEndpoints
 import com.ethran.notable.editor.utils.handleDraw
 import com.ethran.notable.editor.utils.handleErase
@@ -118,7 +119,8 @@ class OnyxInputHandler(
             // on every resume) resets it to disabled internally. The track style follows the active
             // eraser type: the wide marker (style 8) for the pen/drag eraser, a dotted outline
             // (DASH style 5) for the lasso/select eraser. See docs/onyx-sdk/onyx-native-eraser-indicator.md.
-            enableNativeEraser(touchHelper, toolbarState.eraser)
+            // The current zoom rides along so the track matches the swath actually erased.
+            enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
             // The eraser channel carries no colour of its own — the firmware paints the track with
             // the global setStrokeColor. Set it here (width comes from the style's params, so this
             // touches colour only, not thickness). This is the one thing we still set on begin.
@@ -183,8 +185,11 @@ class OnyxInputHandler(
     private fun applyEraserIndicatorStyle(penEraserColor: Int = Color.BLACK) {
         if (touchHelper == null) return
         when (toolbarState.eraser) {
+            // Scaled by zoom exactly like the Draw path above: the swath handleErase deletes is
+            // 30 page units, so the on-screen track is 30·zoom px. updatePenAndStroke runs on
+            // every zoom change, which keeps this current.
             Eraser.PEN -> touchHelper!!.setStrokeStyle(penToStroke(Pen.MARKER))
-                ?.setStrokeWidth(30f)
+                ?.setStrokeWidth(eraserIndicatorWidth(page.zoomLevel.value))
                 ?.setStrokeColor(penEraserColor)
 
             Eraser.SELECT -> {
@@ -210,7 +215,7 @@ class OnyxInputHandler(
             // setRawDrawingEnabled(true) resets the framework stroke config to firmware defaults
             // (brush channel on, eraser channel off). Re-assert the eraser channel (styled for the
             // active eraser type) and re-send the active pen style so the next stroke uses the tool.
-            enableNativeEraser(touchHelper, toolbarState.eraser)
+            enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
             updatePenAndStroke()
         } else {
             // A pending resetScreenFreeze resume would re-freeze the screen after we disable
@@ -250,7 +255,8 @@ class OnyxInputHandler(
                 drawCanvas,
                 touchHelper,
                 toolbarThickness,
-                titleBarHeight
+                titleBarHeight,
+                zoom = page.zoomLevel.value
             )
             // setupSurface resets the framework stroke style to firmware defaults. Re-send the
             // pen style here, inside the same coroutine and after the surface is armed: a caller

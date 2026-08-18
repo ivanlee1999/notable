@@ -37,11 +37,20 @@ fun isWithinScribbleGrace(lastStrokeEndTime: Long, firstPointTime: Long): Boolea
     firstPointTime < lastStrokeEndTime + SCRIBBLE_TO_ERASE_GRACE_PERIOD_MS
 
 /**
- * Width (px) of the pen-eraser swath: the diameter of the region [handleErase] actually deletes.
- * Shared so the native side-button eraser indicator (see einkHelper.enableNativeEraser) is drawn
- * at exactly the size it erases.
+ * Width of the pen-eraser swath in PAGE units: the diameter of the region [handleErase] actually
+ * deletes. Shared so the native side-button eraser indicator (see einkHelper.enableNativeEraser)
+ * is drawn at exactly the size it erases — through [eraserIndicatorWidth], because the indicator
+ * lives on the screen and page units only match screen pixels at zoom 1.
  */
 const val ERASER_SWATH_WIDTH = 30f
+
+/**
+ * The on-screen width of the eraser indicator for a given [zoom] — the swath's page-unit diameter
+ * scaled exactly the way the Draw path scales a pen's live width (`strokeSize * zoomLevel`).
+ * Unscaled, the firmware track showed a 30px circle while the erase removed 30·zoom px of ink:
+ * too small zoomed in, too wide zoomed out.
+ */
+fun eraserIndicatorWidth(zoom: Float): Float = ERASER_SWATH_WIDTH * zoom
 
 const val MINIMUM_SCRIBBLE_POINTS = 15
 
