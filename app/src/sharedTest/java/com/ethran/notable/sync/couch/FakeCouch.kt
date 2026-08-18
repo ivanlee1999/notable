@@ -187,10 +187,16 @@ class FakeCouchTransport : CouchTransport {
             // client that answers a peer's tombstone by writing the same tombstone back therefore
             // never converges, it just burns its retries.
             if (existing.deleted && deleted) return conflict()
-            // A stale revision is the whole point of the conflict path; a tombstone may be
-            // overwritten without one, which is how a deleted document gets resurrected.
-            if (!existing.deleted || providedRev != null) {
-                if (providedRev != existing.rev) return conflict()
+            // Resurrecting is a *create*, never an update. CouchDB refuses a PUT that carries a
+            // revision at a deleted leaf — verified against 3.5.2: `_rev` at the tombstone's own
+            // current revision answers 409 just as a stale one does, and only a body with no
+            // revision at all brings the document back. This fake used to accept the revisioned
+            // form, which is why an engine that retried its resurrection at `remote.rev` passed
+            // every unit test here and then span forever against a real server.
+            if (existing.deleted) {
+                if (providedRev != null) return conflict()
+            } else if (providedRev != existing.rev) {
+                return conflict()
             }
         } else if (providedRev != null) {
             return conflict()

@@ -1530,4 +1530,48 @@ class CouchSyncEngineTest {
         // The work must survive: the user fixes the URL and the page still pushes.
         assertEquals(1, engine.pendingCount)
     }
+
+    /**
+     * Protocol §6.4. The resurrection has to reach the *server*, not merely survive locally.
+     *
+     * CouchDB will not let a revision write over a tombstone: a PUT carrying `_rev` at a deleted
+     * leaf is a 409 even when the revision is the document's current one (verified against 3.5.2),
+     * and only a body with no revision at all brings the document back. So an engine that answers
+     * the 409 by re-pushing at the fetched revision can never land the survival — it burns its
+     * retries and leaves the id dirty forever, with the notebook alive here and deleted on every
+     * peer. This asserts the create-retry that gets it there.
+     */
+    @Test
+    fun a_resurrection_is_pushed_as_a_create_over_the_peers_tombstone() = runBlocking {
+        ipadStore.set(notebookId, CouchDocBody.Notebook(notebook("notes", listOf("p1"), 1, "ipad")))
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        boox.pull()
+
+        // The iPad empties the Trash, and that reaches the server first.
+        ipadStore.set(notebookId, tombstone(at = 10, by = "ipad"))
+        ipad.markDirty(listOf(notebookId))
+        ipad.flush()
+        assertTrue(server.isDeleted(notebookId))
+
+        // The BOOX edited it after the deletion, and only finds out now.
+        val known = booxStore.notebook(notebookId)!!
+        booxStore.set(
+            notebookId,
+            CouchDocBody.Notebook(known.copy(title = "still wanted", updatedAt = stamp(20)))
+        )
+        boox.markDirty(listOf(notebookId))
+        val flush = boox.flush()
+
+        assertEquals("the push must not be left in the outbox", emptyMap<String, String>(), flush.failures)
+        assertFalse("the work outlived the deletion, so the notebook must be back", server.isDeleted(notebookId))
+        assertEquals("still wanted", booxStore.notebook(notebookId)?.title)
+        assertEquals("nothing should be left waiting", 0, boox.pendingCount)
+
+        // And the deleting device gets it back on its next pull, which is the whole point of
+        // pushing it: the refusal has to travel, not just hold locally.
+        ipad.pull()
+        assertFalse(ipadStore.body(notebookId)?.isDeleted ?: false)
+        assertEquals("still wanted", ipadStore.notebook(notebookId)?.title)
+    }
 }
