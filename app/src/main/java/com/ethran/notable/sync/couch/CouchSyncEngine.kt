@@ -520,7 +520,7 @@ class CouchSyncEngine(
 
         val stored = databaseGeneration
         val metadata = try {
-            client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())?.body
+            readDatabaseMetadata()
         } catch (e: CouchError.NotFound) {
             null
         }
@@ -563,6 +563,33 @@ class CouchSyncEngine(
         }
         identity = resolved
         return@withLock resolved
+    }
+
+    /**
+     * The identity document as live metadata, or null when the server effectively holds none.
+     *
+     * Read raw rather than through the typed `get`, because two shapes of tombstone must read as
+     * *absent* and used not to:
+     *
+     * - A `_deleted` document written with its body intact (a `PUT` tombstone) decoded cleanly and
+     *   was treated as live metadata — a deleted identity resurrected as an authoritative one.
+     * - A bare tombstone from a plain HTTP `DELETE` carries no `generation`, so the typed decode
+     *   threw [CouchError.MalformedResponse] straight through [verifyDatabaseIdentity]'s
+     *   NotFound-only catch — and since [pull] calls the check unconditionally, one deleted
+     *   identity document permanently failed every pull.
+     *
+     * A deleted identity document is somebody having reset the database's bookkeeping, not a
+     * statement about whose database it is: the null routes into the existing no-metadata branch —
+     * claim it when empty, [DatabaseIdentity.Unknown] otherwise. An identity document that exists
+     * but will not decode is treated the same way, for the same reason: refusing to sync forever
+     * over unreadable bookkeeping is strictly worse than treating it as not-yet-known.
+     */
+    private suspend fun readDatabaseMetadata(): CouchDatabaseMetadata? {
+        val raw = client.getRaw(CouchMetaDocId.DATABASE) ?: return null
+        if (raw.deleted) return null
+        return runCatching {
+            couchJson.decodeFromJsonElement(CouchDatabaseMetadata.serializer(), raw.json)
+        }.getOrNull()
     }
 
     /**

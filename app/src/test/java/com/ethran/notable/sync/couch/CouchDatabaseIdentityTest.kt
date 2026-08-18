@@ -390,6 +390,60 @@ class CouchDatabaseIdentityTest {
         }
     }
 
+    /**
+     * A `_deleted` identity document is somebody having reset the database's bookkeeping, not live
+     * metadata and not an error. A PUT-style tombstone keeps its body, so the typed read used to
+     * decode it and treat a deleted identity as an authoritative one; it reads as absent now —
+     * claim if empty, Unknown otherwise.
+     */
+    @Test
+    fun `a tombstoned identity document reads as absent and an empty database is re-claimed`() =
+        runBlocking {
+            seedMetadata(generation = "gen-dead")
+            server.seed(
+                CouchMetaDocId.DATABASE,
+                CouchDatabaseMetadata(generation = "gen-dead", updatedAt = "2026-08-13T00:00:00Z"),
+                CouchDatabaseMetadata.serializer(),
+                deleted = true,
+            )
+            val engine = engine(generation = "gen-reborn")
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                "an empty database whose identity was deleted is named afresh",
+                CouchSyncEngine.DatabaseIdentity.Matched("gen-reborn"),
+                identity,
+            )
+        }
+
+    /**
+     * The worse half of the same defect: a tombstone from a plain HTTP `DELETE` keeps no body, so
+     * the typed decode threw `MalformedResponse` straight through the NotFound-only catch — and
+     * `pull` checks identity unconditionally, so one deleted identity document permanently failed
+     * every pull.
+     */
+    @Test
+    fun `a bare identity tombstone does not fail the pull`() = runBlocking {
+        // What a DELETE-verb tombstone looks like when read back: `_deleted` and nothing else.
+        server.seedRaw(CouchMetaDocId.DATABASE, buildJsonObject { }, deleted = true)
+        server.seedRaw(CouchDocId.notebook("nb1"), notebookJson())
+        val engine = engine()
+
+        val report = engine.pull()
+
+        assertEquals(
+            "the pull must proceed and deliver the library",
+            listOf(CouchDocId.notebook("nb1")),
+            report.applied,
+        )
+        assertEquals(
+            "a populated database with only tombstoned bookkeeping is Unknown, not renamed",
+            CouchSyncEngine.DatabaseIdentity.Unknown,
+            report.databaseIdentity,
+        )
+    }
+
     // endregion
 
     // region The staged rollout
