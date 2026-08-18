@@ -409,11 +409,26 @@ class RoomCouchStore(
                 val pieces = PageSplit.split(doc, pageId, sheet, now, deviceId)
                 if (pieces.size <= 1) continue
 
-                for (piece in pieces.drop(1)) applyPage(piece.id, piece.page, basedOn = null)
+                for (piece in pieces.drop(1)) {
+                    // A child can already exist: the parent re-grew after an earlier division —
+                    // a peer that has not learned the split pushing new below-sheet ink is the
+                    // usual way. The produced child is built from the parent alone, so applying
+                    // it as-is would erase whatever was drawn on the child since; folding it
+                    // through the ordinary page merge keeps both.
+                    val existing =
+                        if (appRepository.pageRepository.getById(piece.id) == null) null
+                        else loadPage(piece.id)
+                    val landed =
+                        if (existing == null) piece.page
+                        else CouchMerge.mergePage(existing, piece.page)
+                    applyPage(piece.id, landed, basedOn = null)
+                }
                 applyPage(pieces[0].id, pieces[0].page, basedOn = null)
 
                 val at = pageIds.indexOf(pageId)
-                val children = pieces.drop(1).map { it.id }
+                // A re-divided page's children are usually listed already; they keep the place
+                // they have rather than being filed twice.
+                val children = pieces.drop(1).map { it.id }.filter { it !in pageIds }
                 pageIds =
                     if (at < 0) pageIds + children
                     else pageIds.take(at + 1) + children + pageIds.drop(at + 1)

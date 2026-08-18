@@ -33,9 +33,10 @@ import kotlin.math.floor
  *   pushes its own version back, and the notebook never converges. The tombstones are scoped to
  *   the parent *document*, so the same ink living on a child under the same id is untouched, and
  *   a peer on an older build converges too, because every merge already honours `deletedStrokes`.
- *   Children inherit only the tombstones the parent already had: an erasure made while the page
- *   was tall must outrank a peer's independent split, which would otherwise re-file the erased
- *   stroke onto a child this side has no record of.
+ *   The children start with no tombstones at all: one handed down could name ink that already
+ *   lives on that child — moved there by an earlier division of the same page, before it re-grew
+ *   under a peer's push — and would erase it on the next merge. Erasures made while the page was
+ *   tall stay recorded on sheet 0, whose id is the page's own.
  */
 object PageSplit {
 
@@ -140,12 +141,12 @@ object PageSplit {
                 declaring(sheet, page).copy(
                     strokes = strokes,
                     images = images,
-                    // Children inherit the parent's existing tombstones (they arrive via `copy`);
-                    // only the first sheet adds the ones for the ink that moved out of it.
+                    // Sheet 0 keeps the page's tombstones and adds the moved ink's; the children
+                    // start clean — see the class doc for why handing one down would be a trap.
                     deletedStrokes =
-                        if (index == 0) page.deletedStrokes + movedStrokes else page.deletedStrokes,
+                        if (index == 0) page.deletedStrokes + movedStrokes else emptyList(),
                     deletedImages =
-                        if (index == 0) page.deletedImages + movedImages else page.deletedImages,
+                        if (index == 0) page.deletedImages + movedImages else emptyList(),
                     updatedBy = updatedBy,
                 ).also { it.updatedAt = now },
             )

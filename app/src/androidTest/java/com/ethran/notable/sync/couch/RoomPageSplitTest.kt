@@ -259,6 +259,34 @@ class RoomPageSplitTest {
     }
 
     @Test
+    fun a_regrown_parent_does_not_rebuild_its_children() = runBlocking {
+        val seeded = seedTallPage()
+        store.splitOversizedPages(seeded.notebookId)
+        val child1 = PageSplit.childId(seeded.pageId, 1)
+        val child2 = PageSplit.childId(seeded.pageId, 2)
+
+        // Ink drawn on the child after the division…
+        repository.strokeRepository.create(listOf(stroke(child1, top = 50f, id = "child-ink")))
+        // …and the parent re-grown underneath it, the way a peer that has not learned the
+        // split pushes new below-sheet ink.
+        repository.strokeRepository.create(listOf(stroke(seeded.pageId, top = 1300f, id = "regrown")))
+
+        val rewritten = store.splitOversizedPages(seeded.notebookId)
+
+        assertTrue(rewritten.isNotEmpty())
+        val childStrokes = repository.pageRepository.getWithDataById(child1)!!.strokes
+        assertEquals(
+            setOf(seeded.onSheet1.id, "child-ink", "regrown"),
+            childStrokes.map { it.id }.toSet(),
+        )
+        // The page list holds each page once, in the order the first division filed them.
+        assertEquals(
+            listOf(seeded.pageId, child1, child2),
+            repository.bookRepository.getById(seeded.notebookId)!!.pageIds,
+        )
+    }
+
+    @Test
     fun a_page_inside_its_sheet_is_untouched() = runBlocking {
         val notebook = Notebook(title = "Short", pageIds = emptyList())
         repository.bookRepository.createEmpty(notebook)
