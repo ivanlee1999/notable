@@ -164,6 +164,128 @@ class CouchDatabaseIdentityTest {
         assertEquals("gen-first", second.currentState.databaseGeneration)
     }
 
+    /**
+     * §1.2: a generation is minted *with the database*. A device that finds an empty, unnamed
+     * database where its stored generation named a populated one is looking at a wipe-and-recreate
+     * — re-writing the old generation onto it would make the wipe invisible: the checkpoint stays
+     * "matched" and never replays, the library is never re-offered, and every device reports
+     * healthy while the server copy is silently gone.
+     */
+    @Test
+    fun `claiming an empty database over a prior identity mints fresh and re-uploads`() =
+        runBlocking {
+            store.set(
+                CouchDocId.notebook("nb1"),
+                CouchDocBody.Notebook(
+                    CouchNotebook(
+                        title = "held here", pageIds = listOf("p1"),
+                        createdAt = "2026-01-01T00:00:00Z", updatedAt = "2026-01-01T00:00:00Z",
+                        updatedBy = "boox",
+                    )
+                ),
+            )
+            store.set(
+                CouchDocId.page("p1"),
+                CouchDocBody.Page(
+                    CouchPage(
+                        notebookId = "nb1",
+                        createdAt = "2026-01-01T00:00:00Z", updatedAt = "2026-01-01T00:00:00Z",
+                        updatedBy = "boox",
+                    )
+                ),
+            )
+            val engine = engine(
+                state = CouchSyncState(
+                    lastSeq = "42",
+                    revs = mapOf(CouchDocId.notebook("nb1") to "3-abc"),
+                    databaseGeneration = "gen-old",
+                ),
+                generation = "gen-minted",
+            )
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                "the new database gets a new name, never the dead one's",
+                CouchSyncEngine.DatabaseIdentity.Matched("gen-minted"),
+                identity,
+            )
+            val state = engine.currentState
+            assertEquals("gen-minted", state.databaseGeneration)
+            assertEquals("the checkpoint described the dead database's feed", "0", state.lastSeq)
+            assertTrue("stale revs would suppress the re-upload as echoes", state.revs.isEmpty())
+            assertEquals(
+                "everything this device holds has to be re-offered",
+                store.allDocumentIds().toSet(),
+                state.dirty,
+            )
+        }
+
+    /** A fresh install has no prior claim and no library: the claim stays quiet. */
+    @Test
+    fun `a fresh install claims an empty database without queueing anything`() = runBlocking {
+        val engine = engine(generation = "gen-new")
+
+        val identity = engine.verifyDatabaseIdentity()
+
+        assertEquals(CouchSyncEngine.DatabaseIdentity.Matched("gen-new"), identity)
+        assertTrue("nothing to re-upload, nothing queued", engine.currentState.dirty.isEmpty())
+        assertEquals("0", engine.currentState.lastSeq)
+    }
+
+    /**
+     * The 409-loser arm of the claim. §1.2 lets the loser adopt the winner's generation only when
+     * it has no prior identity of its own — a device that was syncing a different generation has
+     * met a generation change, and a human decides what happens to the two libraries.
+     */
+    @Test
+    fun `losing the claim race with a prior identity is a generation change, not adoption`() =
+        runBlocking {
+            var raced = false
+            val racing = object : CouchTransport {
+                override fun send(request: CouchRequest): CouchResponse {
+                    if (!raced && request.method == "PUT" &&
+                        request.path.endsWith(CouchMetaDocId.DATABASE)
+                    ) {
+                        raced = true
+                        // The peer names the recreated database in the gap between this device's
+                        // read and its write.
+                        seedMetadata(generation = "gen-winner")
+                        return CouchResponse(
+                            status = 409,
+                            body = """{"error":"conflict"}""".toByteArray(),
+                        )
+                    }
+                    return server.send(request)
+                }
+            }
+            val engine = CouchSyncEngine(
+                CouchDbClient(racing, database = "notes"),
+                store,
+                deviceId = "boox",
+                state = CouchSyncState(lastSeq = "42", databaseGeneration = "gen-old"),
+                nowIso = { "2026-08-13T00:00:00Z" },
+                newGeneration = { "gen-mine" },
+            )
+
+            val identity = engine.verifyDatabaseIdentity()
+
+            assertEquals(
+                CouchSyncEngine.DatabaseIdentity.GenerationChanged("gen-old", "gen-winner"),
+                identity,
+            )
+            assertEquals(
+                "the stored identity must not be overwritten by the winner's",
+                "gen-old",
+                engine.currentState.databaseGeneration,
+            )
+            assertEquals(
+                "and the checkpoint must not be reset on this device's own",
+                "42",
+                engine.currentState.lastSeq,
+            )
+        }
+
     // endregion
 
     // region Refusing

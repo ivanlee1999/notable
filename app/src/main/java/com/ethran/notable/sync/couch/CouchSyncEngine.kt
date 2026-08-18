@@ -1,5 +1,6 @@
 package com.ethran.notable.sync.couch
 
+import com.ethran.notable.sync.SyncLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -570,14 +571,23 @@ class CouchSyncEngine(
      * `PUT` with no `_rev` is the whole concurrency story: two devices reaching a fresh database
      * together both try to create the document, and CouchDB gives exactly one of them the write.
      * The loser re-reads and adopts the winner's generation rather than retrying, because the
-     * question "which of us names it" has already been answered.
+     * question "which of us names it" has already been answered — but only a loser with no prior
+     * identity of its own may adopt (§1.2); one that was already syncing a different generation
+     * reports the mismatch instead of quietly becoming a client of a database it never knew.
      */
     private suspend fun claimEmptyDatabase(): DatabaseIdentity? {
         // Pre-existing library, no metadata: record nothing and block nothing.
         if (!isDatabaseEmpty()) return null
 
+        val stored = databaseGeneration
+        // Always minted fresh, never `stored`: §1.2 says a generation is minted *with the
+        // database*, and this database is demonstrably not the one `stored` named — it is empty
+        // where that one held a library. Re-writing the old generation onto the new database made
+        // the wipe invisible: the stored checkpoint stayed "matched" and never replayed, the local
+        // library was never re-offered, and every device reported healthy while the server copy
+        // was silently gone.
         val metadata = CouchDatabaseMetadata(
-            generation = databaseGeneration ?: newGeneration(),
+            generation = newGeneration(),
             updatedAt = nowIso(),
         )
         return try {
@@ -589,6 +599,7 @@ class CouchSyncEngine(
             )
             mutex.withLock {
                 databaseGeneration = metadata.generation
+                if (stored != null) restartAgainstRecreatedDatabase(stored, metadata.generation)
                 persist()
             }
             DatabaseIdentity.Matched(metadata.generation)
@@ -596,12 +607,45 @@ class CouchSyncEngine(
             // Another device got there first in the moment between the read and the write.
             val winner = client.get(CouchMetaDocId.DATABASE, CouchDatabaseMetadata.serializer())
                 ?.body ?: return null
+            if (stored != null && stored != winner.generation) {
+                // The racing peer named the recreated database before this device could. That
+                // makes it the §1.2 generation change it always was — a human decides what
+                // happens to the two libraries, exactly as if the metadata had been found.
+                return DatabaseIdentity.GenerationChanged(stored, winner.generation)
+            }
             mutex.withLock {
                 databaseGeneration = winner.generation
                 persist()
             }
             DatabaseIdentity.Matched(winner.generation)
         }
+    }
+
+    /**
+     * The stored state described a database that no longer exists — same address, same name, but
+     * this device just watched an *empty* database answer where [stored] named a populated one.
+     * That is §1.2's generation change with this device holding the only surviving copy, so the
+     * recovery is the "rebuild the server from this device" arm, applied automatically because
+     * claiming an empty database destroys nothing:
+     *
+     * - the checkpoint rewinds to `"0"` — `lastSeq` was a position in the dead database's feed;
+     * - the revision cache clears — its entries would suppress every re-upload's echo wrongly;
+     * - everything this device holds queues for push, because the server holds nothing.
+     *
+     * Callers hold [mutex] and persist afterwards.
+     */
+    private fun restartAgainstRecreatedDatabase(stored: String, minted: String) {
+        SyncLogger.w(
+            "CouchSync",
+            "The sync database at this address is empty but was generation $stored when last " +
+                "seen — it was wiped or recreated. Named it $minted and queueing this device's " +
+                "whole library for re-upload."
+        )
+        lastSeq = "0"
+        revs.clear()
+        val everything = runCatching { store.allDocumentIds() }.getOrNull().orEmpty()
+        dirty += everything
+        runCatching { store.enqueueOutbox(everything) }
     }
 
     /**
