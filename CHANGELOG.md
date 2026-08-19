@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.32.0
+
+Quick notes are gone — every note is a notebook now, which means every note syncs. And on Onyx
+hardware, the strip along the left and top of the page that refused ink can be written on.
+
+- **The margin that would not take ink is fixed, at the root this time.** On Onyx hardware a band
+  down the left edge and across the top of the paper — exactly the width of the toolbar rail and
+  the height of the title bar — silently ignored the pen. It was never about the page's geometry:
+  the pen's own driver was being told, in the wrong coordinate space, that it may not draw there.
+  Two earlier attempts fixed the symptom somewhere else and it survived both. The whole sheet
+  takes ink now.
+- **Your quick notes became notebooks, and this upgrade is when they first reach your other
+  devices.** A quick note was a single loose page that belonged to no notebook, and that was the
+  one thing in Notable that never synced: pages travel inside a notebook, so a page without one
+  was never sent, never arrived on your iPad, and could not be deleted from there either.
+  Whatever you wrote on one has only ever existed on the device you wrote it on. Each quick note
+  is now a notebook of its own, in the folder you left it in, keeping its name — or named with
+  the date it was made, which is what the library already showed underneath it. Nothing is lost
+  and nothing moves; they are simply somewhere now, and the first sync after upgrading sends
+  them.
+- **"New note" replaces the quick-note button, and is exactly as fast.** One tap still puts you
+  on a blank page with no dialog in the way. What it makes is an ordinary notebook, so the note
+  can be searched for, starred, and thrown away into the Trash rather than destroyed outright —
+  and it can grow a second page when it turns out to need one. It is now in the Library header as
+  well as the bottom bar, so capture is one tap on a tablet too, not only one-handed.
+- **The last page stops being a wall everywhere.** 0.31.0 made writing or dragging past the end
+  of a page create the next one, except on a quick note, which had no notebook to grow into and
+  said so. There is nothing left that cannot grow.
+
+### Worth knowing
+
+- **Every handwriting tablet that ships this idea has already arrived here.** reMarkable's Quick
+  Sheets is a notebook the system makes for you, and its 3.23 update added "Convert to Notebook";
+  Kindle Scribe documents Quick Notes as "a type of notebook pinned to Home"; Supernote has no
+  such thing at all. Fast capture is worth keeping. A second kind of document that lives outside
+  the library, and cannot leave the device, is not.
+- **If you exported quick pages, the file names change.** They were `quickpage-<timestamp>` and
+  filed under the folder the page sat in; they now export as `<Notebook>-p1` under the notebook's
+  own folder, like every other page.
+
+Your writing was never at risk from this: a migrated page keeps its own identity, so every stroke
+on it stays where it was. Schema 47 -> 48, in one automatic step.
+
 ## 0.31.0
 
 "Scrolling" now means scrolling — in every configuration, and past the last page.
