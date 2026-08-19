@@ -98,7 +98,9 @@ fun ToolbarContent(
             initialPageNumberInPdf = uiState.backgroundPageNumber,
             notebookId = uiState.notebookId,
             pageNumberInBook = uiState.currentPageNumber,
-            onChange = { type, path -> onAction(ToolbarAction.BackgroundChanged(type, path)) },
+            onChange = { type, path, placement ->
+                onAction(ToolbarAction.BackgroundChanged(type, path, placement))
+            },
             onClose = { onAction(ToolbarAction.ToggleBackgroundSelector(false)) }
         )
     }

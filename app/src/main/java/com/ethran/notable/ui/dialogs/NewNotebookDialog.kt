@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.ethran.notable.R
+import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.PageSizePreset
 import com.ethran.notable.ui.noRippleClickable
@@ -54,6 +55,13 @@ import com.ethran.notable.ui.noRippleClickable
  * here anyway because it is the same decision, made at the same moment, and asking for it now
  * costs no extra dialog.
  *
+ * The templates offered are the five printed ones *and* every document this library is already
+ * drawn on — the PDFs and pictures imported for other notebooks. That is what every other app of
+ * this kind asks at this moment: GoodNotes picks a cover and a paper template while the notebook
+ * is being made, Supernote applies a default template as the notebook is created. Choosing a
+ * document here is the same as importing a PDF, minus the import: the notebook follows the
+ * document's pages, so page two of the book is page two of the document.
+ *
  * Every choice starts on the default from Settings, so accepting the whole dialog is one tap and
  * nobody who does not care about sheets has to learn what A5 is. Choices are laid out as chips
  * rather than dropdowns: a dropdown is an overlay that appears and disappears, and on e-ink each
@@ -64,8 +72,13 @@ fun NewNotebookDialog(
     initialName: String,
     initialPageSize: PageSize,
     initialTemplate: String,
-    onConfirm: (name: String, pageSize: PageSize, template: String) -> Unit,
-    onDismiss: () -> Unit
+    onConfirm: (
+        name: String, pageSize: PageSize, template: String, templateType: String,
+    ) -> Unit,
+    onDismiss: () -> Unit,
+    // Read from the library by default; a parameter so what the dialog offers can be stated
+    // rather than reached for, which is also what makes it testable without a device's files.
+    libraryTemplates: List<KnownTemplate> = rememberKnownTemplates(),
 ) {
     // Selection spans the whole suggested name so the first keystroke replaces it, as in
     // [NamePromptDialog] — the two dialogs ask the same question about a name.
@@ -80,6 +93,8 @@ fun NewNotebookDialog(
         mutableStateOf(PageSizePreset.matching(initialPageSize) ?: PageSizePreset.DEFAULT)
     }
     var template by remember { mutableStateOf(initialTemplate) }
+    var templateType by remember { mutableStateOf(BackgroundType.Native.key) }
+
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -92,7 +107,7 @@ fun NewNotebookDialog(
 
     fun commit() {
         val title = name.text.trim()
-        if (title.isEmpty()) onDismiss() else onConfirm(title, pageSize.size, template)
+        if (title.isEmpty()) onDismiss() else onConfirm(title, pageSize.size, template, templateType)
     }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -154,9 +169,31 @@ fun NewNotebookDialog(
                 nativeTemplateOptions().forEach { (key, label) ->
                     OptionChip(
                         label = label,
-                        selected = key == template,
-                        onClick = { template = key }
+                        selected = key == template && templateType == BackgroundType.Native.key,
+                        onClick = {
+                            template = key
+                            templateType = BackgroundType.Native.key
+                        }
                     )
+                }
+            }
+
+            // Only when there are any: an empty section would be a heading over nothing, and a
+            // library with no imported documents is the common case on a fresh install.
+            if (libraryTemplates.isNotEmpty()) {
+                OptionSection(label = stringResource(R.string.new_notebook_template_library)) {
+                    libraryTemplates.forEach { known ->
+                        val path = known.file.absolutePath
+                        OptionChip(
+                            label = known.label,
+                            detail = known.asNotebookDefault.folderName,
+                            selected = path == template,
+                            onClick = {
+                                template = path
+                                templateType = known.asNotebookDefault.key
+                            }
+                        )
+                    }
                 }
             }
 

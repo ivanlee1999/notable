@@ -145,6 +145,11 @@
     <string name="cleared_all_strokes">Cleared all strokes</string>
     <string name="change_background">Change Background</string>
     <string name="bug_report">Bug Report</string>
+    <string name="template_placement_label">Add to</string>
+    <string name="template_placement_this_page">This page</string>
+    <string name="template_placement_before">New page before</string>
+    <string name="template_placement_after">New page after</string>
+    <string name="new_notebook_template_library">From this library</string>
     <string name="choose_pdf_background">Choose PDF background</string>
     <plurals name="pdf_has_pages">
         <item quantity="one">PDF has %1$d page</item>

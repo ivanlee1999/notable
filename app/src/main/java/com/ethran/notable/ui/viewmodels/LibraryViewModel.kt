@@ -334,14 +334,17 @@ class LibraryViewModel @Inject constructor(
     fun onCreateNewNotebook(
         title: String,
         pageSize: PageSize = GlobalAppSettings.current.defaultPageSize,
-        template: String = GlobalAppSettings.current.defaultNativeTemplate
+        template: String = GlobalAppSettings.current.defaultNativeTemplate,
+        // A printed template unless the dialog offered a document from the library and it was
+        // taken; then this is what says whether that document is a PDF or a picture.
+        templateType: String = BackgroundType.Native.key,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val notebook = Notebook(
                 title = title,
                 parentFolderId = _folderId.value,
                 defaultBackground = template,
-                defaultBackgroundType = BackgroundType.Native.key,
+                defaultBackgroundType = templateType,
                 defaultPageWidth = pageSize.width,
                 defaultPageHeight = pageSize.height
             )

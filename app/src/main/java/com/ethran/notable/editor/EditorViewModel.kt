@@ -14,6 +14,7 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.getPageIndex
 import com.ethran.notable.data.db.getParentFolder
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.TemplatePlacement
 import com.ethran.notable.di.ApplicationScope
 import com.ethran.notable.editor.EditorViewModel.Companion.DEFAULT_PEN_SETTINGS
 import com.ethran.notable.editor.canvas.CanvasEventBus
@@ -145,7 +146,11 @@ sealed class ToolbarAction {
     data class ImagePicked(val uri: Uri) : ToolbarAction()
     data class ExportPage(val format: ExportFormat) : ToolbarAction()
     data class ExportBook(val format: ExportFormat) : ToolbarAction()
-    data class BackgroundChanged(val type: String, val path: String?) : ToolbarAction()
+    data class BackgroundChanged(
+        val type: String,
+        val path: String?,
+        val placement: TemplatePlacement = TemplatePlacement.CURRENT_PAGE,
+    ) : ToolbarAction()
 
     object NavigateToLibrary : ToolbarAction()
     object NavigateToBugReport : ToolbarAction()
@@ -350,7 +355,8 @@ class EditorViewModel @Inject constructor(
                 bookId?.let { handleExport(ExportTarget.Book(it), action.format) }
             }
 
-            is ToolbarAction.BackgroundChanged -> handleBackgroundChange(action.type, action.path)
+            is ToolbarAction.BackgroundChanged ->
+                handleBackgroundChange(action.type, action.path, action.placement)
 
             ToolbarAction.Undo -> sendCanvasCommand(CanvasCommand.Undo)
             ToolbarAction.Redo -> sendCanvasCommand(CanvasCommand.Redo)
@@ -487,8 +493,16 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    private fun handleBackgroundChange(type: String, path: String?) {
+    private fun handleBackgroundChange(
+        type: String,
+        path: String?,
+        placement: TemplatePlacement = TemplatePlacement.CURRENT_PAGE,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
+            if (placement != TemplatePlacement.CURRENT_PAGE) {
+                addPageWithTemplate(type, path, placement)
+                return@launch
+            }
             val page = appRepository.pageRepository.getById(currentPageId) ?: return@launch
             val updatedPage = if (path == null) {
                 page.copy(
@@ -523,6 +537,46 @@ class EditorViewModel @Inject constructor(
             }
             sendCanvasCommand(CanvasCommand.RefreshCanvas)
         }
+    }
+
+    /**
+     * Makes a page carrying [type] either side of the open one, and goes to it.
+     *
+     * The template is handed to the creation rather than written over a blank page afterwards, so
+     * the page is never briefly the wrong one — see [AppRepository.newPageInBook]. A loose page
+     * with no notebook has no neighbours to be inserted between, so it falls back to printing the
+     * template where the user already is rather than refusing.
+     */
+    private suspend fun addPageWithTemplate(
+        type: String,
+        path: String?,
+        placement: TemplatePlacement,
+    ) {
+        val notebookId = bookId
+        if (notebookId == null) {
+            handleBackgroundChange(type, path)
+            return
+        }
+        val pageIds = appRepository.bookRepository.getById(notebookId)?.pageIds.orEmpty()
+        // A page the manifest does not name cannot be placed relative to; appending is the honest
+        // reading of "after" for it, and matches where a new page would otherwise go.
+        val index = pageIds.indexOf(currentPageId).takeIf { it >= 0 } ?: (pageIds.size - 1)
+        val insertAt =
+            if (placement == TemplatePlacement.NEW_PAGE_BEFORE) index else index + 1
+        val newPageId = appRepository.newPageInBook(
+            notebookId = notebookId,
+            index = insertAt,
+            background = path,
+            backgroundType = type,
+        )
+        if (newPageId == null) {
+            snackDispatcher.showOrUpdateSnack(SnackConf(text = "Could not add the page", duration = 3000))
+            return
+        }
+        // The row and both outbox entries went in with the creation; this only starts the
+        // debounce, the way every other edit here does.
+        couchSyncHost.markPageDirty(newPageId)
+        changePage(newPageId)
     }
 
     private fun handleNavigateToLibrary() {
