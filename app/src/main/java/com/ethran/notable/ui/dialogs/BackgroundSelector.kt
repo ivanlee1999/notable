@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -76,6 +77,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
 import com.ethran.notable.R
+import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.copyBackgroundToDatabase
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.model.BackgroundType
@@ -86,16 +88,80 @@ import com.ethran.notable.editor.drawing.drawLinedBg
 import com.ethran.notable.editor.drawing.drawSquaredBg
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.io.getPdfPageCount
+import com.ethran.notable.sync.couch.CouchBackgroundFiles
 import com.ethran.notable.ui.components.OnOffSwitch
 import compose.icons.FeatherIcons
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import compose.icons.feathericons.Loader
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
 private val log = ShipBook.getLogger("BackgroundSelector")
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface BackgroundSelectorEntryPoint {
+    fun appRepository(): AppRepository
+}
+
+/**
+ * Every template of [folderName]'s kind this library is already drawn on, wherever its file lives.
+ *
+ * The grids below were built by listing the folder the app copies an import into, which is not the
+ * same thing as "the templates I have imported". An "Observe" import
+ * ([com.ethran.notable.io.handleFileSaving]) deliberately copies nothing — it leaves the document
+ * where the user keeps it, so it was offered once, through the file picker, and never appeared in
+ * the list again; and a document that arrived by sync is filed under its hash in the backgrounds
+ * root rather than in either subfolder. What a device is drawn on is recorded by the rows, not by a
+ * folder, so the rows are asked as well and the two lists are merged.
+ *
+ * Files that are no longer there are dropped: an observed document the user has since deleted
+ * cannot be drawn, and offering it would be offering a blank page.
+ */
+@Composable
+private fun rememberKnownBackgrounds(folderName: String): List<File> {
+    val context = LocalContext.current.applicationContext
+    val repository = remember(context) {
+        EntryPointAccessors
+            .fromApplication(context, BackgroundSelectorEntryPoint::class.java)
+            .appRepository()
+    }
+    return produceState(emptyList(), folderName, repository) {
+        value = withContext(Dispatchers.IO) {
+            val rows = runCatching {
+                repository.pageRepository.getFileBackgrounds() +
+                    repository.bookRepository.getFileDefaultBackgrounds()
+            }.getOrElse {
+                log.e("Could not read the backgrounds this library uses: ${it.message}")
+                emptyList()
+            }
+            rows.asSequence()
+                .filter { BackgroundType.fromKey(it.backgroundType).folderName == folderName }
+                .map { File(it.background) }
+                .filter { it.isFile }
+                .distinctBy { it.absolutePath }
+                .toList()
+        }
+    }.value
+}
+
+/**
+ * What to call a file in the grid. A document filed by sync is named after its hash, which is no
+ * name at all to read; it is still worth offering — those bytes are here and a page can be drawn on
+ * them — so it is labelled as what it is, with enough of the hash to tell two apart.
+ */
+private fun backgroundLabel(file: File): String =
+    CouchBackgroundFiles.sha256HexOfFileName(file.name)
+        ?.let { "Synced ${it.take(6)}" }
+        ?: file.nameWithoutExtension
+
 
 @Composable
 fun BackgroundSelector(
@@ -492,9 +558,10 @@ fun ShowImageOption(
     val folderName = currentBackgroundType.folderName
     val folder = File(ensureBackgroundsFolder(), folderName)
 
-    val uriOptions = folder.listFiles()?.filter { it.isFile }?.map { file ->
-        Triple(file.absolutePath, file.nameWithoutExtension, null as Painter?)
-    } ?: emptyList()
+    val copied = folder.listFiles()?.filter { it.isFile }.orEmpty()
+    val uriOptions = (copied + rememberKnownBackgrounds(folderName))
+        .distinctBy { it.absolutePath }
+        .map { file -> Triple(file.absolutePath, backgroundLabel(file), null as Painter?) }
 
     val chooseFileOption = listOf(Triple("file", "Choose From File...", null))
 
@@ -591,9 +658,10 @@ fun ShowPdfOption(
     val folderName = currentBackgroundType.folderName
     val folder = File(ensureBackgroundsFolder(), folderName)
 
-    val uriOptions = folder.listFiles()?.filter { it.isFile }?.map { file ->
-        Pair(file.absolutePath, file.nameWithoutExtension)
-    } ?: emptyList()
+    val copied = folder.listFiles()?.filter { it.isFile }.orEmpty()
+    val uriOptions = (copied + rememberKnownBackgrounds(folderName))
+        .distinctBy { it.absolutePath }
+        .map { file -> Pair(file.absolutePath, backgroundLabel(file)) }
     val pdfOptions = listOf(
         "file" to "Import PDF"
     ) + uriOptions
