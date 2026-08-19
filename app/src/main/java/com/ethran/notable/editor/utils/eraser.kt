@@ -160,6 +160,15 @@ fun handleScribbleToErase(
     val expandedBoundingBox = boundingBox.expandBy(strokeSizeForDetection / 2)
     val deletedStrokes = filterStrokesByIntersection(candidateStrokes, expandedBoundingBox)
 
+    // A scribble reaching below the seam means the next page's ink, on the same terms: its own
+    // coordinates, and the same intersection test with the box shifted with it.
+    val seamArea = eraseUnderSeam(page, outPath) { candidates ->
+        filterStrokesByIntersection(
+            candidates,
+            RectF(expandedBoundingBox).apply { offset(0f, -page.height.toFloat()) },
+        )
+    }
+
     // If strokes were found, remove them and update history
     if (deletedStrokes.isNotEmpty()) {
         val deletedStrokeIds = deletedStrokes.map { it.id }
@@ -194,11 +203,66 @@ fun handleScribbleToErase(
         // the firmware ink is cleared in the same post. See docs/onyx-sdk/onyx-scribble-to-erase.md.
         val effectedArea = page.toScreenCoordinates(strokeBounds(deletedStrokes))
         page.drawAreaScreenCoordinates(screenArea = effectedArea)
+        if (seamArea != null) effectedArea.union(seamArea)
         return effectedArea
     }
-    return null
+    // Nothing on this page, but the scribble may still have rubbed out what it crossed under the
+    // seam — a non-null area here is also what stops the caller filing the scribble itself as ink.
+    return seamArea
 }
 
+
+/**
+ * Rubs out the next page's ink where it shows under the seam, and only there.
+ *
+ * Under continuous scrolling the space below this page's end is not empty space: it is the top of
+ * the next page, drawn there by [com.ethran.notable.editor.drawing.drawBeyondPageEnd]. Writing
+ * already knows that — a stroke starting below the seam is filed onto the next page in its own
+ * coordinates (handleDraw) — but erasing did not, and searched only [PageView.strokes]. Ink the
+ * writer had just put there could be seen and could not be taken back: the eraser passed over it
+ * and nothing happened, which reads as "the second page cannot be erased".
+ *
+ * [erasePath] is the eraser's swath in *this* page's coordinates; it is shifted up by the page's
+ * end to ask the same question in the next page's own coordinates — the same offset the stroke
+ * took on the way down. [filterCandidates] is the extra test the caller applies to what the path
+ * catches (scribble-erase wants its intersection ratio), applied to next-page coordinates too.
+ *
+ * Deliberately not added to the undo history, for the reason handleDrawOntoNextPage gives: the
+ * history belongs to the page being edited, and an entry pointing into another page would restore
+ * rows into whatever state that page is in when it is finally undone.
+ *
+ * Returns the erased region in SCREEN coordinates, like its callers, or null if nothing was there.
+ */
+private fun eraseUnderSeam(
+    page: PageView,
+    erasePath: Path,
+    filterCandidates: (List<Stroke>) -> List<Stroke> = { it },
+): Rect? {
+    if (!page.continuousScrollEnabled) return null
+    val nextPageId = page.nextPageId ?: return null
+    val pageEnd = page.height.toFloat()
+
+    val trackBounds = RectF()
+    erasePath.computeBounds(trackBounds, true)
+    // Nothing of the swath reached past the seam, so nothing of the next page was touched.
+    if (trackBounds.bottom <= pageEnd) return null
+
+    val shifted = Path(erasePath).apply { offset(0f, -pageEnd) }
+    val candidates =
+        selectStrokesFromPath(page.pageDataManager.getStrokes(nextPageId), shifted)
+    val deletedStrokes = filterCandidates(candidates)
+    if (deletedStrokes.isEmpty()) return null
+
+    page.pageDataManager.removeStrokesFromPage(nextPageId, deletedStrokes.map { it.id })
+
+    // Back into this page's coordinates — where those strokes were on this screen — so the
+    // repaint covers the hole the erase left under the seam.
+    val effectedArea = page.toScreenCoordinates(
+        strokeBounds(deletedStrokes).apply { offset(0, pageEnd.toInt()) }
+    )
+    page.drawAreaScreenCoordinates(screenArea = effectedArea)
+    return effectedArea
+}
 
 // points is in page coordinates, returns effected area.
 fun handleErase(
@@ -228,13 +292,18 @@ fun handleErase(
 
     val deletedStrokeIds = deletedStrokes.map { it.id }
 
-    if (deletedStrokes.isEmpty()) return null
+    // The same swath, asked of the next page where it shows under the seam.
+    val seamArea = eraseUnderSeam(page, outPath)
+
+    if (deletedStrokes.isEmpty()) return seamArea
     page.removeStrokes(deletedStrokeIds)
 
     history.addOperationsToHistory(listOf(Operation.AddStroke(deletedStrokes)))
 
     val effectedArea = page.toScreenCoordinates(strokeBounds(deletedStrokes))
     page.drawAreaScreenCoordinates(screenArea = effectedArea)
+    // Both regions were repainted above; the union is what the caller has to push to the panel.
+    if (seamArea != null) effectedArea.union(seamArea)
     return effectedArea
 }
 

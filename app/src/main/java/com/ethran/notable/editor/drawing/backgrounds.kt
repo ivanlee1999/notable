@@ -376,6 +376,12 @@ fun drawPaginationLine(canvas: Canvas, scroll: Offset, scale: Float, sheet: Page
     // A4-shaped at all.
     val sheetWidth = sheet.width
     val pageHeight = sheet.height.toFloat()
+    // A sheet with no height has no breaks to mark, and the walk below advances by exactly this
+    // much: at zero it never reaches the bottom of the canvas and draws page labels forever. A
+    // page falls back to the screen's dimensions when it declares no size of its own
+    // (legacyScreenSheet), and those are zero wherever the EPD controller reports nothing — a
+    // non-Onyx device, and any test process.
+    if (pageHeight <= 0f) return
 
     // Convert scroll position to canvas coordinates
     // Calculate current page number (1-based)
