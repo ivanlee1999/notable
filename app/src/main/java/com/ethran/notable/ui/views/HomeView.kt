@@ -161,9 +161,9 @@ fun Library(
             initialName = defaultNotebookName,
             initialPageSize = settings.defaultPageSize,
             initialTemplate = settings.defaultNativeTemplate,
-            onConfirm = { name, pageSize, template ->
+            onConfirm = { name, pageSize, template, templateType ->
                 pendingNewNotebook = false
-                viewModel.onCreateNewNotebook(name, pageSize, template)
+                viewModel.onCreateNewNotebook(name, pageSize, template, templateType)
             },
             onDismiss = { pendingNewNotebook = false }
         )

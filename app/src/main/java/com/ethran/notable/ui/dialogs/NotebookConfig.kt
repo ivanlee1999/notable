@@ -120,7 +120,9 @@ fun NotebookConfigDialog(
             initialPageBackground = book!!.defaultBackground,
             isNotebookBgSelector = true,
             notebookId = book!!.id,
-            onChange = { backgroundType, background ->
+            // The placement is ignored here and the selector never offers it: this is the
+            // notebook's own default, which has no page to be before or after.
+            onChange = { backgroundType, background, _ ->
                 if (background == null) {
                     if (book!!.defaultBackgroundType != backgroundType) {
                         val updatedBook = book!!.copy(

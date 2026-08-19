@@ -81,6 +81,7 @@ import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.copyBackgroundToDatabase
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.data.model.TemplatePlacement
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.drawing.drawDottedBg
 import com.ethran.notable.editor.drawing.drawHexedBg
@@ -90,6 +91,7 @@ import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.io.getPdfPageCount
 import com.ethran.notable.sync.couch.CouchBackgroundFiles
 import com.ethran.notable.ui.components.OnOffSwitch
+import com.ethran.notable.ui.noRippleClickable
 import compose.icons.FeatherIcons
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -126,14 +128,14 @@ interface BackgroundSelectorEntryPoint {
  * cannot be drawn, and offering it would be offering a blank page.
  */
 @Composable
-private fun rememberKnownBackgrounds(folderName: String): List<File> {
+fun rememberKnownTemplates(): List<KnownTemplate> {
     val context = LocalContext.current.applicationContext
     val repository = remember(context) {
         EntryPointAccessors
             .fromApplication(context, BackgroundSelectorEntryPoint::class.java)
             .appRepository()
     }
-    return produceState(emptyList(), folderName, repository) {
+    return produceState(emptyList(), repository) {
         value = withContext(Dispatchers.IO) {
             val rows = runCatching {
                 repository.pageRepository.getFileBackgrounds() +
@@ -143,20 +145,31 @@ private fun rememberKnownBackgrounds(folderName: String): List<File> {
                 emptyList()
             }
             rows.asSequence()
-                .filter { BackgroundType.fromKey(it.backgroundType).folderName == folderName }
-                .map { File(it.background) }
-                .filter { it.isFile }
-                .distinctBy { it.absolutePath }
+                .map { KnownTemplate(File(it.background), BackgroundType.fromKey(it.backgroundType)) }
+                .filter { it.file.isFile }
+                .distinctBy { it.file.absolutePath }
                 .toList()
         }
     }.value
 }
 
 /**
- * What to call a file in the grid. A document filed by sync is named after its hash, which is no
- * name at all to read; it is still worth offering — those bytes are here and a page can be drawn on
- * them — so it is labelled as what it is, with enough of the hash to tell two apart.
+ * A template this library is already drawn on somewhere: the file, and the kind of background it
+ * is being used as.
  */
+data class KnownTemplate(val file: File, val backgroundType: BackgroundType) {
+    /** What to call it in a list of templates — see [backgroundLabel]. */
+    val label: String get() = backgroundLabel(file)
+
+    /**
+     * The type to give a *notebook* drawn on this file. A page may be printed with one fixed sheet
+     * of a document (`pdf7`), but a notebook drawn on one follows it — page two of the book is page
+     * two of the document — which is what `autoPdf` means and what importing a PDF produces.
+     */
+    val asNotebookDefault: BackgroundType
+        get() = if (backgroundType is BackgroundType.Pdf) BackgroundType.AutoPdf else backgroundType
+}
+
 private fun backgroundLabel(file: File): String =
     CouchBackgroundFiles.sha256HexOfFileName(file.name)
         ?.let { "Synced ${it.take(6)}" }
@@ -171,7 +184,7 @@ fun BackgroundSelector(
     isNotebookBgSelector: Boolean = false, // for notebook default background
     notebookId: String? = null,
     pageNumberInBook: Int = -1,
-    onChange: (backgroundType: String, background: String?) -> Unit,
+    onChange: (backgroundType: String, background: String?, placement: TemplatePlacement) -> Unit,
     onClose: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -197,6 +210,26 @@ fun BackgroundSelector(
                 else -> "Native"
             }
         )
+    }
+
+    /**
+     * Where the next template tapped should land. A notebook's own default has no page to be
+     * before or after, so that selector never offers the choice and always means "this notebook".
+     */
+    var placement by remember { mutableStateOf(TemplatePlacement.CURRENT_PAGE) }
+    val canPlacePages = !isNotebookBgSelector && notebookId != null
+
+    /**
+     * Hands a chosen template to the caller, then falls back to "this page".
+     *
+     * The reset is what makes the dialog usable rather than a trap: choosing "after" and tapping a
+     * document makes one page and moves the editor onto it, and the taps that usually follow —
+     * which sheet of the PDF, repeating or not — are adjustments to that new page, not requests for
+     * three more pages.
+     */
+    fun apply(backgroundType: String, background: String?) {
+        onChange(backgroundType, background, placement)
+        placement = TemplatePlacement.CURRENT_PAGE
     }
 
     fun selectedToType(): BackgroundType {
@@ -227,7 +260,7 @@ fun BackgroundSelector(
                     val copiedFile = copyBackgroundToDatabase(context, uri, currentType.folderName)
 
                     log.i("PickVisualMedia: copied -> ${copiedFile.absolutePath}")
-                    onChange(currentType.key, copiedFile.toString())
+                    apply(currentType.key, copiedFile.toString())
                     scope.launch { CanvasEventBus.refreshUi.emit(Unit) }
                     pageBackground = copiedFile.toString()
                     log.d("PickVisualMedia: UI updated, pageBackground=$pageBackground, type=${currentType.key}")
@@ -254,7 +287,7 @@ fun BackgroundSelector(
         scope.launch(Dispatchers.IO) {
             try {
                 val copiedFile = copyBackgroundToDatabase(context, uri, currentType.folderName)
-                onChange(currentType.key, copiedFile.toString())
+                apply(currentType.key, copiedFile.toString())
                 scope.launch { CanvasEventBus.refreshUi.emit(Unit) }
                 pageBackground = copiedFile.toString()
                 pageBackgroundType = currentType
@@ -309,6 +342,9 @@ fun BackgroundSelector(
                     .fillMaxWidth()
                     .background(Color.Black)
             )
+            if (canPlacePages) {
+                PlacementSelector(placement = placement, onPlacementChange = { placement = it })
+            }
             Column(Modifier.padding(20.dp, 10.dp)) {
                 when (selectedBackgroundMode) {
                     "Image" -> {
@@ -319,7 +355,7 @@ fun BackgroundSelector(
                             currentBackground = pageBackground,
                             currentBackgroundType = currentBackgroundType,
                             onBackgroundChange = { background, type ->
-                                onChange(type.key, background)
+                                apply(type.key, background)
                                 pageBackground = background
                                 pageBackgroundType = type
                             },
@@ -339,7 +375,7 @@ fun BackgroundSelector(
                                         pageBackgroundType =
                                             if (isChecked) BackgroundType.ImageRepeating else BackgroundType.Image
 
-                                        onChange(pageBackgroundType.key, null)
+                                        apply(pageBackgroundType.key, null)
                                     }
                                 )
                             }
@@ -351,7 +387,7 @@ fun BackgroundSelector(
                             currentBackground = pageBackground,
                             currentBackgroundType = BackgroundType.CoverImage,
                             onBackgroundChange = { background, type ->
-                                onChange(type.key, background)
+                                apply(type.key, background)
                                 pageBackground = background
                                 log.e("onBackgroundChange: $type")
                                 pageBackgroundType = type
@@ -368,7 +404,7 @@ fun BackgroundSelector(
                             currentBackground = pageBackground,
                             currentBackgroundType = BackgroundType.Native,
                             onBackgroundChange = { background, type ->
-                                onChange(type.key, background)
+                                apply(type.key, background)
                                 pageBackground = background
                                 pageBackgroundType = type
                             },
@@ -381,7 +417,7 @@ fun BackgroundSelector(
                                 pageBackgroundType else BackgroundType.Pdf(1)
 
                         fun onBackgroundChange(type: BackgroundType, background: String) {
-                            onChange(type.key, background)
+                            apply(type.key, background)
                             pageBackground = background
                             pageBackgroundType = type
                             maxPages = getPdfPageCount(background)
@@ -414,6 +450,62 @@ fun BackgroundSelector(
     }
 }
 
+
+/**
+ * Where the template about to be chosen should go: on this page, or on a new page either side of
+ * it.
+ *
+ * Putting the question here rather than in the pages view is the whole point. Wanting a template
+ * *and* wanting a page for it is one thought, and answering it used to take four steps in two
+ * screens — leave the page, insert a blank one, open it, print it. Every other note-taking app
+ * treats it as one: GoodNotes adds a page "before / after" and offers the templates in the same
+ * breath, Supernote's page menu is "Insert Before / Insert After".
+ */
+@Composable
+private fun PlacementSelector(
+    placement: TemplatePlacement,
+    onPlacementChange: (TemplatePlacement) -> Unit,
+) {
+    val options = listOf(
+        TemplatePlacement.CURRENT_PAGE to stringResource(R.string.template_placement_this_page),
+        TemplatePlacement.NEW_PAGE_BEFORE to stringResource(R.string.template_placement_before),
+        TemplatePlacement.NEW_PAGE_AFTER to stringResource(R.string.template_placement_after),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(R.string.template_placement_label),
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.width(10.dp))
+        options.forEach { (value, label) ->
+            // A border rather than a fill for the selected one: an inverted chip on e-ink is a
+            // black block that ghosts into whatever is drawn over it next ([OptionChip]).
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .border(
+                        width = if (value == placement) 2.dp else 1.dp,
+                        color = if (value == placement) Color.Black else Color.Gray,
+                        shape = RectangleShape,
+                    )
+                    .noRippleClickable { onPlacementChange(value) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    fontWeight = if (value == placement) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun ShowNativeOption(
@@ -559,7 +651,8 @@ fun ShowImageOption(
     val folder = File(ensureBackgroundsFolder(), folderName)
 
     val copied = folder.listFiles()?.filter { it.isFile }.orEmpty()
-    val uriOptions = (copied + rememberKnownBackgrounds(folderName))
+    val known = rememberKnownTemplates().filter { it.backgroundType.folderName == folderName }
+    val uriOptions = (copied + known.map { it.file })
         .distinctBy { it.absolutePath }
         .map { file -> Triple(file.absolutePath, backgroundLabel(file), null as Painter?) }
 
@@ -659,7 +752,8 @@ fun ShowPdfOption(
     val folder = File(ensureBackgroundsFolder(), folderName)
 
     val copied = folder.listFiles()?.filter { it.isFile }.orEmpty()
-    val uriOptions = (copied + rememberKnownBackgrounds(folderName))
+    val known = rememberKnownTemplates().filter { it.backgroundType.folderName == folderName }
+    val uriOptions = (copied + known.map { it.file })
         .distinctBy { it.absolutePath }
         .map { file -> Pair(file.absolutePath, backgroundLabel(file)) }
     val pdfOptions = listOf(

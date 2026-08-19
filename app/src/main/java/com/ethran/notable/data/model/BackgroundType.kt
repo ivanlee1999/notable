@@ -5,6 +5,29 @@ import io.shipbook.shipbooksdk.ShipBook
 
 private val log = ShipBook.getLogger("BackgroundType")
 
+/**
+ * Where a template chosen in the background picker should land.
+ *
+ * A page's background used to be the only thing the picker could touch, which made "put this
+ * template on a *new* page here" a three-step errand: leave the page, add a blank one in the pages
+ * view, come back, open the picker again. Every other note-taking app asks the question the other
+ * way round — GoodNotes offers "Add page before / after" with a template to print on it, Supernote
+ * "Insert Before / Insert After" — so the picker asks it too.
+ *
+ * Only the *page* picker offers the choice. A notebook's default background is a property of the
+ * notebook and has no page to be before or after.
+ */
+enum class TemplatePlacement {
+    /** Print it on the page that is open — what the picker has always done. */
+    CURRENT_PAGE,
+
+    /** Make a page carrying it immediately before the open one, and go there. */
+    NEW_PAGE_BEFORE,
+
+    /** Make a page carrying it immediately after the open one, and go there. */
+    NEW_PAGE_AFTER,
+}
+
 sealed class BackgroundType(val key: String, val folderName: String) {
     data object Image : BackgroundType("image", "images")
     data object ImageRepeating : BackgroundType("imagerepeating", "images")

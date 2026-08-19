@@ -339,14 +339,33 @@ class AppRepository @Inject constructor(
         }
     }
 
-    suspend fun newPageInBook(notebookId: String, index: Int = 0): String? {
+    /**
+     * A new page in [notebookId] at [index], printed with [backgroundType] where one is named and
+     * with the notebook's own default where it is not.
+     *
+     * The template travels with the creation rather than being written over the page afterwards:
+     * an insert-with-a-template that created a blank page and then edited it would publish the
+     * blank one first, so a peer syncing in that instant would receive a page the user never saw.
+     */
+    suspend fun newPageInBook(
+        notebookId: String,
+        index: Int = 0,
+        background: String? = null,
+        backgroundType: String? = null,
+    ): String? {
         try {
             // Both writes and both outbox entries together: adding a blank page changes the page
             // *and* the notebook's page list, and until now it queued neither.
             return db.withTransaction {
                 val book = bookRepository.getById(notebookId)
                     ?: return@withTransaction null
-                val page = book.newPage()
+                val page = book.newPage().let {
+                    if (backgroundType == null) it
+                    else it.copy(
+                        background = background ?: it.background,
+                        backgroundType = backgroundType,
+                    )
+                }
                 pageRepository.create(page)
                 bookRepository.addPage(notebookId, page.id, index)
                 page.id
