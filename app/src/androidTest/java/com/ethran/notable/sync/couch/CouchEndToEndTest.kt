@@ -1,6 +1,8 @@
 package com.ethran.notable.sync.couch
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.pdf.PdfDocument
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,11 +24,15 @@ import com.ethran.notable.data.db.NotebookSyncStateRepository
 import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.data.db.PageSyncStateRepository
 import com.ethran.notable.data.db.StrokeRepository
+import com.ethran.notable.data.model.BackgroundType
+import com.ethran.notable.io.ImportOptions
+import com.ethran.notable.io.importPdf
 import com.ethran.notable.testing.TestDatabaseFactory
 import com.ethran.notable.testing.trashRepositoryFor
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -74,6 +80,15 @@ class CouchEndToEndTest {
     private lateinit var db: AppDatabase
     private lateinit var repository: AppRepository
     private lateinit var images: File
+
+    /** Where a downloaded background is filed, and where a "Copy" import puts the document. */
+    private lateinit var backgrounds: File
+
+    /**
+     * Where a document the user chose to *observe* stays: outside every folder sync files its own
+     * downloads in, which is the whole point of that mode — and was the whole difficulty.
+     */
+    private lateinit var observed: File
     private lateinit var client: CouchDbClient
     private lateinit var database: String
 
@@ -93,6 +108,8 @@ class CouchEndToEndTest {
         db = TestDatabaseFactory.createInMemory(context)
         repository = repositoryFor(db)
         images = File(context.cacheDir, "e2e-images-${UUID.randomUUID()}").apply { mkdirs() }
+        backgrounds = File(context.cacheDir, "e2e-bg-${UUID.randomUUID()}").apply { mkdirs() }
+        observed = File(context.cacheDir, "e2e-observed-${UUID.randomUUID()}").apply { mkdirs() }
         client = clientFor()
     }
 
@@ -101,6 +118,8 @@ class CouchEndToEndTest {
         if (url == null) return
         db.close()
         images.deleteRecursively()
+        backgrounds.deleteRecursively()
+        observed.deleteRecursively()
         admin("DELETE", "$url/$database")
     }
 
@@ -150,7 +169,12 @@ class CouchEndToEndTest {
         db: AppDatabase,
         deviceId: String,
         imagesFolder: File,
-    ) = RoomCouchStore(repository, db.kvDao(), deviceId = deviceId, imagesFolder = { imagesFolder })
+        backgroundsFolder: File = backgrounds,
+    ) = RoomCouchStore(
+        repository, db.kvDao(), deviceId = deviceId,
+        imagesFolder = { imagesFolder },
+        backgroundsFolder = { backgroundsFolder },
+    )
 
     private fun store(deviceId: String = "boox") = storeFor(repository, db, deviceId, images)
 
@@ -289,6 +313,135 @@ class CouchEndToEndTest {
         flush(engine())
 
         assertEquals("grid", pageOnServer(pageId)?.background)
+    }
+
+    // endregion
+
+    // region The document the pages are drawn on
+
+    /**
+     * A real one-page PDF, written by the platform. The importer measures and counts the sheets of
+     * whatever it is handed, so a fixture pretending to be a document would not survive the trip.
+     */
+    private fun writePdf(file: File): ByteArray {
+        val document = PdfDocument()
+        val page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, 1).create())
+        page.canvas.drawColor(Color.WHITE)
+        document.finishPage(page)
+        file.parentFile?.mkdirs()
+        file.outputStream().use { document.writeTo(it) }
+        document.close()
+        return file.readBytes()
+    }
+
+    /**
+     * A book imported from [file], as `ImportEngine.importPdfFile` writes one: the notebook carries
+     * the document as its default background and one page is created per sheet. The pages come from
+     * the importer itself, so what is asserted below is what an import really leaves behind.
+     */
+    private fun importBook(file: File, observe: Boolean): Pair<String, List<String>> = runBlocking {
+        val book = Notebook(
+            title = file.nameWithoutExtension,
+            defaultBackground = file.absolutePath,
+            defaultBackgroundType = BackgroundType.AutoPdf.key,
+        )
+        repository.bookRepository.createEmpty(book)
+        val pageIds = mutableListOf<String>()
+        importPdf(file, ImportOptions(linkToExternalFile = observe), book.id) { data ->
+            repository.pageRepository.create(data.page)
+            repository.bookRepository.addPage(book.id, data.page.id)
+            pageIds += data.page.id
+        }
+        book.id to pageIds
+    }
+
+    private fun assetOnServer(assetId: String): ByteArray? =
+        runBlocking { client.getAttachment(assetId)?.bytes }
+
+    /**
+     * "Copy": the importer files the document under the database and the pages name it there. The
+     * pages have always synced; this is about what they are drawn on, without which a peer opens
+     * the book on blank sheets with the ink floating over them.
+     */
+    @Test
+    fun importing_a_pdf_sends_the_document_its_pages_are_drawn_on() {
+        val file = File(backgrounds, "pdfs/Lecture 3.pdf")
+        val bytes = writePdf(file)
+        val assetId = CouchAssetId.forBytes(bytes)
+
+        val (bookId, pageIds) = importBook(file, observe = false)
+        flush(engine())
+
+        assertArrayEquals(
+            "the document the pages are drawn on never reached the server",
+            bytes, assetOnServer(assetId),
+        )
+        assertEquals(assetId, notebookOnServer(bookId)?.defaultBackground)
+        assertEquals(assetId, pageOnServer(pageIds.first())?.background)
+    }
+
+    /**
+     * "Observe": the document stays where the user keeps it — a Download, a cloud folder, a LaTeX
+     * build directory — and the pages point at that path. Those are the same bytes and they have to
+     * travel the same way; looking for them by folder alone found nothing, and an asset the store
+     * cannot produce was dropped from the push without a word, so the ink arrived and the document
+     * never did.
+     */
+    @Test
+    fun observing_a_pdf_outside_the_apps_own_folders_sends_it_too() {
+        val file = File(observed, "Lecture 3.pdf")
+        val bytes = writePdf(file)
+        val assetId = CouchAssetId.forBytes(bytes)
+
+        val (bookId, pageIds) = importBook(file, observe = true)
+        flush(engine())
+
+        assertArrayEquals(
+            "the observed document never reached the server",
+            bytes, assetOnServer(assetId),
+        )
+        assertEquals(assetId, notebookOnServer(bookId)?.defaultBackground)
+        assertEquals(assetId, pageOnServer(pageIds.first())?.background)
+    }
+
+    /**
+     * The far end of the same trip: a second device pulls the book and has to end up with the
+     * document on disk, at the path its own page rows point at. This is the assertion a user makes
+     * by opening the notebook.
+     */
+    @Test
+    fun a_peer_receives_the_document_and_files_it_where_its_pages_look() {
+        val file = File(observed, "Lecture 3.pdf")
+        val bytes = writePdf(file)
+        val assetId = CouchAssetId.forBytes(bytes)
+        val (_, pageIds) = importBook(file, observe = true)
+        flush(engine())
+
+        val (otherDb, otherRepository, otherImages) = secondDevice()
+        val otherBackgrounds = File(context.cacheDir, "e2e-bg-${UUID.randomUUID()}")
+            .apply { mkdirs() }
+        try {
+            val peer = engine(
+                store = storeFor(otherRepository, otherDb, "ipad", otherImages, otherBackgrounds),
+                deviceId = "ipad",
+            )
+            val pull = runBlocking { peer.pull() }
+
+            assertTrue(
+                "the peer never downloaded the document: ${pull.assetFailures}",
+                assetId in pull.fetchedAssets,
+            )
+            val background = runBlocking { otherRepository.pageRepository.getById(pageIds.first()) }
+                ?.background
+            assertNotNull("the peer's page names no background at all", background)
+            val landed = File(background!!)
+            assertTrue("the peer's page points at a file that is not there", landed.isFile)
+            assertArrayEquals(bytes, landed.readBytes())
+        } finally {
+            otherDb.close()
+            otherImages.deleteRecursively()
+            otherBackgrounds.deleteRecursively()
+        }
     }
 
     // endregion

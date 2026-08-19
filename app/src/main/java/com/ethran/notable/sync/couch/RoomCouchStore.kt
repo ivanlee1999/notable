@@ -531,9 +531,17 @@ class RoomCouchStore(
      * picture placed on a page or a document the whole notebook is drawn on, and by the time a
      * peer asks for one, all that is known is the hash.
      */
-    private fun loadAsset(documentId: String): CouchAsset? {
+    private suspend fun loadAsset(documentId: String): CouchAsset? {
         val sha = CouchAssetId.sha256HexOfAssetId(documentId) ?: return null
-        val file = assetFile(sha) ?: return null
+        val file = assetFile(sha)
+        if (file == null) {
+            // Silence here is what the bug looked like: the pages went up carrying a reference,
+            // the engine read "nothing to send" from the null and dropped the id off the queue,
+            // and every peer drew blank sheets under the ink. Nothing can be sent without the
+            // bytes, but it must not happen quietly.
+            log.e("Not pushing asset $sha: no file this library names holds those bytes")
+            return null
+        }
         val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
         // An asset carries no history of its own — it is bytes under the name of their hash. The
         // timestamps describe this device's copy and never decide anything: nothing merges an
@@ -541,7 +549,7 @@ class RoomCouchStore(
         return CouchAsset.of(bytes, at = iso(Date(file.lastModified())), updatedBy = deviceId)
     }
 
-    private fun assetFile(sha: String): File? {
+    private suspend fun assetFile(sha: String): File? {
         val images = runCatching { imagesFolder() }.getOrNull()
         val backgrounds = runCatching { backgroundsFolder() }.getOrNull()
 
@@ -553,11 +561,61 @@ class RoomCouchStore(
         }
         named.firstOrNull { it.exists() }?.let { return it }
 
+        referencedFile(sha)?.let { return it }
+
         images?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
         // Backgrounds sit one level down, in `pdfs/` or `images/`, so this walks rather than lists.
         // Hashes are remembered ([hashOf]), so a notebook's own PDF is read once and not once per
         // page that names it.
         return backgrounds?.walkTopDown()?.firstOrNull { it.isFile && hashOf(it) == sha }
+    }
+
+    /**
+     * A file the library itself is pointing at whose bytes are [sha], wherever it happens to live.
+     *
+     * The two folders are where this device files what *it* downloaded, and looking only there is
+     * what left an imported PDF behind. "Observe" — the other half of the import dialog — leaves
+     * the document where the user keeps it and points the pages at that path
+     * ([com.ethran.notable.io.handleFileSaving]), so its bytes are in neither folder and no scan of
+     * them can ever find it. The pages still publish it, because [wireBackground] hashes the file
+     * they name; the bytes then could not be produced, and an asset the store answers null for is
+     * dropped from the push without a word.
+     *
+     * What ties bytes to an asset id is not where they sit but the rows naming them, so the rows
+     * are what is asked — the same three queries [pendingAssets] uses for the mirror question.
+     * Distinct by construction: a two-hundred-page book names one document, and [hashOf] remembers
+     * it, so this reads a file once rather than once per page or per flush.
+     */
+    private suspend fun referencedFile(sha: String): File? {
+        val candidates = LinkedHashSet<File>()
+        appRepository.pageRepository.getFileBackgrounds().forEach { row ->
+            backgroundFile(row.background, row.backgroundType)?.let { candidates += it }
+        }
+        appRepository.bookRepository.getFileDefaultBackgrounds().forEach { row ->
+            backgroundFile(row.background, row.backgroundType)?.let { candidates += it }
+        }
+        // Pictures are copied into the images folder as they are placed, so the scan above almost
+        // always answers for them; a row pointing somewhere else is the same silent loss, and costs
+        // nothing to cover here.
+        appRepository.imageRepository.getAllUris().forEach { uri ->
+            CouchImageFiles.fileFor(uri)?.let { candidates += it }
+        }
+        return candidates.firstOrNull { it.isFile && contentHashOf(it) == sha }
+    }
+
+    /**
+     * What a candidate file's bytes are, by its name where that says so and by reading it where it
+     * does not — the rule [CouchBackgroundFiles.assetIdFor] applies, and for the same reason: a
+     * file named after a hash was written by the downloader, which had the bytes in hand, and a
+     * background is routinely tens of megabytes.
+     */
+    private fun contentHashOf(file: File): String? =
+        CouchBackgroundFiles.sha256HexOfFileName(file.name) ?: hashOf(file)
+
+    /** The file a row is drawn from, or null for a native template and for a row naming no file. */
+    private fun backgroundFile(background: String, backgroundType: String): File? {
+        if (!CouchBackgroundFiles.isFileBacked(backgroundType) || background.isEmpty()) return null
+        return File(background)
     }
 
     private suspend fun loadFolder(id: String): CouchFolder? {

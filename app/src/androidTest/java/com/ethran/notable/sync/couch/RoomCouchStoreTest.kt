@@ -558,6 +558,75 @@ class RoomCouchStoreTest {
     }
 
     /**
+     * "Observe" rather than "Copy": the importer leaves the document where the user keeps it and
+     * the page points at that path (`ImportEngine.importPdfFile`). Those bytes have to travel like
+     * any others — but they are in neither of the folders this device files its own downloads in,
+     * which is the whole difficulty. Looked for by folder alone they are simply not found, and an
+     * asset the store cannot produce is dropped from the push in silence: the pages arrive on the
+     * peer with the ink on them and nothing underneath.
+     */
+    @Test
+    fun anObservedPdfOutsideTheAppsOwnFoldersTravelsToo() {
+        val elsewhere = File(context.cacheDir, "couch-observed-${UUID.randomUUID()}")
+            .apply { mkdirs() }
+        try {
+            val file = File(elsewhere, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+            val pageId = CouchDocId.page("p1")
+            store.apply(
+                pageId,
+                CouchDocBody.Page(
+                    page(emptyList(), notebookId = "nb1", updatedAt = 5)
+                        .copy(background = file.absolutePath, backgroundType = "autoPdf")
+                ),
+            )
+
+            val loaded = (store.load(pageId) as CouchDocBody.Page).page
+            assertEquals(pdfAssetId, loaded.background)
+
+            val asset = store.load(pdfAssetId) as? CouchDocBody.Asset
+            assertNotNull("the observed document's bytes were not found", asset)
+            assertArrayEquals(pdfBytes, asset!!.asset.bytes)
+        } finally {
+            elsewhere.deleteRecursively()
+        }
+    }
+
+    /**
+     * The same for a notebook that observes a document: its default background is the only place
+     * the file is named once every page of it has been deleted, and it is what a book imported in
+     * "Observe" mode carries on every page ([BackgroundType.AutoPdf]).
+     */
+    @Test
+    fun anObservedNotebookDefaultTravelsToo() {
+        val elsewhere = File(context.cacheDir, "couch-observed-${UUID.randomUUID()}")
+            .apply { mkdirs() }
+        try {
+            val file = File(elsewhere, "Lecture 3.pdf").apply { writeBytes(pdfBytes) }
+            val id = CouchDocId.notebook("nb1")
+            store.apply(
+                id,
+                CouchDocBody.Notebook(
+                    CouchNotebook(
+                        title = "Lecture 3", pageIds = emptyList(), createdAt = stamp(0),
+                        updatedAt = stamp(5), updatedBy = "boox",
+                        defaultBackground = file.absolutePath, defaultBackgroundType = "autoPdf",
+                    )
+                ),
+            )
+
+            assertEquals(
+                pdfAssetId,
+                (store.load(id) as CouchDocBody.Notebook).notebook.defaultBackground,
+            )
+            val asset = store.load(pdfAssetId) as? CouchDocBody.Asset
+            assertNotNull("the observed document's bytes were not found", asset)
+            assertArrayEquals(pdfBytes, asset!!.asset.bytes)
+        } finally {
+            elsewhere.deleteRecursively()
+        }
+    }
+
+    /**
      * A peer that names a path rather than an asset is one running a build from before backgrounds
      * travelled. It has said nothing about backgrounds, so it must not be able to replace a working
      * one with a path that names nothing here.
