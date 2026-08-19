@@ -195,6 +195,16 @@
     <string name="sync_couch_missing_config_hint">Enter a CouchDB URL to start syncing.</string>
     <string name="sync_couch_idle">Up to date</string>
 
+    <!-- Handwriting recognition. Its own database, reached with the sync credentials above. -->
+    <string name="recognition_title">Handwriting recognition</string>
+    <string name="recognition_enable_label">Recognize handwriting</string>
+    <string name="recognition_hint">Reads your handwriting with this BOOX\'s built-in recognizer, shortly after you finish a page. The text makes your notes searchable, and reaches Obsidian if you use the plugin.</string>
+    <string name="recognition_unsupported_hint">Recognition needs a BOOX device: the recognizer is part of its firmware.</string>
+    <string name="recognition_language_label">Language</string>
+    <string name="recognition_database_label">Text database</string>
+    <string name="recognition_database_hint">Separate from your notes database, on the same server. Recognized text is regenerable, so it is kept out of the sync your notebooks use.</string>
+    <string name="recognition_no_server_hint">Set a server URL above to send recognized text anywhere. Without one, recognition still works and stays on this device.</string>
+
     <!-- Mass-deletion guard (protocol 6.7). The two answers must read as opposites at a glance. -->
     <plurals name="sync_couch_held_deletions_title">
         <item quantity="one">Holding back %1$d notebook deletion</item>

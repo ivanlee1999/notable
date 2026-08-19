@@ -155,13 +155,6 @@ class LibraryViewModel @Inject constructor(
     private val _query = MutableStateFlow("")
 
     /**
-     * What a search finds, anywhere in the library.
-     *
-     * Deliberately not scoped to the folder the user is standing in: the reason to search is not
-     * knowing where the thing is, so a search that only looked here would answer a question nobody
-     * asked. Empty while the query is blank, so the ordinary listing costs nothing.
-     */
-    /**
      * The whole library, flat — every folder and every notebook that is not in the Trash.
      *
      * One subscription serving both the search and the file bar's tree. Search was already
@@ -171,11 +164,25 @@ class LibraryViewModel @Inject constructor(
         folderRepository.getAllVisibleFlow(), bookRepository.getAllFlow()
     ) { folders, books -> LibraryTree(folders, books) }
 
+    /**
+     * What a search finds, anywhere in the library.
+     *
+     * Deliberately not scoped to the folder the user is standing in: the reason to search is not
+     * knowing where the thing is, so a search that only looked here would answer a question nobody
+     * asked. Empty while the query is blank, so the ordinary listing costs nothing.
+     */
     private val _searchResultsFlow = combine(_query, _treeFlow) { query, all ->
-        if (query.isBlank()) null
-        else SearchResults(
+        if (query.isBlank()) return@combine null
+
+        // Titles first, then handwriting. A notebook whose *contents* mention the word is the
+        // result people are usually after — the reason to search is generally that the title was
+        // never going to be enough — but it can only be found on pages a recognizer has read.
+        val byTitle = all.books.filter { LibrarySort.matches(it.title, query) }
+        val byHandwriting = appRepository.pageTextRepository.notebooksMatching(query).toSet()
+
+        SearchResults(
             folders = all.folders.filter { LibrarySort.matches(it.title, query) },
-            books = all.books.filter { LibrarySort.matches(it.title, query) },
+            books = byTitle + all.books.filter { it.id in byHandwriting && it !in byTitle },
         )
     }
 
