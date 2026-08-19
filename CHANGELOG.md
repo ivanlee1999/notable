@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.33.0
+
+A PDF you imported now travels with the pages drawn on it, and stays in the background picker
+once you have imported it.
+
+- **A PDF you chose to "Observe" now reaches your other devices.** Importing a PDF offers two
+  ways to keep it: "Copy", which files the document alongside your notebooks, and "Observe",
+  which leaves it where you keep it — a Downloads folder, a cloud folder, a build directory —
+  so that it can go on changing. Only a copied document ever synced. The pages of an observed
+  one arrived on your other devices with the ink on them and blank sheets underneath, and
+  nothing said so: no error, no warning, just a book that looked empty. Both ways send the
+  document now. A book imported before this heals the next time you write in it — the edit
+  sends the document along with the page.
+- **A template stays in the picker once you have imported it.** The background picker listed
+  only the documents the app had copied for itself, so a PDF imported as "Observe" was offered
+  once, while it was being imported, and never appeared again — putting it under a second page
+  meant going back out to the file browser to find it. The picker now lists everything your
+  notebooks are actually drawn on, wherever those files live, and the documents that arrived
+  from your other devices along with them.
+
+### Worth knowing
+
+- **A document this device can no longer read is not offered, and no longer disappears
+  quietly.** An observed PDF you have since deleted or moved is left out of the picker, because
+  a page drawn on it would be blank; and where a page still names bytes that cannot be found,
+  sync now says so in the log instead of skipping them without a word.
+
+No database change.
+
 ## 0.32.0
 
 Quick notes are gone — every note is a notebook now, which means every note syncs. And on Onyx
