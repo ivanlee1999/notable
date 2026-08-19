@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.35.0
+
+The eraser now reaches the page under the seam — the ink you wrote there can be taken back where
+you see it.
+
+- **Ink on the next page can be erased where it shows.** Scrolling past a page's end brings the
+  top of the next page onto the screen, and writing there has always landed on that page. The
+  eraser did not follow: it looked only at the page you came from, so ink written just below the
+  seam could be seen and not rubbed out — the eraser passed straight over it and nothing happened.
+  The pen eraser, the lasso erase and scribble-to-erase all cross the seam now.
+
+### Worth knowing
+
+- **An erase across the seam is not undone by Undo.** Undo belongs to the page you are on, which
+  is the same rule writing across the seam already follows — the ink is removed from the page
+  below, and this page's history has nothing to put back.
+- **A page with no paper size of its own no longer freezes the app where the screen reports no
+  size.** The subpage break markers were drawn by stepping down the page one page-height at a
+  time; a page-height of zero never arrives at the bottom of the screen, and the drawing never
+  ended.
+
+No database change.
+
 ## 0.34.0
 
 Templates are chosen where the question comes up: while the notebook is being made, and — for a
