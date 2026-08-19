@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.36.0
+
+Ink written across a page break is now recorded on the page it landed on, so it syncs like any
+other ink.
+
+- **Ink that flows onto the next page marks that page as edited.** Writing past the bottom of a
+  page files the ink onto the page below, which is where you see it — but the app then noted the
+  edit against the page you were looking at instead. The page that actually received the ink kept
+  its old date, so it was not offered to the server as changed, and the notebook's "Last edited"
+  time ignored it. Both pages are now dated by what was written on them.
+
+### Worth knowing
+
+- **Nothing was lost.** A page skipped this way still went up whenever the whole notebook was
+  sent, which is why the ink is on your other devices; what was missing was the per-page nudge
+  that sends it straight away.
+
+No database change.
+
 ## 0.35.0
 
 The eraser now reaches the page under the seam — the ink you wrote there can be taken back where
