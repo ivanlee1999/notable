@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.34.0
+
+Templates are chosen where the question comes up: while the notebook is being made, and — for a
+page — with a say in which page gets it.
+
+- **A new notebook can start on a document you already use.** The create dialog offered the five
+  printed templates and nothing else, so starting a notebook on a PDF meant importing the file
+  again, even one already sitting under another notebook. It now lists the documents and pictures
+  your library is drawn on beside the printed templates. A notebook made on a document follows
+  it, page for page, exactly as an imported PDF does.
+- **A template can go on a new page before or after this one.** The background picker printed on
+  the page that was open, full stop. Putting a template on a *new* page meant leaving the page,
+  adding a blank one in the pages view, opening it and printing it there — four steps in two
+  screens for one thought. The picker now asks where it should go: this page, a new page before,
+  or a new page after. Either of the last two makes the page, prints it and takes you to it.
+
+### Worth knowing
+
+- **After a page is made, the picker goes back to meaning "this page".** The taps that usually
+  follow — which sheet of the PDF, repeating or not — adjust the page you just landed on, rather
+  than making another page each time.
+- **A notebook's own default background is never asked where to go.** Neither is a page that
+  belongs to no notebook; there is nothing for either to be before or after.
+
+No database change.
+
 ## 0.33.0
 
 A PDF you imported now travels with the pages drawn on it, and stays in the background picker
