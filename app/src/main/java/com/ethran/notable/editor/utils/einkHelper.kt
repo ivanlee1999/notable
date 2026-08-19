@@ -138,22 +138,14 @@ fun onSurfaceDestroy(view: View, touchHelper: TouchHelper?) {
 /**
  * Arms raw drawing over the whole writing surface.
  *
- * The limit rect is **view-local**, because that is the space the SDK works in: TouchHelper
- * maps every rect it is handed *from the host view's own coordinates* into raw digitizer
- * space (RawInputReader hands each rect to `EpdController.mapToRawTouchPoint(hostView, …)`),
- * and the points it delivers back have the host view's screen location already subtracted.
- * The MotionEvent fallback receives view-local coordinates by construction, so both input
- * paths now genuinely share one rectangle.
+ * The pen service interprets its limit rect in **screen coordinates**. The callback points it
+ * sends back are still local to [view], so only the service configuration needs this translation.
  *
- * This used to hand the firmware bands measured on the **root** view — screen coordinates —
- * with the docked chrome excluded, under the belief that "the firmware places its rects on
- * the screen". That was indistinguishable from view-local for as long as the surface filled
- * the screen; once the editor laid the surface out *inside* the chrome's inset, the
- * screen-sized bands were mapped as if view-local and everything shifted by the inset: the
- * pen went dead over the first rail-width and title-bar-height of the paper — an uneditable
- * left/top margin — while the chrome itself needed no exclusion at all, being outside the
- * host view entirely. Which is also why there are no exclude rects any more: the surface
- * *is* the paper, and everything that is not paper is not this view.
+ * The writing surface is laid out inside the docked rail and title-bar inset. Giving the service
+ * `(0, 0, view.width, view.height)` therefore shifts the allowed rectangle left and up by that
+ * inset, leaving the first rail-width and title-bar-height of the actual paper unwritable. Use
+ * the surface's on-screen bounds instead; the chrome is outside that rectangle, so it needs no
+ * exclude rect.
  */
 fun setupSurface(
     view: View,
@@ -168,8 +160,17 @@ fun setupSurface(
     touchHelper.setRawDrawingEnabled(false)
     touchHelper.closeRawDrawing()
 
+    val screenLocation = IntArray(2)
+    view.getLocationOnScreen(screenLocation)
+    val limitRect = rawInputLimitRect(
+        left = screenLocation[0],
+        top = screenLocation[1],
+        width = view.width,
+        height = view.height,
+    )
+
     touchHelper
-        .setLimitRect(mutableListOf(Rect(0, 0, view.width, view.height)))
+        .setLimitRect(mutableListOf(limitRect))
         .setExcludeRect(emptyList())
         .openRawDrawing()
 
@@ -182,6 +183,10 @@ fun setupSurface(
     log.i("Setup editable surface completed")
 
 }
+
+/** The Onyx raw-input service expects this rectangle in physical screen pixels. */
+internal fun rawInputLimitRect(left: Int, top: Int, width: Int, height: Int): Rect =
+    Rect(left, top, left + width, top + height)
 
 /**
  * Firmware stroke style dedicated to the native eraser track. Not a public [TouchHelper]
