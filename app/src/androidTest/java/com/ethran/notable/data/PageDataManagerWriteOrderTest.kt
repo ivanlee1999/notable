@@ -27,6 +27,7 @@ import com.ethran.notable.data.db.StrokePoint
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.data.events.DefaultAppEventBus
 import com.ethran.notable.editor.utils.Pen
+import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.testing.TestDatabaseFactory
 import com.ethran.notable.testing.trashRepositoryFor
@@ -124,6 +125,15 @@ class PageDataManagerWriteOrderTest {
         kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
         db = db,
     )
+
+    /** Two pages of one notebook, in order. */
+    private fun seedTwoPages(): Pair<String, String> = runBlocking {
+        val notebook = Notebook(title = "Notes")
+        repository.bookRepository.create(notebook)
+        val first = repository.bookRepository.getById(notebook.id)!!.pageIds.single()
+        val second = repository.newPageInBook(notebook.id, index = 1)!!
+        first to second
+    }
 
     private fun seedPage(): String = runBlocking {
         val notebook = Notebook(title = "Notes")
@@ -223,4 +233,44 @@ class PageDataManagerWriteOrderTest {
         assertTrue("page A's insert eventually lands", strokeExists(strokeA.id))
         assertEquals(SaveState.Saved, manager.saveState.value)
     }
+
+    /**
+     * A write dates the page it was written on, even when that is not the page on screen.
+     *
+     * Ink that starts below the seam is filed onto the *next* page (handleDrawOntoNextPage), and
+     * the timestamp bump used to default to whatever page was open — so the page that got the ink
+     * kept its old clock and was never queued, while the page that got nothing was dated and
+     * pushed. The page clock is the per-page dirty signal for the incremental upload and §6.4's
+     * liveness signal, so the ink's own page could sit unsent with a clock that says it is clean.
+     */
+    @Test
+    fun ink_filed_onto_another_page_dates_that_page_and_not_the_open_one() = runBlocking {
+        val (openPage, seamPage) = seedTwoPages()
+        manager.setPage(openPage)
+        val openBefore = repository.pageRepository.getById(openPage)!!.updatedAt.time
+        val seamBefore = repository.pageRepository.getById(seamPage)!!.updatedAt.time
+        // Creating the pages queued them; the assertion below is about what this write queues.
+        repository.couchOutboxRepository.pendingIds()
+            .forEach { repository.couchOutboxRepository.clear(it) }
+        Thread.sleep(10) // so a bumped clock is distinguishable from the created one
+
+        manager.saveStrokesToDb(listOf(stroke(seamPage)))
+        manager.awaitPendingDbWrites()
+
+        assertTrue(
+            "the page the ink landed on must be dated by it",
+            repository.pageRepository.getById(seamPage)!!.updatedAt.time > seamBefore,
+        )
+        assertEquals(
+            "the open page had nothing written on it and must keep its clock",
+            openBefore,
+            repository.pageRepository.getById(openPage)!!.updatedAt.time,
+        )
+        assertEquals(
+            "and it is the written page that is queued for upload",
+            listOf(CouchDocId.page(seamPage)),
+            repository.couchOutboxRepository.pendingIds(),
+        )
+    }
+
 }

@@ -1486,21 +1486,24 @@ class PageDataManager @Inject constructor(
     }
 
     fun updateStrokesInDb(strokes: List<Stroke>) {
-        launchDbWrite("updateStrokes(${strokes.size})", strokes.map { it.pageId }) {
+        val pages = strokes.map { it.pageId }.distinct()
+        launchDbWrite("updateStrokes(${strokes.size})", pages) {
             appRepository.strokeRepository.update(strokes)
-            bumpEditTimestamps()
+            pages.forEach { bumpEditTimestamps(it) }
         }
     }
 
     fun updateImagesInDb(images: List<Image>) {
-        launchDbWrite("updateImages(${images.size})", images.map { it.pageId }) {
+        val pages = images.map { it.pageId }.distinct()
+        launchDbWrite("updateImages(${images.size})", pages) {
             appRepository.imageRepository.update(images)
-            bumpEditTimestamps()
+            pages.forEach { bumpEditTimestamps(it) }
         }
     }
 
     fun saveStrokesToDb(strokes: List<Stroke>) {
-        launchDbWrite("saveStrokes(${strokes.size})", strokes.map { it.pageId }) {
+        val pages = strokes.map { it.pageId }.distinct()
+        launchDbWrite("saveStrokes(${strokes.size})", pages) {
             try {
                 appRepository.strokeRepository.create(strokes)
             } catch (_: SQLiteConstraintException) {
@@ -1514,14 +1517,15 @@ class PageDataManager @Inject constructor(
                 )
                 appRepository.strokeRepository.update(strokes)
             }
-            bumpEditTimestamps()
+            pages.forEach { bumpEditTimestamps(it) }
         }
     }
 
     fun saveImagesToDb(images: List<Image>) {
-        launchDbWrite("saveImages(${images.size})", images.map { it.pageId }) {
+        val pages = images.map { it.pageId }.distinct()
+        launchDbWrite("saveImages(${images.size})", pages) {
             appRepository.imageRepository.create(images)
-            bumpEditTimestamps()
+            pages.forEach { bumpEditTimestamps(it) }
         }
     }
 
@@ -1565,10 +1569,12 @@ class PageDataManager @Inject constructor(
     // signal (for incremental upload); the notebook timestamp drives the per-notebook sync
     // Upload/Download decision. Both advance together on any stroke/image edit.
     //
-    // [pageId] defaults to the currently open page, which is what every caller that does not know
-    // better means. Callers that hold the edited page's id should pass it: the two differ whenever
-    // an edit lands on a page other than the open one, and bumping the wrong page leaves the edited
-    // one looking clean to sync.
+    // [pageId] defaults to the currently open page, for callers that have no row to read it from.
+    // Anything holding the written rows passes their own pageIds instead: the two differ whenever
+    // an edit lands on a page other than the open one — ink written below the seam is filed onto
+    // the *next* page — and bumping the wrong page both leaves the edited one looking clean to
+    // sync (its clock is §6.4's liveness signal, and touchUpdatedAt is what queues it for upload)
+    // and dates a page nothing was written on.
     private suspend fun bumpEditTimestamps(pageId: String? = pageFromDb?.id) {
         if (pageId.isNullOrEmpty()) return
         // The page alone. This used to bump the notebook's clock too, and that clock is the
