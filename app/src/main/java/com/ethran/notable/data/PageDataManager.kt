@@ -1237,6 +1237,32 @@ class PageDataManager @Inject constructor(
         requestPageLoad(pageId)
     }
 
+    /**
+     * Erases strokes from a page that is *not* the current one — the cross-page half of the
+     * eraser, and the mirror of [addStrokesToPage]: ink rubbed out where the next page shows
+     * under the seam.
+     *
+     * The cache is only rewritten when that page's strokes are resident (they must be, for the
+     * ink to have been drawn under the seam at all), copy-on-write like [addStrokesToPage] so a
+     * lock-free reader on the drawing thread keeps iterating the snapshot it took. The database
+     * write goes through [removeStrokesFromDb], which is what leaves the tombstones — an erase
+     * that merely made rows absent would come back from the first peer that still holds them.
+     */
+    fun removeStrokesFromPage(pageId: String, strokeIds: List<String>) {
+        if (strokeIds.isEmpty()) return
+        synchronized(lock) {
+            val entry = entries[pageId]
+            val existing = entry?.strokes
+            if (entry != null && existing != null) {
+                val erased = strokeIds.toHashSet()
+                entry.strokes = existing.filterTo(ArrayList(existing.size)) { it.id !in erased }
+                recomputeEntrySizeLocked(entry)
+            }
+        }
+        removeStrokesFromDb(strokeIds, pageId)
+        recomputeHeight(pageId)
+    }
+
     fun getImages(pageId: String): List<Image> = synchronized(lock) {
         entries[pageId]?.images ?: emptyList()
     }
