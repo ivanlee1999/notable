@@ -132,6 +132,17 @@ val KALEIDO_WIDE_BREAKPOINT = 600.dp
  */
 private val COVER_WIDTH = 300.dp
 
+/**
+ * Cover columns for a shelf that is sharing the screen with the library's file bar.
+ *
+ * Floored at two rather than [kaleidoMetrics]'s three: with 280dp gone to the bar there is not
+ * room for three covers at anything like [COVER_WIDTH], and three narrow ones would be the
+ * design's fixed cover width quietly giving way — which is the thing deriving columns from a
+ * cover width was meant to prevent.
+ */
+fun coverColumnsForShelf(shelfWidth: Dp): Int =
+    (shelfWidth / COVER_WIDTH).toInt().coerceAtLeast(2)
+
 fun kaleidoMetrics(width: Dp): KaleidoMetrics =
     if (width >= KALEIDO_WIDE_BREAKPOINT) KaleidoMetrics(
         wide = true,

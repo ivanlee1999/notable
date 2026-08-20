@@ -2,6 +2,7 @@
     <string name="app_name" translatable="false">Notable</string>
     <string name="home_notebooks">Notebooks</string>
     <string name="home_folders">Folders</string>
+    <string name="file_bar_library">Library</string>
     <string name="home_all_notes">All notes</string>
     <string name="home_add_new_folder">Add new folder</string>
     <string name="home_trash">Trash</string>
@@ -35,6 +36,7 @@
     <string name="trash_back">Back</string>
     <string name="home_new_folder">New Folder</string>
     <string name="home_new_notebook">New notebook</string>
+    <string name="home_more_actions">More actions</string>
     <string name="home_import_notebook">Import notebook</string>
     <string name="home_new_note">New note</string>
     <string name="home_view_name">Library</string>
