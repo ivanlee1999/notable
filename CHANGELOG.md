@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.37.1
+
+Nothing in the app changed. This release tags a tree whose test suite finishes: a test that never
+returned had been holding every automated check for six hours at a time, so nothing else could be
+checked behind it.
+
+### Worth knowing
+
+- **This build behaves exactly like 0.37.0.** The one change outside the test code is a helper the
+  app never calls — it exists only so tests can wait for pending database writes, and it had been
+  waiting on something that never ends. If you are on 0.37.0 there is nothing here for you.
+- **Three tests are failing, and they were failing in 0.37.0 too.** They only became visible now
+  that the suite runs to the end; a run of 0.37.0's own code fails the same three. They cover
+  erasing across a page seam and choosing a template, and they are being looked at separately.
+
+No database change.
+
 ## 0.37.0
 
 The bottom of a page is a way on to the next one, in every setting — and with sideways turning,
