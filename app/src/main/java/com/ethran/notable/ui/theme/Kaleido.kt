@@ -61,6 +61,33 @@ object Kaleido {
     val KickerTracking: TextUnit = 1.6.sp
 
     /**
+     * The inks the tool rail writes with.
+     *
+     * A full spread of hues, but every one of them deliberately saturated and dark: on Kaleido
+     * a pale ink is indistinguishable from grey, so the palette widens across the wheel rather
+     * than into tints, and each entry stays deep enough to carry paragraph-size handwriting on
+     * this ground. The bright primaries the rail used to offer — pure CYAN, MAGENTA, YELLOW —
+     * are exactly the ones the panel could not print as writing.
+     *
+     * Ordered and valued to match the iPad app's `Modernist.inks` exactly, so an ink chosen on
+     * one device names the same ink on the other; positions are stable and append-only.
+     */
+    val Inks: List<Int> = listOf(
+        0xFF201E1D.toInt(), // Ink
+        0xFFAE1800.toInt(), // Red
+        0xFFDD2B0F.toInt(), // Coral
+        0xFF888888.toInt(), // Grey
+        0xFFC2610A.toInt(), // Orange
+        0xFF96700A.toInt(), // Gold
+        0xFF2E7D32.toInt(), // Green
+        0xFF0F6E78.toInt(), // Teal
+        0xFF1B4FA0.toInt(), // Blue
+        0xFF4B3A9B.toInt(), // Violet
+        0xFF8E2166.toInt(), // Plum
+        0xFF6B4423.toInt(), // Brown
+    )
+
+    /**
      * Fills a notebook spine may take. Ordered so the two reds do not land next to each
      * other for consecutive hashes.
      */

@@ -2,9 +2,9 @@ package com.ethran.notable.editor.ui.toolbar.model
 
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.editor.utils.PenSetting
+import com.ethran.notable.ui.theme.Kaleido
 import kotlinx.serialization.Serializable
 import java.util.UUID
-import android.graphics.Color as AndroidColor
 
 /**
  * A user-created pen instance: a base [Pen] type plus its own color and size. The same
@@ -39,34 +39,35 @@ data class ToolbarPen(
     fun effectiveSizeOptions(): List<Float> =
         sizeOptions ?: if (pen == Pen.MARKER) DEFAULT_MARKER_SIZES else DEFAULT_STROKE_SIZES
 
-    /**
-     * The nibs the rail offers for this pen, given the size it is currently writing at.
-     *
-     * [currentSize] leads the list before the cut to four and only then is the result sorted,
-     * so the size in hand cannot be the one that got dropped — a rail showing four dots and no
-     * selection would be worse than showing none. Fewer than two means there is nothing to
-     * choose between, and the rail draws no dots at all.
-     */
-    fun nibChoices(currentSize: Float): List<Float> {
-        val sizes = (listOf(currentSize) + effectiveSizeOptions()).distinct().take(4).sorted()
-        return if (sizes.size < 2) emptyList() else sizes
-    }
-
     companion object {
-        /** Matches the historical hardcoded StrokeMenu palette (compose defaults). */
-        val DEFAULT_COLOR_OPTIONS: List<Int> = listOf(
-            AndroidColor.RED, AndroidColor.GREEN, AndroidColor.BLUE, AndroidColor.CYAN,
-            AndroidColor.MAGENTA, AndroidColor.YELLOW, AndroidColor.GRAY,
-            AndroidColor.DKGRAY, AndroidColor.BLACK,
-        )
+        /**
+         * The inks a pen offers unless the user has narrowed them: the whole [Kaleido.Inks]
+         * palette, which is what the rail lays out down its foot.
+         *
+         * It used to be the compose primaries — pure CYAN, MAGENTA and YELLOW among them — which
+         * are the colours a Kaleido panel prints worst: at writing weight they come back as pale
+         * grey. The twelve here are all deep enough to read as handwriting, and they are the same
+         * twelve, in the same order, as the iPad app's.
+         */
+        val DEFAULT_COLOR_OPTIONS: List<Int> = Kaleido.Inks
 
-        /** Everything the settings editor offers for inclusion in [colorOptions]. */
-        val COLOR_CANDIDATES: List<Int> = DEFAULT_COLOR_OPTIONS + listOf(
-            AndroidColor.LTGRAY,
-            0xFFFFA500.toInt(), // orange
-            0xFF800080.toInt(), // purple
-            0xFF8B4513.toInt(), // brown
-        )
+        /**
+         * Everything the settings editor offers for inclusion in [colorOptions] — the same
+         * twelve. There is no thirteenth colour that belongs on this panel, and a pen may still
+         * be narrowed to any subset of them.
+         */
+        val COLOR_CANDIDATES: List<Int> = Kaleido.Inks
+
+        /**
+         * The seed presets' own colours, by name. Taken from [Kaleido.Inks] rather than the
+         * compose primaries the seeds used to carry, so a fresh install's red pen writes the
+         * palette's red and not a pure #FF0000 the panel cannot print.
+         */
+        private val INK = Kaleido.Inks[0]
+        private val RED = Kaleido.Inks[1]
+        private val GREY = Kaleido.Inks[3]
+        private val GREEN = Kaleido.Inks[6]
+        private val BLUE = Kaleido.Inks[8]
 
         val DEFAULT_STROKE_SIZES = listOf(3f, 5f, 10f, 20f)
         val DEFAULT_MARKER_SIZES = listOf(25f, 40f, 60f, 80f)
@@ -95,14 +96,14 @@ data class ToolbarPen(
          * the user's own and live in the rail's overflow (see [extraPresets]).
          */
         val DEFAULT_PENS = listOf(
-            ToolbarPen("ball", Pen.BALLPEN, AndroidColor.BLACK, 5f),
-            ToolbarPen("red", Pen.BALLPEN, AndroidColor.RED, 5f),
-            ToolbarPen("blue", Pen.BALLPEN, AndroidColor.BLUE, 5f),
-            ToolbarPen("green", Pen.BALLPEN, AndroidColor.GREEN, 5f),
-            ToolbarPen("pencil", Pen.PENCIL, AndroidColor.BLACK, 5f),
-            ToolbarPen("brush", Pen.BRUSH, AndroidColor.BLACK, 5f),
-            ToolbarPen("fountain", Pen.FOUNTAIN, AndroidColor.BLACK, 5f),
-            ToolbarPen("marker", Pen.MARKER, AndroidColor.LTGRAY, 40f),
+            ToolbarPen("ball", Pen.BALLPEN, INK, Pen.BALLPEN.baseWidth),
+            ToolbarPen("red", Pen.BALLPEN, RED, Pen.BALLPEN.baseWidth),
+            ToolbarPen("blue", Pen.BALLPEN, BLUE, Pen.BALLPEN.baseWidth),
+            ToolbarPen("green", Pen.BALLPEN, GREEN, Pen.BALLPEN.baseWidth),
+            ToolbarPen("pencil", Pen.PENCIL, INK, Pen.PENCIL.baseWidth),
+            ToolbarPen("brush", Pen.BRUSH, INK, Pen.BRUSH.baseWidth),
+            ToolbarPen("fountain", Pen.FOUNTAIN, INK, Pen.FOUNTAIN.baseWidth),
+            ToolbarPen("marker", Pen.MARKER, GREY, Pen.MARKER.baseWidth),
         )
 
         /**

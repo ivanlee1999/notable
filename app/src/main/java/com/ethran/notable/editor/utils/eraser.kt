@@ -37,12 +37,22 @@ fun isWithinScribbleGrace(lastStrokeEndTime: Long, firstPointTime: Long): Boolea
     firstPointTime < lastStrokeEndTime + SCRIBBLE_TO_ERASE_GRACE_PERIOD_MS
 
 /**
- * Width of the pen-eraser swath in PAGE units: the diameter of the region [handleErase] actually
- * deletes. Shared so the native side-button eraser indicator (see einkHelper.enableNativeEraser)
- * is drawn at exactly the size it erases — through [eraserIndicatorWidth], because the indicator
- * lives on the screen and page units only match screen pixels at zoom 1.
+ * The eraser's width at its middle step, in PAGE units — the swath it deleted for as long as it
+ * was the one implement with no width at all, and therefore the value an eraser nobody has
+ * touched still deletes. The rail's five steps scale from it (see NibWidth); what the erase
+ * actually uses is [eraserSwathWidth].
  */
 const val ERASER_SWATH_WIDTH = 30f
+
+/**
+ * The swath [handleErase] deletes right now, in PAGE units — the user's chosen step.
+ *
+ * Read here rather than threaded through the input path, the same way scribble-to-erase is: the
+ * width is a setting, and every caller that would have to carry it (the Onyx handler, the
+ * refresh manager, the firmware indicator) is one that already reads settings.
+ */
+val eraserSwathWidth: Float
+    get() = GlobalAppSettings.current.eraserSwathWidth
 
 /**
  * The on-screen width of the eraser indicator for a given [zoom] — the swath's page-unit diameter
@@ -50,7 +60,7 @@ const val ERASER_SWATH_WIDTH = 30f
  * Unscaled, the firmware track showed a 30px circle while the erase removed 30·zoom px of ink:
  * too small zoomed in, too wide zoomed out.
  */
-fun eraserIndicatorWidth(zoom: Float): Float = ERASER_SWATH_WIDTH * zoom
+fun eraserIndicatorWidth(zoom: Float): Float = eraserSwathWidth * zoom
 
 const val MINIMUM_SCRIBBLE_POINTS = 15
 
@@ -269,7 +279,7 @@ fun handleErase(
     page: PageView, history: History, points: List<SimplePointF>, eraser: Eraser
 ): Rect? {
     val paint = Paint().apply {
-        this.strokeWidth = ERASER_SWATH_WIDTH
+        this.strokeWidth = eraserSwathWidth
         this.style = Paint.Style.STROKE
         this.strokeCap = Paint.Cap.ROUND
         this.strokeJoin = Paint.Join.ROUND
