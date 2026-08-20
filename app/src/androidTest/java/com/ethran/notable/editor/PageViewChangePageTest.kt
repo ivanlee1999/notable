@@ -24,6 +24,7 @@ import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.data.db.PageSyncStateRepository
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.data.events.DefaultAppEventBus
+import com.ethran.notable.data.model.PageSizePreset
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.testing.TestDatabaseFactory
@@ -37,6 +38,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -89,7 +91,9 @@ class PageViewChangePageTest {
             runCatching { CanvasEventBus.drawingInProgress.unlock() }
         }
         scope.cancel()
-        runBlocking { manager.awaitPendingDbWrites() }
+        // Bounded: a page-load job on the same scope can outlive the test, and an unbounded join
+        // would hang the run rather than fail it.
+        runBlocking { withTimeoutOrNull(10_000) { manager.awaitPendingDbWrites() } }
         db.close()
     }
 
@@ -128,7 +132,15 @@ class PageViewChangePageTest {
 
     @Test
     fun changePage_waits_for_the_drawing_lock_before_swapping_page_identity() = runBlocking {
-        val notebook = Notebook(title = "Notes")
+        // A notebook with a real paper size, like every notebook made since page sizes exist.
+        // A page that declares none falls back to legacyScreenSheet(), and SCREEN_WIDTH/HEIGHT
+        // are 0 off Onyx hardware — every drawing path would then run on a 0x0 sheet.
+        val a4 = PageSizePreset.A4.size
+        val notebook = Notebook(
+            title = "Notes",
+            defaultPageWidth = a4.width,
+            defaultPageHeight = a4.height,
+        )
         repository.bookRepository.create(notebook)
         val pageA = repository.bookRepository.getById(notebook.id)!!.pageIds.single()
         val pageB = repository.newPageInBook(notebook.id, index = 1)!!

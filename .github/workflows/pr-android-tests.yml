@@ -8,6 +8,9 @@ jobs:
   android-tests:
     if: github.event.label.name == 'run-android-tests'
     runs-on: macos-15-intel
+    # A hung instrumented test used to sit here for GitHub's six-hour default before being killed;
+    # a healthy run is 22-32 minutes, so anything past this is wedged, not slow.
+    timeout-minutes: 60
     permissions:
       contents: read
       issues: write

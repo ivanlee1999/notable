@@ -274,6 +274,13 @@ class PageDataManager @Inject constructor(
     // [startPersistingBitmaps].
     private val persistingBitmaps = AtomicBoolean(false)
 
+    /**
+     * The [saveTopic] collector from [startPersistingBitmaps], kept so [awaitPendingDbWrites] can
+     * leave it out of the join. It collects for the life of the process and never completes.
+     */
+    @Volatile
+    private var bitmapPersistJob: Job? = null
+
     init {
         collectBackgroundFileChanges()
         collectExternalPageChanges()
@@ -978,7 +985,7 @@ class PageDataManager @Inject constructor(
         // Activity. Only the files dir is wanted here anyway.
         val appContext = context.applicationContext
 
-        dataScope.launch {
+        bitmapPersistJob = dataScope.launch {
             saveTopic.buffer(10).chunked(1000).collect { pageIdBatch ->
                 val uniquePageIds = pageIdBatch.distinct()
                 if (uniquePageIds.isEmpty()) return@collect
@@ -1323,10 +1330,20 @@ class PageDataManager @Inject constructor(
      * The trailing work is usually [bumpEditTimestamps], which nobody awaits by design.
      *
      * The app never calls it: its scope and its database both live as long as the process.
+     *
+     * [bitmapPersistJob] is excluded. It is a collector, not a write: it is launched on the same
+     * scope by the first [PageView][com.ethran.notable.editor.PageView] to open and then collects
+     * until the process ends, so joining it never returns. A test that built a `PageView` and
+     * awaited here parked forever instead of finishing, which on CI is a job that runs to the
+     * six-hour default timeout. Its per-batch children are ordinary jobs and are still joined.
      */
     @VisibleForTesting
     suspend fun awaitPendingDbWrites() {
-        dataScope.coroutineContext.job.children.toList().joinAll()
+        val persistCollector = bitmapPersistJob
+        dataScope.coroutineContext.job.children
+            .filter { it !== persistCollector }
+            .toList()
+            .joinAll()
     }
 
     /**
