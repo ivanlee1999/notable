@@ -292,7 +292,7 @@ private fun NotebookTreeRow(row: FileBarRow, onClick: () -> Unit) {
         // The same glyph the cover carries, so a note means the same thing in both columns.
         row.badge?.iconOrNull()?.let { icon ->
             Icon(
-                icon, "Sync status: ${'$'}{row.badge.name}",
+                icon, "Sync status: ${row.badge.name}",
                 tint = Kaleido.Muted, modifier = Modifier.size(12.dp)
             )
         }

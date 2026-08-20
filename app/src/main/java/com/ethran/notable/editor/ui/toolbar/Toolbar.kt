@@ -63,14 +63,18 @@ import com.ethran.notable.ui.theme.Kaleido
  *
  * The rail is docked to one of the four edges — never floating, never draggable, because a
  * moving overlay costs a full-screen e-ink refresh. Docked left or right it becomes the
- * tablet arrangement: a vertical rail within thumb reach of the bezel, ending in the ink
- * strip for the pen currently in hand. Docked top or bottom — where a one-handed device
- * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the strip has no
+ * tablet arrangement: a vertical rail within thumb reach of the bezel, carrying the whole ink
+ * palette for the pen currently in hand. Docked top or bottom — where a one-handed device
+ * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the palette has no
  * room to lie down, so the same choice becomes a single [InkSwatch] and a popover.
+ *
+ * Everything but the last group scrolls. Whatever does not fit has to be reachable by
+ * scrolling rather than clipped off the end, and the group that must never be scrolled away
+ * from is the one holding the way out.
  *
  * The order of the groups is the rail's whole argument, and it does not vary:
  *
- *     tools │ nibs │ history │ overflow… │ pinned │ inks
+ *     tools │ nibs │ history │ overflow… │ inks │ pinned
  *
  * The four implements, then how broad the nib is, then undo — the sequence of a single
  * stroke, left where the hand already is. A user-ordered rail could express that too, but it
@@ -386,6 +390,12 @@ private fun VerticalRail(
 
             // As on the horizontal rail: one scroller holding the groups in rail order, so a
             // short screen scrolls rather than clipping whatever falls past its bottom edge.
+            //
+            // The inks are inside it. They used to sit below the pinned group as a fixed foot,
+            // which worked while there were four of them; twelve is 119dp of rail, and a column
+            // that tall cannot be fixed — a portrait 10" panel laid the last four swatches out
+            // past the bottom edge and took the menu button with them. Everything that can be
+            // scrolled to is scrolled to, and only the way out is nailed down.
             Column(
                 Modifier
                     .weight(1f)
@@ -397,13 +407,13 @@ private fun VerticalRail(
                 renderGroup(groups.history)
                 ToolbarDivider()
                 renderGroup(groups.overflow)
+                InkStrip(uiState = uiState, onAction = onAction)
             }
 
-            // Outside the scroller: the way out, and the inks at the foot.
+            // Outside the scroller, so the way out of the editor is always at the foot of the
+            // rail however long the rest of it gets.
             ToolbarDivider()
             Column { renderGroup(groups.pinned) }
-
-            InkStrip(uiState = uiState, onAction = onAction)
         }
         if (position == AppSettings.Position.Left) ToolbarEdgeRule(vertical = true)
     }

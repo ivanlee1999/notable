@@ -1,6 +1,7 @@
 package com.ethran.notable.editor.ui.toolbar
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -20,11 +21,13 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.ToolbarAction
 import com.ethran.notable.editor.ToolbarUiState
 import com.ethran.notable.editor.state.Mode
-import com.ethran.notable.editor.ui.toolbar.model.ToolbarElements
+import com.ethran.notable.editor.ui.toolbar.model.NibWidth
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.editor.ui.toolbar.model.baseWidth
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.testing.ComposeUiSupportRule
+import com.ethran.notable.ui.theme.Kaleido
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -56,6 +59,12 @@ class ToolRailTest {
          * runs on — which is the point: [rail] may only ever narrow the window, never widen it.
          */
         private val NARROW_WIDTH = 320.dp
+
+        /**
+         * Shorter than any panel this runs on, for the same reason [NARROW_WIDTH] is narrower
+         * than any of them: a pinned size may only ever shrink the window.
+         */
+        private val SHORT_HEIGHT = 560.dp
     }
 
     private fun state(mode: Mode = Mode.Draw, eraser: Eraser = Eraser.PEN) = ToolbarUiState(
@@ -83,11 +92,18 @@ class ToolRailTest {
      * not fit is scrolled to; `assertIsDisplayed` only where being *on screen* is the actual
      * guarantee, which is the pinned group.
      */
-    private fun rail(uiState: ToolbarUiState, width: Dp? = null): MutableList<ToolbarAction> {
+    private fun rail(
+        uiState: ToolbarUiState,
+        width: Dp? = null,
+        height: Dp? = null,
+        position: AppSettings.Position = AppSettings.Position.Top,
+    ): MutableList<ToolbarAction> {
         val actions = mutableListOf<ToolbarAction>()
-        GlobalAppSettings.update(AppSettings(version = 1))
+        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position))
         composeRule.setContent {
-            val modifier = if (width == null) Modifier else Modifier.width(width)
+            var modifier: Modifier = Modifier
+            if (width != null) modifier = modifier.width(width)
+            if (height != null) modifier = modifier.height(height)
             Box(modifier) {
                 ToolbarContent(
                     uiState = uiState,
@@ -101,50 +117,60 @@ class ToolRailTest {
     }
 
     @Test
-    fun nibDotsShowThePensOwnSizes() {
+    fun theRailOffersTheFiveStepsAndNoOthers() {
         rail(state())
-        // The ballpen's configured sizes, each a dot — in the rail, not behind the pen's
-        // stroke menu. One per size, and no more.
-        ballpen.nibChoices(ballpen.size).forEach { size ->
-            composeRule.onNodeWithContentDescription("nib ${sizeLabel(size)}").assertExists()
+        NibWidth.entries.forEach { width ->
+            composeRule.onNodeWithContentDescription("nib ${width.label}").assertExists()
         }
-        assertEquals(
-            ballpen.nibChoices(ballpen.size).size,
-            countMatching { it.startsWith("nib ") },
-        )
+        assertEquals(NibWidth.entries.size, countMatching { it.startsWith("nib ") })
     }
 
     @Test
-    fun tappingANibAsksForThatSize() {
+    fun tappingANibAsksForThatStepAtThePensOwnBaseWidth() {
         val actions = rail(state())
-        val target = ballpen.nibChoices(ballpen.size).last { it != ballpen.size }
+        val target = NibWidth.BROAD
 
-        composeRule.onNodeWithContentDescription("nib ${sizeLabel(target)}")
+        composeRule.onNodeWithContentDescription("nib ${target.label}")
             .performScrollTo().performClick()
         composeRule.waitForIdle()
 
         val change = actions.filterIsInstance<ToolbarAction.ChangePenSetting>().single()
         assertEquals(ballpen.id, change.presetId)
-        assertEquals(target, change.setting.strokeSize)
+        assertEquals(target.sizeFor(ballpen.pen.baseWidth), change.setting.strokeSize)
         // Changing how broad the nib is must not change the ink it is carrying.
         assertEquals(ballpen.color, change.setting.color)
     }
 
+    /**
+     * The eraser is an implement with a width like any other.
+     *
+     * Its two kinds used to *replace* the nib row, which is how the eraser ended up the one
+     * tool stuck at a single fixed size — there was nowhere left to ask for a bigger one. They
+     * join the row now, and the row applies to the eraser while it is in hand.
+     */
     @Test
-    fun erasingReplacesTheNibsWithTheErasersTwoKinds() {
-        rail(state(mode = Mode.Erase))
+    fun erasingKeepsTheNibsAndAddsTheErasersTwoKinds() {
+        val actions = rail(state(mode = Mode.Erase))
 
         composeRule.onNodeWithContentDescription("rub out").assertExists()
         composeRule.onNodeWithContentDescription("erase whole strokes").assertExists()
-
-        // A nib width means nothing to an eraser, so the dots are gone while it is in hand.
-        ballpen.nibChoices(ballpen.size).forEach { size ->
-            assertEquals(
-                "Nib dot still shown while erasing",
-                0,
-                count("nib ${sizeLabel(size)}"),
-            )
+        NibWidth.entries.forEach { width ->
+            composeRule.onNodeWithContentDescription("nib ${width.label}").assertExists()
         }
+
+        composeRule.onNodeWithContentDescription("nib ${NibWidth.HEAVY.label}")
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        // The eraser's own width, not the pen's: a nib change here must never touch the ink.
+        assertEquals(
+            NibWidth.HEAVY,
+            actions.filterIsInstance<ToolbarAction.ChangeEraserWidth>().single().width,
+        )
+        assertTrue(
+            "Erasing must not rewrite the pen it is standing in for",
+            actions.filterIsInstance<ToolbarAction.ChangePenSetting>().isEmpty(),
+        )
     }
 
     @Test
@@ -211,7 +237,65 @@ class ToolRailTest {
     @Test
     fun theToolsAreScrollableToOnARailTooNarrowToHoldThem() {
         rail(state(), width = NARROW_WIDTH)
-        composeRule.onNodeWithContentDescription("nib ${sizeLabel(ballpen.size)}")
+        composeRule.onNodeWithContentDescription("nib ${NibWidth.HEAVY.label}")
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    /**
+     * The whole palette reaches the vertical rail, not a cut of it.
+     *
+     * The strip used to show four inks, chosen by cutting the pen's list at the size that
+     * happened to fit one column — so eight of the twelve were reachable only through the
+     * stroke menu, and which four you got moved every time the pen changed colour.
+     */
+    @Test
+    fun theVerticalRailCarriesEveryInkThePenOffers() {
+        rail(state(), position = AppSettings.Position.Left)
+        Kaleido.Inks.forEach { ink ->
+            composeRule.onNodeWithContentDescription(inkDescription(ink)).assertExists()
+        }
+        assertEquals(Kaleido.Inks.size, countMatching { it.startsWith("ink #") })
+    }
+
+    @Test
+    fun tappingAnInkWritesItToThePenInHand() {
+        val actions = rail(state(), position = AppSettings.Position.Left)
+        val target = Kaleido.Inks.last()
+
+        composeRule.onNodeWithContentDescription(inkDescription(target))
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        val change = actions.filterIsInstance<ToolbarAction.ChangePenSetting>().single()
+        assertEquals(ballpen.id, change.presetId)
+        assertEquals(target, change.setting.color)
+        // Changing the ink must not change how broad the nib is.
+        assertEquals(ballpen.size, change.setting.strokeSize)
+    }
+
+    /**
+     * The vertical counterpart of [theMenuSurvivesARailTooNarrowToHoldEverything], and the
+     * reason the palette is inside the scroller rather than pinned under it.
+     *
+     * Twelve swatches are 119dp of rail. Fixed below the pinned group, they pushed it off the
+     * bottom of a portrait panel — the menu is the only route to the page's own actions, so a
+     * rail that loses it strands the user exactly as 0.19.0 did across the other axis. The
+     * height here is well under any device's, because a pinned size may only ever shrink the
+     * window: forcing one taller puts the rail's tail outside it and every assertion about
+     * being displayed fails for reasons that have nothing to do with the rail.
+     */
+    @Test
+    fun theMenuSurvivesARailTooShortToHoldEverything() {
+        rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Left)
+        composeRule.onNodeWithContentDescription("menu").assertIsDisplayed()
+    }
+
+    /** And the palette it gave the room to is still reachable, by scrolling to it. */
+    @Test
+    fun theInksAreScrollableToOnARailTooShortToHoldThem() {
+        rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Left)
+        composeRule.onNodeWithContentDescription(inkDescription(Kaleido.Inks.last()))
             .performScrollTo()
             .assertIsDisplayed()
     }
@@ -230,5 +314,4 @@ class ToolRailTest {
             }
         ).fetchSemanticsNodes(atLeastOneRootRequired = false).size
 
-    private fun sizeLabel(size: Float): String = ToolbarElements.sizeLabel(size)
 }
