@@ -38,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -570,6 +572,7 @@ private fun LibraryHeader(
                     )
                 }
                 if (isOverflowOpen) LibraryOverflowMenu(
+                    below = metrics.hit,
                     onImport = {
                         isOverflowOpen = false
                         onImport()
@@ -708,11 +711,18 @@ private fun LibrarySearchRow(
  */
 @Composable
 private fun LibraryOverflowMenu(
+    below: Dp,
     onImport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // A Popup's alignment is relative to its parent — here the button's own box — so TopEnd
+    // alone drops the menu straight on top of the header, covering sync and settings with it.
+    // Offsetting by the button's height puts it under the button that opened it, which is where
+    // a menu is expected to come from.
+    val drop = with(LocalDensity.current) { below.roundToPx() }
     Popup(
         alignment = Alignment.TopEnd,
+        offset = IntOffset(0, drop),
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
