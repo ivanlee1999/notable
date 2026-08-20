@@ -68,6 +68,27 @@ object PageViewportBounds {
         if (bounded) fitZoom.coerceIn(MIN_ZOOM, MAX_ZOOM) else MIN_ZOOM
 
     /**
+     * How far *before* the page's left edge the view may sit: half the slack, so a sheet
+     * narrower than the view is centred in it rather than shoved against the left.
+     *
+     * Negative by construction — the scroll is where the view's left edge sits in page units, so
+     * putting page x=0 further right means scrolling to a negative x. Everything else follows
+     * from that one number without knowing about it: strokes draw at `-scroll`, and
+     * [com.ethran.notable.editor.InkViewport] maps a pen at screen x to `x / zoom + scroll.x`,
+     * so ink lands under the nib on a centred sheet exactly as it does on a full-width one.
+     *
+     * Zero whenever the page is at least as wide as the view, which is every page at the width
+     * fit — the whole-page fit is what makes this reachable at all.
+     */
+    fun minHorizontalScroll(pageWidth: Float, viewWidth: Int, zoom: Float): Float {
+        val visible = viewWidth / zoom.coerceAtLeast(SMALLEST_USABLE_ZOOM)
+        val slack = visible - pageWidth
+        // Exactly zero, not negative zero: this is compared and stored as a scroll offset, and
+        // `Offset(-0f, 0f) != Offset(0f, 0f)`.
+        return if (slack <= 0f) 0f else -slack / 2f
+    }
+
+    /**
      * How far the view may pan along one axis: enough to bring [pageExtent]'s far edge to the far
      * edge of the view, and never negative — a page smaller than the view does not pan at all.
      */
@@ -99,6 +120,21 @@ object PageViewportBounds {
         if (overshootIntoNextPage) maxOf(pageExtent, 0f)
         else maxScroll(pageExtent, viewExtent, zoom)
 
+    /**
+     * One axis of [boundScroll]: where the view's left edge may sit.
+     *
+     * The two cases are exclusive, which is what keeps this simple. A sheet **wider** than the
+     * view pans from its left edge to its right one and is never centred. A sheet **narrower**
+     * than the view has nowhere to pan to, so its one legal position is the centred one — the
+     * range collapses to a point. Allowing the ordinary `0..0` there would have let a centred
+     * page be dragged out of its own margin and left flush against the left edge.
+     */
+    fun boundHorizontalScroll(x: Float, pageWidth: Float, viewWidth: Int, zoom: Float): Float {
+        val centred = minHorizontalScroll(pageWidth, viewWidth, zoom)
+        val panTo = maxScroll(pageWidth, viewWidth, zoom)
+        return if (panTo > 0f) x.coerceIn(0f, panTo) else centred
+    }
+
     /** [scroll] pulled inside the page: never before an edge, never past the opposite one. */
     fun boundScroll(
         scroll: Offset,
@@ -109,7 +145,7 @@ object PageViewportBounds {
         viewHeight: Int,
         overshootIntoNextPage: Boolean = false,
     ): Offset = Offset(
-        scroll.x.coerceIn(0f, maxScroll(pageWidth, viewWidth, zoom)),
+        boundHorizontalScroll(scroll.x, pageWidth, viewWidth, zoom),
         scroll.y.coerceIn(
             0f, maxVerticalScroll(pageHeight, viewHeight, zoom, overshootIntoNextPage)
         )

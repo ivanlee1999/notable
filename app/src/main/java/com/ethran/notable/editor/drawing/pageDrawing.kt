@@ -250,10 +250,18 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
     val pageEndY = page.height - scroll.y
     val pageEndX = page.pannableWidth() - scroll.x
 
-    // Right of the page's pannable width. Rarely visible at all — the zoom floor keeps a bounded
-    // sheet filling the view's width — but a render wider than the page marks the edge honestly.
-    if (page.hasHardBounds && pageEndX < viewWidthUnits) {
-        canvas.drawRect(pageEndX, 0f, viewWidthUnits, viewHeightUnits, offPagePaint)
+    // Beside the sheet. Visible whenever the whole-page fit is in force (sideways page turns),
+    // which centres a sheet narrower than the view and leaves a margin on either side of it —
+    // and on any render wider than the page. Both sides, because the sheet is centred: the left
+    // margin is the negative scroll the centring parks the view at.
+    if (page.hasHardBounds) {
+        if (pageEndX < viewWidthUnits) {
+            canvas.drawRect(pageEndX, 0f, viewWidthUnits, viewHeightUnits, offPagePaint)
+        }
+        val pageStartX = -scroll.x
+        if (pageStartX > 0f) {
+            canvas.drawRect(0f, 0f, pageStartX, viewHeightUnits, offPagePaint)
+        }
     }
 
     if (pageEndY >= viewHeightUnits) return

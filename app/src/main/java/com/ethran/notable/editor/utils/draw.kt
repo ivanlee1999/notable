@@ -73,6 +73,18 @@ fun handleDraw(
             return
         }
 
+        // Beside the sheet: the same dead space, on the axis the whole-page fit opens up. A sheet
+        // centred in a wider view has a gray margin either side of it, and ink aimed there would
+        // be stored at an x no scroll can reach — the very complaint ("the margin is uneditable")
+        // that the gray exists to answer, which is answered by refusing rather than by pretending.
+        val startX = touchPoints.first().x
+        if (page.hasHardBounds && (startX < 0f || startX >= page.sheet.width)) {
+            page.snackManager.showOrUpdateSnack(
+                SnackConf(text = "The page ends here", duration = 2000)
+            )
+            return
+        }
+
         val stroke = strokeFromPoints(
             page.currentPageId, strokeSize, color, pen, touchPoints
         )
