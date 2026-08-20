@@ -111,6 +111,10 @@ class EditorControlTower(
         // takes over once it leaves the screen. This is the continuous counterpart of the jump
         // branch underneath, which used to serve the last page even in Scrolling mode: creating
         // a page is right, arriving on it by a full-screen flip mid-drag is not.
+        //
+        // In Pagination mode there is no seam to slide in, so the created page is *entered*
+        // instead (the branch below turns onto it) — but it is still created here, because
+        // running out of paper has one answer in every mode: more paper.
         if (page.continuousScrollEnabled && delta.x == 0f && delta.y < 0 &&
             page.nextPageId == null && page.isAtVerticalEdge(-delta.y)
         ) {
@@ -127,13 +131,19 @@ class EditorControlTower(
             }
             return
         }
-        // Dragging on when the page has no more to give is how you turn it, when that is the
-        // direction the reader chose. Asked before the scroll is queued: once it is in the
-        // accumulator it has been coalesced with other movement and the edge is no longer legible.
-        // Under continuous scrolling both directions are handled above, so this discrete turn
-        // now serves Pagination mode (and the upward turn at a page's top).
-        if (GlobalAppSettings.current.pageTurn.isVertical &&
-            delta.x == 0f && page.isAtVerticalEdge(-delta.y) &&
+        // Dragging on when the page has no more to give is how you turn it. Asked before the
+        // scroll is queued: once it is in the accumulator it has been coalesced with other
+        // movement and the edge is no longer legible. Under continuous scrolling both
+        // directions are handled above, so this discrete turn serves Pagination mode (and the
+        // upward turn at a page's top).
+        //
+        // Deliberately *not* conditioned on the page-turn direction. It was — and "Side to
+        // side" then meant the bottom of a page was a wall: no turn, no new page, nothing to do
+        // but stop. The two settings answer different questions. Which way a *swipe* turns the
+        // page is one; whether running off the bottom of the paper gets you the next sheet is
+        // not a preference at all, it is the only sane answer, and every note app that paginates
+        // gives it. Sideways swiping keeps working exactly as configured.
+        if (delta.x == 0f && page.isAtVerticalEdge(-delta.y) &&
             !(page.crossPageScrollActive && delta.y < 0)
         ) {
             if (!edgeTurnTaken) {
@@ -217,9 +227,11 @@ class EditorControlTower(
         val delta = pagedScrollDelta(page.viewHeight, direction)
         if (delta == 0f) return
         // Paged vertical navigation steps a screen at a time and comes through here rather than
-        // requestScroll, so the page turn has to be offered on this path too — otherwise the
-        // setting would work in continuous scrolling and silently do nothing in paged.
-        if (GlobalAppSettings.current.pageTurn.isVertical && page.isAtVerticalEdge(-delta)) {
+        // requestScroll, so the page turn has to be offered on this path too — otherwise it
+        // would work in continuous scrolling and silently do nothing in paged. Not gated on the
+        // page-turn direction, for the reason given in requestScroll: the end of the paper is
+        // the end of the paper whichever way swiping turns pages.
+        if (page.isAtVerticalEdge(-delta)) {
             if (!edgeTurnTaken) {
                 edgeTurnTaken = true
                 if (direction > 0) goToNextPage() else goToPreviousPage()

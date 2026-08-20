@@ -234,6 +234,72 @@ class PageViewportBoundsTest {
         assertTrue("the width fit overflows a view shorter than the sheet", sheet.height * widthFit > viewHeight)
     }
 
+    /**
+     * The whole-page fit is what makes a sheet narrower than the view reachable at all, and a
+     * sheet parked against the left edge with all its slack on the right reads as a mistake. The
+     * scroll goes negative by half the slack instead, which is what centres it.
+     */
+    @Test
+    fun `a sheet narrower than the view is centred in it`() {
+        val sheet = PageSizePreset.A4.size
+        val viewWidth = 2000
+        // The whole-page fit on a view wider than it is tall: height decides, so the sheet ends
+        // up narrower than the view.
+        val zoom = PageViewportBounds.fitWholePageZoom(
+            sheet.width, sheet.height, viewWidth, 1000)
+        val visibleWidth = viewWidth / zoom
+        val expected = -((visibleWidth - sheet.width) / 2f)
+
+        assertEquals(
+            expected,
+            PageViewportBounds.minHorizontalScroll(sheet.width.toFloat(), viewWidth, zoom),
+            0.001f)
+        // Left margin and right margin are the same width — which is what "centred" means.
+        val leftMargin = -expected
+        val rightMargin = visibleWidth - sheet.width - leftMargin
+        assertEquals(leftMargin, rightMargin, 0.001f)
+    }
+
+    /** At the width fit — every page under downward turning — there is no slack to centre. */
+    @Test
+    fun `a sheet that fills the view is not centred`() {
+        val sheet = PageSizePreset.A4.size
+        val zoom = PageViewportBounds.fitToWidthZoom(sheet.width, 1400)
+        assertEquals(
+            0f,
+            PageViewportBounds.minHorizontalScroll(sheet.width.toFloat(), 1400, zoom),
+            0.001f)
+    }
+
+    /**
+     * The bound has to *allow* the centred position, or the clamp would immediately undo the
+     * centring — and it must still refuse to pan past either edge of the sheet.
+     */
+    @Test
+    fun `the centred scroll survives the bound, and nothing beyond it does`() {
+        val sheet = PageSizePreset.A4.size
+        val viewWidth = 2000
+        val viewHeight = 1000
+        val zoom = PageViewportBounds.fitWholePageZoom(
+            sheet.width, sheet.height, viewWidth, viewHeight)
+        val centred = PageViewportBounds.minHorizontalScroll(
+            sheet.width.toFloat(), viewWidth, zoom)
+
+        fun boundedX(x: Float) = PageViewportBounds.boundScroll(
+            scroll = Offset(x, 0f),
+            pageWidth = sheet.width.toFloat(), viewWidth = viewWidth, zoom = zoom,
+            pageHeight = sheet.height.toFloat(), viewHeight = viewHeight,
+        ).x
+
+        assertEquals("the centred position is allowed", centred, boundedX(centred), 0.001f)
+        assertEquals("further left is not", centred, boundedX(centred - 500f), 0.001f)
+        // With the whole sheet on screen there is nothing to pan *to*, so the centred position
+        // is the *only* position — a page cannot be dragged out of its own margin and left
+        // flush against one edge, which an ordinary 0..0 bound would have permitted.
+        assertEquals("further right is not", centred, boundedX(centred + 500f), 0.001f)
+        assertEquals("nor is the uncentred origin", centred, boundedX(0f), 0.001f)
+    }
+
     /** A view taller than the sheet needs no shrinking: the width fit already shows all of it. */
     @Test
     fun `a view taller than the sheet fits the same either way`() {

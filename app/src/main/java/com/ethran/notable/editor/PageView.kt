@@ -229,14 +229,39 @@ class PageView(
      * width was the screen width — which is precisely why the same page came out different sizes on
      * the two apps.
      *
-     * The width fit regardless of which way pages turn. Sideways turning briefly used the
-     * whole-page fit instead, which letterboxed the sheet between dead margins on any screen
-     * whose aspect is not the paper's — margins that looked like page but took no ink. The page
-     * opens at full width now, and the part that does not fit is in the direction scrolling
-     * already goes.
+     * This is the width fit alone; [fitZoom] decides whether the page actually opens at it.
      */
     val fitToWidthZoom: Float
         get() = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
+
+    /**
+     * The zoom a page opens and re-fits at — what "the page fits" means here.
+     *
+     * Which answer is right depends on which way pages turn, and this is where reMarkable, the
+     * Kindle Scribe, GoodNotes and Notability all land:
+     *
+     * - **Sideways turning shows one whole sheet at a time.** A page you cannot see all of is
+     *   not a page you can turn past, and a sheet split across two screenfuls that only a
+     *   sideways swipe can leave is what reads as the page having "sub-pages".
+     * - **Downward turning fits the width** and lets the sheet run off the bottom, because that
+     *   is the direction you are about to travel in — and under continuous scrolling it runs on
+     *   into the next page rather than stopping.
+     *
+     * The whole-page fit was tried once before and withdrawn, because it letterboxed the sheet
+     * between margins that looked like page and took no ink. What made that intolerable was the
+     * lie, not the letterbox: the surround is drawn as off-page gray now and refuses the pen
+     * with a hint, and the sheet is centred in it rather than shoved to one side.
+     *
+     * Only for a page that declares a sheet. An undeclared page has no agreed size to fit.
+     */
+    val fitZoom: Float
+        get() = if (hasHardBounds && !GlobalAppSettings.current.pageTurn.isVertical) {
+            PageViewportBounds.fitWholePageZoom(
+                sheet.width, sheet.height, viewWidth, viewHeight
+            )
+        } else {
+            fitToWidthZoom
+        }
 
     /**
      * Whether the sheet is a hard edge — true for any page that declares its own size.
@@ -284,7 +309,7 @@ class PageView(
      * space beyond the sheet's right edge never comes on screen. See [PageViewportBounds].
      */
     val minZoom: Float
-        get() = PageViewportBounds.minZoom(fitToWidthZoom, hasHardBounds)
+        get() = PageViewportBounds.minZoom(fitZoom, hasHardBounds)
 
     /**
      * The zoom to open a page at: the one it was left at this session, or the fit. Held inside the
@@ -292,7 +317,7 @@ class PageView(
      * could never have reached.
      */
     private fun initialZoom(): Float =
-        pageDataManager.getPageZoom(currentPageId, fitToWidthZoom).coerceIn(minZoom, MAX_ZOOM)
+        pageDataManager.getPageZoom(currentPageId, fitZoom).coerceIn(minZoom, MAX_ZOOM)
 
 
 //    private var dbStrokes = appRepository.strokeRepository
@@ -932,7 +957,7 @@ class PageView(
         // per pixel). Before page sizes these were the same thing in portrait, so the snap target
         // was derived from the screen; now the page decides, and the fit is what has to be easy to
         // land on, since it is the zoom at which the page looks like the page.
-        val fitZoom = fitToWidthZoom
+        val snapFit = fitZoom
         // Never below the fit on a bounded page: zooming out past it would put non-page space on
         // screen, and the page edge is an edge.
         val floor = minZoom
@@ -943,9 +968,9 @@ class PageView(
             // so it is negative when pinching in (zoom out) and positive when
             // spreading (zoom in); split on 0, not 1.
             if (scaleDelta <= 0f) {
-                max(min(fitZoom, 1.0f), floor)
+                max(min(snapFit, 1.0f), floor)
             } else {
-                max(fitZoom, 1.0f)
+                max(snapFit, 1.0f)
             }
         } else {
             // Continuous zoom: scaleDelta is the per-frame growth ratio minus 1,
@@ -1210,7 +1235,7 @@ class PageView(
         // Re-fit to the new width. Resetting to 1.0 was the old "fit", back when the page was the
         // screen; on a declared sheet it would leave the page adrift after every rotation.
         // Before the canvas is recreated, so the new canvas carries the new zoom.
-        zoomLevel.value = fitToWidthZoom
+        zoomLevel.value = fitZoom
         // Recreate bitmap and canvas with new dimensions
         recreateCanvas()
         pageDataManager.setPageZoom(currentPageId, zoomLevel.value)
