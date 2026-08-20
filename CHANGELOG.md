@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.37.0
+
+The bottom of a page is a way on to the next one, in every setting — and with sideways turning,
+a page is one screenful again rather than two you can only leave sideways.
+
+- **Scrolling down off the end of a page reaches the next one, and makes one if there is none.**
+  With "Turn the page: Side to side" chosen, it did not: that setting quietly switched off every
+  vertical route between pages, so the bottom of the paper was a wall. Writing on the first page
+  of a notebook, no amount of scrolling would produce a second — the only way to get one was a
+  sideways swipe, after which scrolling worked again, because by then there was a page to scroll
+  to. Which way a *swipe* turns pages is a preference; whether running out of paper gets you more
+  is not, and it no longer depends on that setting or on Scrolling-versus-Pagination.
+- **"Side to side" shows one whole page at a time.** An A4 sheet fitted to the width of a screen
+  that is not A4-shaped runs past the bottom, so a page arrived as two screenfuls with no way out
+  of them but a sideways swipe — pages inside the page. Sideways turning now fits the whole sheet,
+  which is the answer GoodNotes, Notability, reMarkable and the Kindle Scribe all give: a page you
+  cannot see all of is not a page you can turn past. "Up and down" is unchanged — it fits the
+  width and lets the sheet run on into the next page, because that is the way you are travelling.
+- **A sheet narrower than the screen sits in the middle of it.** The margin either side is drawn
+  as off-page gray and refuses the pen with a hint, the same as the space below a page — the
+  reason this fit was withdrawn once before was margins that looked like page and took no ink,
+  and that was a lie worth removing rather than a layout worth abandoning.
+
+The iPad app gets the same two fixes, so a notebook behaves the same on both.
+
 ## 0.36.0
 
 Ink written across a page break is now recorded on the page it landed on, so it syncs like any
