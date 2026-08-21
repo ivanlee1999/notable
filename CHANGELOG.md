@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.39.0
+
+One fix: the new-notebook dialog works on a phone-sized screen.
+
+- **Creating a notebook fits the screen it is asked on.** On a Palma-class device the dialog's
+  rows squeezed rather than wrapped, and the templates the library already uses — an imported
+  document a new notebook can follow — were laid out where no tap could reach them. The rows
+  now wrap, the dialog is never taller than the screen, and the rest scrolls; the same repair
+  the template chooser got in 0.38.0, applied to the other place a template is chosen.
+
+No database change.
+
 ## 0.38.0
 
 The tool rail offers every ink and every nib the iPad app's does, and the library shows you its
