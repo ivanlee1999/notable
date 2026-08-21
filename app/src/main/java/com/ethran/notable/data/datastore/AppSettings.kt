@@ -141,10 +141,9 @@ data class AppSettings(
      * is a preference, not a fact. Reading down a long document wants the next page below this one;
      * working through a notebook the way you would a paper one wants it to the side.
      *
-     * It also decides what "the page fits" means, which is where the two answers every other
-     * note app gives come from: turning sideways shows one whole sheet at a time, because a page
-     * you cannot see all of is not one you can turn past; turning downward fits the width and
-     * lets the sheet run off the bottom, because that is the way you are about to travel.
+     * It does not decide the page's fitted geometry. A declared page is one whole sheet in either
+     * direction; otherwise changing this gesture would make the same page appear to gain or lose
+     * screenfuls of paper.
      *
      * What it does **not** decide is whether the bottom of a page is a dead end. It used to:
      * with [Horizontal] set, dragging past the end of the paper did nothing whatsoever — no
@@ -153,9 +152,9 @@ data class AppSettings(
      * setting and in both [VerticalNavigation] modes.
      */
     enum class PageTurn {
-        /** Fit the page's width and let the sheet run off the bottom; drag past it to turn. */
+        /** Pull past the bottom edge to turn. */
         Vertical,
-        /** Fit the whole sheet on screen and swipe sideways — one page at a time. */
+        /** Swipe sideways to turn. */
         Horizontal;
 
         val isVertical: Boolean get() = this == Vertical

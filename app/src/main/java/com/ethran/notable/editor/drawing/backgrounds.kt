@@ -290,6 +290,7 @@ fun drawBg(
     resourceBitmap: Bitmap?,
     scale: Float = 1f,          // When exporting, we change scale of canvas. therefore canvas.width/height is scaled
     repeat: Boolean = false,    // for repeating image
+    showPagination: Boolean = true,
     clipRect: Rect? = null,     // before the scaling
 ) {
 
@@ -335,7 +336,7 @@ fun drawBg(
     // Only where a break will actually fall: with pagination off the export is one continuous
     // page, and a line promising a break that never comes is worse than no line.
     val settings = GlobalAppSettings.current
-    if (settings.paginatePdf && settings.visualizePdfPagination) {
+    if (showPagination && settings.paginatePdf && settings.visualizePdfPagination) {
         drawPaginationLine(canvas, scroll, scale, sheet)
     }
     if (clipRect != null) {

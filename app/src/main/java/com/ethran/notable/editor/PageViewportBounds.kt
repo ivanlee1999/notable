@@ -50,11 +50,9 @@ object PageViewportBounds {
     /**
      * The zoom at which the *whole* sheet is on screen, both dimensions.
      *
-     * What "the page fits" means depends on which way you turn it, and this is the answer
-     * reMarkable, the Kindle Scribe and GoodNotes all land on for sideways turning: one whole page
-     * at a time, because a page you cannot see all of is not one you can turn past. Scrolling down
-     * keeps [fitToWidthZoom] instead and lets the page run off the bottom — the direction you are
-     * about to travel in.
+     * This is the fitted geometry for every declared page. The navigation preference chooses the
+     * gesture used to leave the sheet; it does not change whether the sheet occupies one viewport
+     * or several.
      */
     fun fitWholePageZoom(sheetWidth: Int, sheetHeight: Int, viewWidth: Int, viewHeight: Int): Float {
         val widthFit = fitToWidthZoom(sheetWidth, viewWidth)
@@ -209,6 +207,10 @@ object PageViewportBounds {
      */
     fun contentExtent(sheet: Int, contentEdges: List<Float>): Int {
         val furthest = contentEdges.filter { it.isFinite() }.maxOrNull() ?: return sheet
+        // Slack belongs after legacy overflow, not after ordinary ink near the edge of a sheet.
+        // Adding it unconditionally made an in-bounds stroke at the bottom unlock a strip of
+        // scrollable canvas that looked like the start of another page, but was still this one.
+        if (furthest <= sheet) return sheet
         // Rounded up, not truncated: a content edge at 100.1 truncates to 100, which puts the last
         // fraction of a pixel back outside the canvas — the very thing this function exists to
         // prevent, in miniature.

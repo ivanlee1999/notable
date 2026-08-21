@@ -221,15 +221,15 @@ class PageView(
         get() = pageDataManager.getSheet(currentPageId)
 
     /**
-     * The zoom a page is shown at when it is fitted: the sheet exactly filling the view's width,
-     * with the rest of the page reached by scrolling down.
+     * The zoom a page is shown at when it is fitted to the view's width.
      *
      * This is what makes a declared page size mean the same thing on both devices: the page is the
      * page, and the device scales to it. Before page sizes, zoom 1.0 *was* the fit because the page
      * width was the screen width — which is precisely why the same page came out different sizes on
      * the two apps.
      *
-     * This is the width fit alone; [fitZoom] decides whether the page actually opens at it.
+     * Kept as the explicit width fit for zoom calculations and legacy pages. A declared sheet
+     * opens at [fitZoom], which fits the whole physical page instead.
      */
     val fitToWidthZoom: Float
         get() = PageViewportBounds.fitToWidthZoom(sheet.width, viewWidth)
@@ -237,15 +237,11 @@ class PageView(
     /**
      * The zoom a page opens and re-fits at — what "the page fits" means here.
      *
-     * Which answer is right depends on which way pages turn, and this is where reMarkable, the
-     * Kindle Scribe, GoodNotes and Notability all land:
-     *
-     * - **Sideways turning shows one whole sheet at a time.** A page you cannot see all of is
-     *   not a page you can turn past, and a sheet split across two screenfuls that only a
-     *   sideways swipe can leave is what reads as the page having "sub-pages".
-     * - **Downward turning fits the width** and lets the sheet run off the bottom, because that
-     *   is the direction you are about to travel in — and under continuous scrolling it runs on
-     *   into the next page rather than stopping.
+     * A declared page always opens as one whole sheet. The page-turn setting chooses the gesture,
+     * not the page geometry: changing from sideways to vertical navigation must not make one
+     * physical page become two screenfuls that look like "sub-pages". Pinching can still zoom in
+     * for writing, and continuous vertical navigation still carries the view across the seam to
+     * the next real page.
      *
      * The whole-page fit was tried once before and withdrawn, because it letterboxed the sheet
      * between margins that looked like page and took no ink. What made that intolerable was the
@@ -255,7 +251,7 @@ class PageView(
      * Only for a page that declares a sheet. An undeclared page has no agreed size to fit.
      */
     val fitZoom: Float
-        get() = if (hasHardBounds && !GlobalAppSettings.current.pageTurn.isVertical) {
+        get() = if (hasHardBounds) {
             PageViewportBounds.fitWholePageZoom(
                 sheet.width, sheet.height, viewWidth, viewHeight
             )
@@ -1217,6 +1213,9 @@ class PageView(
             // background tiles on screen the same way it does in the PDF. This was hardcoded
             // false, so ImageRepeating pages never tiled on screen at all.
             repeat = backgroundType is BackgroundType.ImageRepeating,
+            // Declared sheets are already real pages. Legacy export-break markers on them made a
+            // single page visibly claim it contained "Subpage 2" at its own bottom edge.
+            showPagination = !hasHardBounds,
             clipRect = clipRect
         )
     }
