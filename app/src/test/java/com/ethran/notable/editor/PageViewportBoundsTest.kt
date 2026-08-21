@@ -454,4 +454,96 @@ class PageViewportBoundsTest {
         assertEquals(20, step.movementPx.y)
         assertEquals(10f, step.scrollDelta.y, 1e-3f)
     }
+
+    // --- Reaching a bound exactly ---
+    //
+    // The BOOX geometry that deadlocked in the field: an A4 sheet (1400x1980) width-fitted to a
+    // 1404x1872 screen. The vertical bound (pageExtent - viewExtent/zoom) is not pixel-aligned,
+    // and the scroll only ever moves by whole pixels — so without parkAgainstBound it parked a
+    // fraction of a pixel short of the edge for ever. The edge predicate and the cross-page
+    // commit both require the scroll to stand exactly on the bound, so scrolling could reach the
+    // end of the last page but never turn, create or commit there, while a sideways swipe (which
+    // asks no edge question) kept working.
+
+    private val booxView = 1404
+    private val booxViewHeight = 1872
+
+    /** The scroll-consumer update loop, in miniature: returns where the scroll ends up. */
+    private fun dragToTheBottom(park: Boolean, overshoot: Boolean = false): Float {
+        val zoom = fit(booxView)
+        var scroll = Offset.Zero
+        var remainderPx = Offset.Zero
+        repeat(60) {
+            // A finger dragging up in 40-pixel samples — ample travel to reach the end.
+            val requestedPx = Offset(0f, 40f) + remainderPx
+            val requestedInPage = Offset(requestedPx.x / zoom, requestedPx.y / zoom)
+            val bounded = PageViewportBounds.boundScroll(
+                scroll + requestedInPage, a4.width.toFloat(), booxView, zoom,
+                a4.height.toFloat(), booxViewHeight, overshootIntoNextPage = overshoot
+            )
+            val delta = bounded - scroll
+            if (delta == Offset.Zero) {
+                remainderPx = Offset.Zero
+            } else {
+                val step = PageViewportBounds.scrollStep(delta, zoom)
+                remainderPx = step.remainderPx
+                if (step.isStandingStill) {
+                    if (park) {
+                        PageViewportBounds.parkAgainstBound(scroll, requestedInPage, bounded)
+                            ?.let { scroll = it; remainderPx = Offset.Zero }
+                    }
+                } else {
+                    scroll += step.scrollDelta
+                }
+            }
+        }
+        return scroll.y
+    }
+
+    @Test
+    fun `whole-pixel scrolling lands exactly on a fractional bound`() {
+        val zoom = fit(booxView)
+        val maxY = PageViewportBounds.maxScroll(a4.height.toFloat(), booxViewHeight, zoom)
+
+        val landed = dragToTheBottom(park = true)
+
+        assertEquals(maxY, landed, 0f)
+        // The edge is legible from there: a further drag is refused in full, which is exactly
+        // what PageView.isAtVerticalEdge asks before turning or creating the next page.
+        val further = PageViewportBounds.boundScroll(
+            Offset(0f, landed + 40f / zoom), a4.width.toFloat(), booxView, zoom,
+            a4.height.toFloat(), booxViewHeight
+        ).y - landed
+        assertEquals(0f, further, 0f)
+    }
+
+    /** The deadlock this guards against — the same loop without parking never gets there. */
+    @Test
+    fun `without parking the scroll deadlocks short of the bound`() {
+        val zoom = fit(booxView)
+        val maxY = PageViewportBounds.maxScroll(a4.height.toFloat(), booxViewHeight, zoom)
+
+        assertTrue(dragToTheBottom(park = false) < maxY)
+    }
+
+    /**
+     * The overshoot bound is the page extent itself, and the cross-page commit requires
+     * `scroll.y >= height` — so it too must be landed on exactly, or the seam can be looked
+     * under but the page switch never happens.
+     */
+    @Test
+    fun `overshoot scrolling lands exactly on the page extent so the commit can fire`() {
+        assertEquals(a4.height.toFloat(), dragToTheBottom(park = true, overshoot = true), 0f)
+    }
+
+    @Test
+    fun `an unclamped sub-pixel step keeps the remainder-carry behaviour`() {
+        // Mid-page, nothing clamped: parking must not fire, the remainder does the job.
+        val scroll = Offset(0f, 50f)
+        val requested = Offset(0f, 0.4f)
+        assertEquals(
+            null,
+            PageViewportBounds.parkAgainstBound(scroll, requested, scroll + requested)
+        )
+    }
 }
