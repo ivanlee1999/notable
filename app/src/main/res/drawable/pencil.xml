@@ -1,10 +1,22 @@
+<!-- Lucide (ISC). The icon set the shared design specifies; the iPad app stands SF
+     Symbols in for it because it cannot bundle a font, and those are Apple-licensed. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="96dp"
-    android:height="96dp"
-    android:viewportWidth="96"
-    android:viewportHeight="96">
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
   <path
-      android:pathData="M48,20L20,57.143V75.984H26V59.484H38V75.984H44V59.484H54V75.984H60V59.484H70V75.984H76V57.143L48,20ZM65.728,53.484L56.681,41.484H39.319L30.272,53.484L65.728,53.484ZM52.158,35.484L48,29.967L43.842,35.484H52.158Z"
-      android:fillColor="#000000"
-      android:fillType="evenOdd"/>
+      android:pathData="M12 20h9"
+      android:strokeWidth="2"
+      android:fillColor="#00000000"
+      android:strokeColor="#000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
+  <path
+      android:pathData="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"
+      android:strokeWidth="2"
+      android:fillColor="#00000000"
+      android:strokeColor="#000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
 </vector>
