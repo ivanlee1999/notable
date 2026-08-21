@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.42.1
+
+One fix: deleting a notebook works every time, instead of most of the time.
+
+- **Moving a notebook to the Trash no longer sometimes does nothing.** Confirming the deletion
+  started the work and closed the dialog in the same breath, and closing the dialog cancelled the
+  work — so whether the notebook was actually thrown away came down to which finished first. It
+  usually did on a fast library and often did not on a large one, with no error either way. The
+  deletion now finishes whatever the dialog does.
+- **Move, Copy and Export were being dropped the same way.** A move that quietly left the notebook
+  where it was, a copy that never appeared, an export whose progress message never even showed up.
+  All three now run to completion.
+- **A notebook action that fails says so.** Previously a failure and a cancelled action looked
+  identical from the outside: nothing happened and nothing was said.
+
+### Worth knowing
+
+Nothing that was already in the Trash is affected, and a notebook that seemed impossible to delete
+was never damaged — the deletion simply never ran. Deleting it now behaves normally.
+
+No database change.
+
 ## 0.42.0
 
 Notebooks can be one continuous, full-width writing surface.
