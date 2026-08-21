@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.38.0
+
+The tool rail offers every ink and every nib the iPad app's does, and the library shows you its
+own shape rather than only the path you walked to get here.
+
+- **Every colour is on the rail, not four of them.** The ink strip cut the palette down to
+  whatever four fitted, so the other eight were reachable only through a pen's stroke menu — and
+  which four you got moved every time the pen changed colour. All twelve are there now, two
+  columns down the rail, the same twelve the iPad app writes with. The old set was the compose
+  primaries, pure cyan, magenta and yellow among them, which are exactly the colours a colour
+  e-ink panel prints as pale grey at writing weight; every ink in the new palette is deep enough
+  to read as handwriting.
+- **A nib dot means the same thing under every pen.** The dots used to be read from each pen's
+  own configured size list, so one dot was a hairline under a ballpen and a slab under a
+  highlighter, and a pen you had configured with a single size showed no dots at all. There are
+  five now — hairline, fine, medium, broad, heavy — each scaled from the implement's own width,
+  so a highlighter's medium is still a highlighter's.
+- **The eraser has a size.** It was the one implement that did not: its two kinds took the place
+  of the nib row instead of joining it, which left nowhere to ask for a bigger rubber. The row
+  stays while erasing and sets how much comes away per pass, from a nib-width nine up to ninety.
+  An eraser you never touch rubs out exactly what it always did.
+- **The library has a file bar.** Down the left of a tablet-sized screen: every folder, nested,
+  with the notes filed in each one underneath. A breadcrumb can tell you the path you walked but
+  never what else is there, so finding a note two folders sideways meant going back to the root
+  and down again. Tapping a folder moves the shelf beside it; tapping a note opens it.
+- **Import moved into the header.** It was a permanent row above the first notebook — and a
+  permanent tile in the last grid cell — for something a library does once or twice in its life.
+  It is now the ⋯ menu next to sync and settings.
+- **The template chooser fits the screen it is shown on.** On a phone-sized device its
+  placement chips squeezed to a column of single letters and the templates themselves were laid
+  out below the bottom of the dialog, where no tap could reach them. The rows now wrap, the
+  dialog is never taller than the screen, and whatever still does not fit scrolls.
+- **A page opened and written on in the same instant no longer doubles the ink.** Writing while
+  a page was still loading could file the new stroke twice — it was in the page's memory and in
+  the database, and the load added the database's copy on top of the one already there. Doubled
+  ink erased strangely and exported twice. The load now recognises ink it is already holding.
+
+### Worth knowing
+
+A fresh install's red, green and blue pens write the palette's versions of those colours rather
+than pure red, green and blue. Pens you have already set up are untouched, and ink already on a
+page keeps the colour it was written in.
+
+Notebook covers on a screen showing the file bar are laid out two to a row rather than three, so
+they keep their size rather than being squeezed to make room for the bar.
+
+The file bar appears only on screens wide enough for it. A one-handed device has one column's
+worth of room and still spends it on the shelf.
+
+No database change.
+
 ## 0.37.1
 
 Nothing in the app changed. This release tags a tree whose test suite finishes: a test that never
