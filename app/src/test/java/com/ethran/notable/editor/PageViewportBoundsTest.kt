@@ -215,12 +215,9 @@ class PageViewportBoundsTest {
                 sheet.height.toFloat(), viewHeight).y > middle.y)
     }
 
-    /**
-     * A physical page is one sheet whichever gesture turns it. The width fit is still useful when
-     * zooming, but the fitted page uses the whole-sheet answer so it cannot look like two pages.
-     */
+    /** Continuous navigation uses the full width; pagination presents one complete sheet. */
     @Test
-    fun `the whole sheet fit keeps one physical page in one viewport`() {
+    fun `vertical navigation selects the matching automatic fit`() {
         val sheet = PageSizePreset.A4.size
         val viewWidth = 1400
         val viewHeight = 1000
@@ -229,6 +226,16 @@ class PageViewportBoundsTest {
         val wholeFit = PageViewportBounds.fitWholePageZoom(
             sheet.width, sheet.height, viewWidth, viewHeight)
 
+        assertEquals(
+            widthFit,
+            PageViewportBounds.fitForVerticalNavigation(
+                sheet.width, sheet.height, viewWidth, viewHeight, paged = false),
+            0.0001f)
+        assertEquals(
+            wholeFit,
+            PageViewportBounds.fitForVerticalNavigation(
+                sheet.width, sheet.height, viewWidth, viewHeight, paged = true),
+            0.0001f)
         assertTrue("the whole page must fit within the view", sheet.height * wholeFit <= viewHeight + 1)
         assertTrue("the whole-page fit is never larger than the width fit", wholeFit <= widthFit)
         assertTrue("the width fit overflows a view shorter than the sheet", sheet.height * widthFit > viewHeight)

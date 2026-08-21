@@ -95,7 +95,34 @@ class PointerTracker(
             track.currentPosition = position
             track.pressed = pressed
         }
+        seedMovementReferenceWhenPointerSetChanges()
         advanceNetTravel()
+    }
+
+    /**
+     * Start incremental movement at the contact point, while resetting it whenever the live
+     * pointer set changes. Previously the reference was established only by the first
+     * [consumeDragDelta] call. Smooth scrolling does not call that method until the finger has
+     * already crossed its entry threshold, so a quick one-move swipe lost its entire movement and
+     * lifting the finger produced no scroll or page creation at all.
+     */
+    private fun seedMovementReferenceWhenPointerSetChanges() {
+        val pressed = pointers.filterValues { it.pressed }
+        val ids = pressed.keys.toSet()
+        if (ids == movementRefIds) return
+        if (pressed.isEmpty()) {
+            movementRefCentroid = null
+            movementRefIds = emptySet()
+            return
+        }
+        var sumX = 0f
+        var sumY = 0f
+        for (track in pressed.values) {
+            sumX += track.currentPosition.x
+            sumY += track.currentPosition.y
+        }
+        movementRefCentroid = Offset(sumX / pressed.size, sumY / pressed.size)
+        movementRefIds = ids
     }
 
     private fun advanceNetTravel() {

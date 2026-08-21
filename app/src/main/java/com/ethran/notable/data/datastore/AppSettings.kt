@@ -65,6 +65,8 @@ data class AppSettings(
     val toolbarPosition: Position = Position.Top,
     val smoothScroll: Boolean = true,
     val verticalNavigation: VerticalNavigation = VerticalNavigation.Continuous,
+    // Kept only so older settings blobs continue to decode and round-trip. Page direction is
+    // controlled by verticalNavigation plus the remappable left/right swipe actions.
     val pageTurn: PageTurn = PageTurn.Vertical,
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
@@ -134,23 +136,7 @@ data class AppSettings(
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
     }
 
-    /**
-     * Which way you move from one page to the next.
-     *
-     * A page ends at its sheet, so it has an end — and the gesture that carries you over that end
-     * is a preference, not a fact. Reading down a long document wants the next page below this one;
-     * working through a notebook the way you would a paper one wants it to the side.
-     *
-     * It does not decide the page's fitted geometry. A declared page is one whole sheet in either
-     * direction; otherwise changing this gesture would make the same page appear to gain or lose
-     * screenfuls of paper.
-     *
-     * What it does **not** decide is whether the bottom of a page is a dead end. It used to:
-     * with [Horizontal] set, dragging past the end of the paper did nothing whatsoever — no
-     * turn, no new page — so the only way to a second page was a sideways swipe. Running off the
-     * bottom now always reaches the next page, and makes one if there is none, in either
-     * setting and in both [VerticalNavigation] modes.
-     */
+    /** Legacy persisted value; no longer shown or consulted. */
     enum class PageTurn {
         /** Pull past the bottom edge to turn. */
         Vertical,

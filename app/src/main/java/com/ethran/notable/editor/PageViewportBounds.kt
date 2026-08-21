@@ -12,8 +12,8 @@ import kotlin.math.ceil
  * A page that declares a size is *bounded*: the sheet is the paper, and there is nothing to the
  * right of the paper. Two rules together make that true at every zoom, and neither works alone:
  *
- * - the view never zooms out past [fitToWidthZoom], or blank non-page space would appear beside
- *   the sheet;
+ * - the view never zooms out past its automatic fit (width-fit while scrolling, whole-sheet fit
+ *   while paginating), or blank non-page space would appear beyond the sheet;
  * - the view never pans past the sheet's right edge ([maxHorizontalScroll]).
  *
  * Because they hold together, the visible page x-range is always inside `0..sheetWidth` — which is
@@ -59,6 +59,27 @@ object PageViewportBounds {
         if (sheetHeight <= 0 || viewHeight <= 0) return widthFit
         // The smaller of the two, so neither edge is cut off.
         return minOf(widthFit, viewHeight.toFloat() / sheetHeight)
+    }
+
+    /**
+     * The automatic fit that matches the selected vertical navigation model.
+     *
+     * Continuous scrolling treats the notebook as one long document, so the paper fills the
+     * available width and its lower part continues below the viewport. Pagination presents one
+     * complete sheet at a time, so both dimensions must fit. Keeping this choice here makes the
+     * setting change geometry and navigation together instead of exposing a second, conflicting
+     * "page turn" preference.
+     */
+    fun fitForVerticalNavigation(
+        sheetWidth: Int,
+        sheetHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+        paged: Boolean,
+    ): Float = if (paged) {
+        fitWholePageZoom(sheetWidth, sheetHeight, viewWidth, viewHeight)
+    } else {
+        fitToWidthZoom(sheetWidth, viewWidth)
     }
 
     /** The lowest zoom allowed: the fit on a bounded page, the global floor on any other. */

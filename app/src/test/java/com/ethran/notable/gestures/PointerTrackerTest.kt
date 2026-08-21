@@ -112,6 +112,16 @@ class PointerTrackerTest {
     }
 
     @Test
+    fun `first smooth-scroll consume includes movement from finger down`() {
+        tracker.down(1, 100f, 500f, T0)
+        // The receiver enters smooth-scroll mode only after this move crosses its threshold. It
+        // has not called consumeDragDelta before then, but the movement must not disappear.
+        tracker.moveTo(1, 100f, 250f, T0 + 40)
+
+        assertEquals(Offset(0f, -250f), tracker.consumeDragDelta())
+    }
+
+    @Test
     fun `drag delta reference resets when a finger lands`() {
         tracker.down(1, 0f, 0f, T0)
         tracker.consumeDragDelta()
