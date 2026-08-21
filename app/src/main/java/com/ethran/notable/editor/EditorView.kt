@@ -260,7 +260,7 @@ fun EditorView(
             // "Reset view" offers a way back to the fitted page, so it appears when the view has
             // left the fit — not when it has left 1:1, which is just some zoom among others once
             // the page has a size of its own.
-            viewModel.setShowResetView(abs(zoomLevel - page.fitToWidthZoom) > ZOOM_FIT_EPSILON)
+            viewModel.setShowResetView(abs(zoomLevel - page.fitZoom) > ZOOM_FIT_EPSILON)
             viewModel.setSelectionActive(selectionActive)
         }
 

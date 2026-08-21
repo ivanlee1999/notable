@@ -53,12 +53,12 @@
     <string name="hexagon_grid">Hexagon grid</string>
     <string name="enable_scribble_to_erase">Enable scribble-to-erase (scribble out your mistakes to erase them)</string>
     <string name="enable_smooth_scrolling">Enable smooth scrolling</string>
-    <string name="vertical_navigation">Vertical Navigation</string>
+    <string name="vertical_navigation">Page navigation</string>
     <string name="page_turn">Turn the page</string>
     <string name="page_turn_vertical">Up and down</string>
     <string name="page_turn_horizontal">Side to side</string>
-    <string name="vertical_navigation_continuous">Scrolling</string>
-    <string name="vertical_navigation_paged">Pagination</string>
+    <string name="vertical_navigation_continuous">Continuous scrolling</string>
+    <string name="vertical_navigation_paged">One page at a time</string>
     <string name="continuous_zoom">Continuous Zoom</string>
     <string name="fit_page_width">Fit page width to screen width</string>
     <string name="continuous_stroke_slider">Continuous Stroke Slider</string>

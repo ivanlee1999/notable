@@ -237,11 +237,10 @@ class PageView(
     /**
      * The zoom a page opens and re-fits at — what "the page fits" means here.
      *
-     * A declared page always opens as one whole sheet. The page-turn setting chooses the gesture,
-     * not the page geometry: changing from sideways to vertical navigation must not make one
-     * physical page become two screenfuls that look like "sub-pages". Pinching can still zoom in
-     * for writing, and continuous vertical navigation still carries the view across the seam to
-     * the next real page.
+     * Scrolling fits the paper to the available width, making the notebook one continuous vertical
+     * document that uses the whole writing area. Pagination fits the complete physical sheet so a
+     * swipe advances exactly one page. The vertical-navigation choice owns both behaviours; the
+     * retired page-turn preference must not create a second, contradictory geometry setting.
      *
      * The whole-page fit was tried once before and withdrawn, because it letterboxed the sheet
      * between margins that looked like page and took no ink. What made that intolerable was the
@@ -252,8 +251,12 @@ class PageView(
      */
     val fitZoom: Float
         get() = if (hasHardBounds) {
-            PageViewportBounds.fitWholePageZoom(
-                sheet.width, sheet.height, viewWidth, viewHeight
+            PageViewportBounds.fitForVerticalNavigation(
+                sheet.width,
+                sheet.height,
+                viewWidth,
+                viewHeight,
+                paged = GlobalAppSettings.current.verticalNavigation.isPaged,
             )
         } else {
             fitToWidthZoom
