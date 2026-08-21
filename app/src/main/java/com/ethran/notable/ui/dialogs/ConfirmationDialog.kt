@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -23,6 +22,7 @@ import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportOptions
 import com.ethran.notable.io.ExportTarget
 import com.ethran.notable.ui.SnackState
+import com.ethran.notable.ui.rememberAppScope
 import kotlinx.coroutines.launch
 
 @Composable
@@ -88,7 +88,12 @@ fun ShowExportDialog(
     onConfirm: () -> Unit,
     onCancel: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
+    // The app's scope, not this dialog's: every button below calls `onConfirm()` right after
+    // launching, and `onConfirm` closes the notebook dialog this one lives inside — which unmounts
+    // this composable and would cancel a `rememberCoroutineScope()` export before it had read a
+    // single page. The snack went with it, so a swallowed export looked exactly like a tap that
+    // never registered. See [rememberAppScope].
+    val scope = rememberAppScope()
     Dialog(onDismissRequest = { onCancel() }) {
         Column(
             modifier = Modifier
