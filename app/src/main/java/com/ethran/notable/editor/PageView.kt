@@ -813,9 +813,9 @@ class PageView(
         // Carrying the last step's sub-pixel tail in with it, so slow travel accumulates into
         // whole pixels instead of being dropped a fraction at a time.
         val requestedPx = dragDelta + scrollRemainderPx
-        val deltaInPage = boundScroll(
-            scroll + Offset(requestedPx.x / zoom, requestedPx.y / zoom)
-        ) - scroll
+        val requestedInPage = Offset(requestedPx.x / zoom, requestedPx.y / zoom)
+        val bounded = boundScroll(scroll + requestedInPage)
+        val deltaInPage = bounded - scroll
 
         // There is nothing to do, return.
         if (deltaInPage == Offset.Zero) {
@@ -828,7 +828,22 @@ class PageView(
         // but nobody can see. See PageViewportBounds.scrollStep.
         val step = PageViewportBounds.scrollStep(deltaInPage, zoom)
         scrollRemainderPx = step.remainderPx
-        if (step.isStandingStill) return
+        if (step.isStandingStill) {
+            // The bound granted less than one pixel and the panel cannot move by less than one —
+            // without help the scroll parks a fraction short of the edge *for ever*: every fresh
+            // drag is clamped to the same sub-pixel gap and truncated to nothing. The edge
+            // predicate ([isAtVerticalEdge]) and the cross-page commit both ask for the scroll to
+            // stand exactly on the bound, so at any zoom whose bound is not pixel-aligned (the
+            // width fit almost never is) scrolling could reach the end of the page but never
+            // turn, create or commit there — the finger just stopped dead. Snap the model onto
+            // the bound it was refused: the picture is already within a pixel of it, and
+            // everything that matters — the edge, the commit, the ink — reads the model.
+            PageViewportBounds.parkAgainstBound(scroll, requestedInPage, bounded)?.let {
+                scroll = it
+                scrollRemainderPx = Offset.Zero
+            }
+            return
+        }
 
         // before scrolling, make sure that strokes are drawn.
         waitForDrawingWithSnack()

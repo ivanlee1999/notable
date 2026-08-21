@@ -207,6 +207,34 @@ object PageViewportBounds {
         )
     }
 
+    /**
+     * Where the scroll should stand after a step the panel could not follow, or null when it
+     * should stay put.
+     *
+     * [scrollStep] refuses sub-pixel movement, which is right in the middle of the page — the
+     * remainder carries into the next sample and slow travel accumulates. Against a bound it is
+     * a trap: the bound grants only the sub-pixel gap that remains, the step truncates it to
+     * nothing, and the same happens to every later request — the scroll parks up to one pixel
+     * short of the edge permanently. The edge is where exactness matters most: turning, creating
+     * and committing pages all ask whether the scroll stands *on* the bound.
+     *
+     * So: when the refused step was **clamped** — [bounded] kept less of the request than was
+     * asked ([requested], both relative to [scroll], all in page units) — the scroll snaps the
+     * clamped axes onto the bound. A request the bound passed through untouched returns null and
+     * keeps the ordinary remainder-carry behaviour.
+     */
+    fun parkAgainstBound(scroll: Offset, requested: Offset, bounded: Offset): Offset? {
+        // Compared in page units; anything under a thousandth of a unit is float noise, not a
+        // clamp (a real clamp cuts off whole pixels of requested travel).
+        val clampedX = kotlin.math.abs(scroll.x + requested.x - bounded.x) > 1e-3f
+        val clampedY = kotlin.math.abs(scroll.y + requested.y - bounded.y) > 1e-3f
+        if (!clampedX && !clampedY) return null
+        return Offset(
+            if (clampedX) bounded.x else scroll.x,
+            if (clampedY) bounded.y else scroll.y,
+        )
+    }
+
     /** Kept past the last thing on the page, so its far edge is not flush with the scroll limit. */
     const val CONTENT_SLACK = 50
 
