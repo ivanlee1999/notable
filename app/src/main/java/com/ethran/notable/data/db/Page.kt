@@ -52,9 +52,11 @@ data class Page(
     // odd) choice rather than being indistinguishable from "untitled".
     val title: String? = null,
     // The sheet this page's coordinates are laid out on, in page units (see [PageSize]).
-    // Null for a page created before page sizes existed: nothing retrofits one, so those keep
-    // falling back to the screen width they were written against. Denormalized from the notebook
-    // at creation, the way [background] is, because it is what the renderer needs in hand.
+    // Null for a page created before page sizes existed: nothing retrofits one, and those
+    // resolve to the canonical legacy sheet ([PageSize.LEGACY_UNDECLARED]) on every device.
+    // Pages created now always declare one (see [Notebook.newPage]). Denormalized from the
+    // notebook at creation, the way [background] is, because it is what the renderer needs in
+    // hand.
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
     val createdAt: Date = SyncClock.nowDate(), val updatedAt: Date = SyncClock.nowDate(),

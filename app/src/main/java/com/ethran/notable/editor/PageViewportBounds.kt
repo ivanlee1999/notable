@@ -9,8 +9,10 @@ import kotlin.math.ceil
 /**
  * Where the view is allowed to sit over a page: how far out it may zoom, and how far it may pan.
  *
- * A page that declares a size is *bounded*: the sheet is the paper, and there is nothing to the
- * right of the paper. Two rules together make that true at every zoom, and neither works alone:
+ * Every page is *bounded*: the sheet is the paper, and there is nothing to the right of the
+ * paper. (A page that declares no size resolves to the canonical legacy sheet — see
+ * `PageSize.LEGACY_UNDECLARED` — so there is no unbounded page left.) Two rules together make
+ * that true at every zoom, and neither works alone:
  *
  * - the view never zooms out past its automatic fit (width-fit while scrolling, whole-sheet fit
  *   while paginating), or blank non-page space would appear beyond the sheet;
@@ -18,9 +20,6 @@ import kotlin.math.ceil
  *
  * Because they hold together, the visible page x-range is always inside `0..sheetWidth` — which is
  * also what keeps the pen on the page, since the pen can only mark what is under it.
- *
- * A page that declares nothing is not bounded. Its "sheet" is only whatever screen it happened to
- * be written on, so enforcing it on a wider device would hide ink rather than keep ink on the page.
  *
  * The vertical direction is bounded by the same rule, against the page's content extent rather
  * than the sheet. It used not to be: the canvas scrolled past the bottom of the sheet onto blank
@@ -82,9 +81,8 @@ object PageViewportBounds {
         fitToWidthZoom(sheetWidth, viewWidth)
     }
 
-    /** The lowest zoom allowed: the fit on a bounded page, the global floor on any other. */
-    fun minZoom(fitZoom: Float, bounded: Boolean): Float =
-        if (bounded) fitZoom.coerceIn(MIN_ZOOM, MAX_ZOOM) else MIN_ZOOM
+    /** The lowest zoom allowed: the fit, held inside the global zoom range. */
+    fun minZoom(fitZoom: Float): Float = fitZoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
 
     /**
      * How far *before* the page's left edge the view may sit: half the slack, so a sheet

@@ -33,13 +33,14 @@ class PageViewportBoundsTest {
     }
 
     @Test
-    fun `a bounded page cannot zoom out past the fit`() {
-        assertEquals(fit(wideView), PageViewportBounds.minZoom(fit(wideView), bounded = true), 1e-6f)
+    fun `a page cannot zoom out past the fit`() {
+        assertEquals(fit(wideView), PageViewportBounds.minZoom(fit(wideView)), 1e-6f)
     }
 
+    /** Every page is bounded now, so the floor never drops below the global minimum either. */
     @Test
-    fun `an undeclared page keeps the global zoom floor`() {
-        assertEquals(MIN_ZOOM, PageViewportBounds.minZoom(fit(wideView), bounded = false), 1e-6f)
+    fun `the zoom floor stays inside the global zoom range`() {
+        assertEquals(MIN_ZOOM, PageViewportBounds.minZoom(MIN_ZOOM / 10f), 1e-6f)
     }
 
     @Test
@@ -125,7 +126,7 @@ class PageViewportBoundsTest {
     fun `no zoom and scroll a bounded page allows puts non-page space on screen`() {
         val width = a4.width.toFloat()
         for (view in listOf(narrowView, wideView, 2200)) {
-            val floor = PageViewportBounds.minZoom(fit(view), bounded = true)
+            val floor = PageViewportBounds.minZoom(fit(view))
             for (zoom in listOf(floor, floor * 1.3f, 1f.coerceAtLeast(floor), floor * 4f)) {
                 val scroll = boundHorizontally(Offset(1e6f, 0f), width, view, zoom).x
                 val rightEdgeOfView = scroll + view / zoom

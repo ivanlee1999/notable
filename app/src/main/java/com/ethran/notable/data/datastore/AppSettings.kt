@@ -71,11 +71,9 @@ data class AppSettings(
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
     val paginatePdf: Boolean = true,
-    // On by default, because [paginatePdf] is. Export splits the infinite canvas at fixed
-    // sheet-height intervals, and with nothing drawn there the user writes straight across a page
-    // break without knowing one exists — the export is still complete, but a diagram or a line of
-    // handwriting comes out cut in half. Showing where the breaks fall costs one hairline per
-    // sheet; not showing them costs the user a reprint.
+    // Kept only so older settings blobs continue to decode and round-trip, like [pageTurn].
+    // It toggled the on-screen "Subpage" break markers of the endless canvas; every page is one
+    // bounded sheet now, so there is no break inside a page left to mark.
     val visualizePdfPagination: Boolean = true,
     // How the library is arranged. A preference about the library rather than about this visit to
     // it: coming back to a differently-ordered shelf is its own small confusion. Stored as the

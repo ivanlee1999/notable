@@ -247,31 +247,17 @@ class PageView(
      * lie, not the letterbox: the surround is drawn as off-page gray now and refuses the pen
      * with a hint, and the sheet is centred in it rather than shoved to one side.
      *
-     * Only for a page that declares a sheet. An undeclared page has no agreed size to fit.
+     * Every page has an agreed sheet to fit — an undeclared one resolves to the canonical
+     * legacy sheet, the same one PageSplit divides it by.
      */
     val fitZoom: Float
-        get() = if (hasHardBounds) {
-            PageViewportBounds.fitForVerticalNavigation(
-                sheet.width,
-                sheet.height,
-                viewWidth,
-                viewHeight,
-                paged = GlobalAppSettings.current.verticalNavigation.isPaged,
-            )
-        } else {
-            fitToWidthZoom
-        }
-
-    /**
-     * Whether the sheet is a hard edge — true for any page that declares its own size.
-     *
-     * A declared page *is* the paper: there is nothing to the right of it to look at or write on,
-     * so the view never goes there. A page that declares nothing has no edge to enforce (its
-     * "sheet" is only this device's screen), and bounding it would hide ink written past that
-     * screen on a wider device, so it keeps the old free-roaming behaviour.
-     */
-    val hasHardBounds: Boolean
-        get() = pageDataManager.hasDeclaredSheet(currentPageId)
+        get() = PageViewportBounds.fitForVerticalNavigation(
+            sheet.width,
+            sheet.height,
+            viewWidth,
+            viewHeight,
+            paged = GlobalAppSettings.current.verticalNavigation.isPaged,
+        )
 
     /**
      * The next / previous page of the notebook, as last resolved by the neighbor prefetch.
@@ -304,11 +290,11 @@ class PageView(
         get() = continuousScrollEnabled && nextPageId != null
 
     /**
-     * The lowest zoom this page may be viewed at: the fit on a bounded page, so blank non-page
-     * space beyond the sheet's right edge never comes on screen. See [PageViewportBounds].
+     * The lowest zoom this page may be viewed at: the fit, so blank non-page space beyond the
+     * sheet's right edge never comes on screen. See [PageViewportBounds].
      */
     val minZoom: Float
-        get() = PageViewportBounds.minZoom(fitZoom, hasHardBounds)
+        get() = PageViewportBounds.minZoom(fitZoom)
 
     /**
      * The zoom to open a page at: the one it was left at this session, or the fit. Held inside the
@@ -1216,9 +1202,6 @@ class PageView(
             // background tiles on screen the same way it does in the PDF. This was hardcoded
             // false, so ImageRepeating pages never tiled on screen at all.
             repeat = backgroundType is BackgroundType.ImageRepeating,
-            // Declared sheets are already real pages. Legacy export-break markers on them made a
-            // single page visibly claim it contained "Subpage 2" at its own bottom edge.
-            showPagination = !hasHardBounds,
             clipRect = clipRect
         )
     }

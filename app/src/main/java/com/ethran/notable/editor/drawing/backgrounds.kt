@@ -3,21 +3,18 @@ package com.ethran.notable.editor.drawing
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntOffset
-import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.editor.utils.scaleRect
 import com.onyx.android.sdk.extension.copy
 import io.shipbook.shipbooksdk.ShipBook
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -41,11 +38,6 @@ private val defaultPaintStroke = defaultPaint.copy().apply { this.style = Paint.
 private val marginPaint = Paint().apply {
     this.color = Color.MAGENTA
     this.strokeWidth = 2f
-}
-private val paginationLinePaint = Paint().apply {
-    color = Color.RED
-    strokeWidth = 4f
-    pathEffect = DashPathEffect(floatArrayOf(10f, 5f), 0f)
 }
 
 fun drawLinedBg(canvas: Canvas, scroll: Offset, scale: Float) {
@@ -290,7 +282,6 @@ fun drawBg(
     resourceBitmap: Bitmap?,
     scale: Float = 1f,          // When exporting, we change scale of canvas. therefore canvas.width/height is scaled
     repeat: Boolean = false,    // for repeating image
-    showPagination: Boolean = true,
     clipRect: Rect? = null,     // before the scaling
 ) {
 
@@ -333,12 +324,6 @@ fun drawBg(
     }
     drawMargin(canvas, scroll, scale, sheet)
 
-    // Only where a break will actually fall: with pagination off the export is one continuous
-    // page, and a line promising a break that never comes is worse than no line.
-    val settings = GlobalAppSettings.current
-    if (showPagination && settings.paginatePdf && settings.visualizePdfPagination) {
-        drawPaginationLine(canvas, scroll, scale, sheet)
-    }
     if (clipRect != null) {
         canvas.restore()
     }
@@ -365,48 +350,3 @@ fun drawMargin(canvas: Canvas, scroll: Offset, scale: Float, sheet: PageSize) {
     )
 }
 
-fun drawPaginationLine(canvas: Canvas, scroll: Offset, scale: Float, sheet: PageSize) {
-    val textPaint = Paint().apply {
-        color = Color.BLACK
-        textSize = 24f
-        isAntiAlias = true
-    }
-
-    // The sheet's own height, rather than the screen width times an assumed A4 ratio: subpage
-    // breaks have to fall in the same place on both devices, and on a Letter page they are not
-    // A4-shaped at all.
-    val sheetWidth = sheet.width
-    val pageHeight = sheet.height.toFloat()
-    // A sheet with no height has no breaks to mark, and the walk below advances by exactly this
-    // much: at zero it never reaches the bottom of the canvas and draws page labels forever. A
-    // page falls back to the screen's dimensions when it declares no size of its own
-    // (legacyScreenSheet), and those are zero wherever the EPD controller reports nothing — a
-    // non-Onyx device, and any test process.
-    if (pageHeight <= 0f) return
-
-    // Convert scroll position to canvas coordinates
-    // Calculate current page number (1-based)
-    val currentPage = floor(scroll.y / pageHeight).toInt() + 1
-
-    // Calculate position of first page break
-    var yPos = (currentPage * pageHeight) - scroll.y
-
-    var pageNum = currentPage
-    while (yPos < canvas.height / scale) {
-        if (yPos >= 0) { // Only draw visible lines
-            val yPosScaled = yPos
-            canvas.drawLine(
-                0f, yPosScaled, sheetWidth.toFloat(), yPosScaled, paginationLinePaint
-            )
-
-            // Draw page number label (offset slightly below the line)
-            canvas.drawText(
-                "Subpage ${pageNum + 1}", 20f - scroll.x, yPosScaled + 30f, textPaint
-            )
-        } else {
-            log.d("Skipping line at $yPos (above visible area)")
-        }
-        yPos += pageHeight
-        pageNum++
-    }
-}

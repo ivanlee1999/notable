@@ -15,8 +15,6 @@ import java.util.Date
  * the two puts the apps back to laying out different pages, which is the whole bug page sizes were
  * added to fix, so both suites check the literal values rather than recomputing them.
  *
- * Nothing here touches [legacyScreenSheet], which reads the screen globals and would drag the Onyx
- * SDK into a plain JVM test.
  */
 class PageSizesTest {
 
@@ -167,5 +165,17 @@ class PageSizesTest {
         val declared = page(width = 1400, height = 1980)
         assertEquals(PageSizePreset.A4.size, declared.declaredPageSize())
         assertEquals(PageSizePreset.A4.size, declared.sheet())
+    }
+
+    /**
+     * The canonical legacy sheet, pinned by value: it is the constant `PageSplit` divides
+     * undeclared pages by, and the iPad app's fallback — so a legacy page is the same one
+     * bounded sheet on every device, never this device's screen and never an endless canvas.
+     */
+    @Test
+    fun an_undeclared_page_is_laid_out_on_the_canonical_legacy_sheet() {
+        assertEquals(PageSize(1404, 1872), PageSize.LEGACY_UNDECLARED)
+        assertEquals(PageSize.LEGACY_UNDECLARED, page().sheet())
+        assertEquals(PageSize.LEGACY_UNDECLARED, page(width = 1400).sheet())
     }
 }

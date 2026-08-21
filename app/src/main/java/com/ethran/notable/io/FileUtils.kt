@@ -255,12 +255,12 @@ fun getPdfPageCount(uri: String): Int {
  * and empty when the document cannot be read. A page whose size the renderer will not give is null
  * rather than absent, so the entries stay lined up with the page numbers.
  *
- * An imported book has to declare its sheet, or it does not have one: an undeclared page falls back
- * to *this device's screen width* ([legacyScreenSheet]), and the iPad falls back to 1404x1872. The
- * background is fitted to the sheet, so two devices that disagree about the sheet draw the same PDF
- * at two different sizes — and the ink written over it, which is stored in page units, lands
- * somewhere else on the page. Annotations that sync perfectly and land in the wrong place are worse
- * than annotations that do not sync.
+ * An imported book has to declare its sheet, or it does not have one: an undeclared page falls
+ * back to [PageSize.LEGACY_UNDECLARED] — a constant both apps agree on, but an A4-shaped one
+ * that is not the shape of most PDFs. The background is fitted to the sheet, so a PDF laid on
+ * the wrong sheet draws at the wrong size — and the ink written over it, which is stored in page
+ * units, lands somewhere else on the page. Annotations that sync perfectly and land in the wrong
+ * place are worse than annotations that do not sync.
  *
  * Per page rather than per document, because a scanned book has a fold-out in it and a report has a
  * landscape table. The sheet is stored as the page actually is, portrait or not: the portrait

@@ -122,9 +122,6 @@ class PageContentRenderer @Inject constructor(
                 resourceBitmap = bgImage,
                 scale = scaleFactor,
                 repeat = resolvedBackgroundType is BackgroundType.ImageRepeating,
-                // A declared sheet is already one export page. Subpage markers only describe
-                // legacy continuous canvases that have no physical page declaration of their own.
-                showPagination = data.page.declaredPageSize() == null
             )
 
             data.images.forEach { drawImage(context, canvas, it, -scroll) }

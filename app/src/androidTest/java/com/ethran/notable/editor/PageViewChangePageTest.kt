@@ -133,8 +133,6 @@ class PageViewChangePageTest {
     @Test
     fun changePage_waits_for_the_drawing_lock_before_swapping_page_identity() = runBlocking {
         // A notebook with a real paper size, like every notebook made since page sizes exist.
-        // A page that declares none falls back to legacyScreenSheet(), and SCREEN_WIDTH/HEIGHT
-        // are 0 off Onyx hardware — every drawing path would then run on a 0x0 sheet.
         val a4 = PageSizePreset.A4.size
         val notebook = Notebook(
             title = "Notes",
