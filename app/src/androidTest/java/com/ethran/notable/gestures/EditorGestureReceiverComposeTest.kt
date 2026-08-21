@@ -71,21 +71,73 @@ class EditorGestureReceiverComposeTest {
         )
     }
 
+    /**
+     * One axis, one meaning, per mode: a sideways swipe is Pagination's page turn and must not
+     * navigate under continuous scrolling — the two metaphors on one page is what produced
+     * duplicate blank pages (each stray swipe on the last page used to create one).
+     */
+    @Test
+    fun sidewaysSwipeDoesNotTurnThePageUnderContinuousScrolling() {
+        val actions = RecordingGestureActions()
+        composeRule.setContent {
+            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
+                EditorGestureReceiver(actions)
+            }
+        }
+
+        composeRule.onNodeWithTag("gesture-area").performTouchInput {
+            down(Offset(width * 0.9f, center.y))
+            moveTo(Offset(width * 0.1f, center.y), delayMillis = 40)
+            up()
+        }
+        composeRule.waitForIdle()
+
+        assertTrue("no page turn under continuous scrolling", actions.nextPageCalls == 0)
+        assertTrue("the swiper is told what navigates instead", actions.hints.isNotEmpty())
+    }
+
+    @Test
+    fun sidewaysSwipeTurnsThePageUnderPagination() {
+        GlobalAppSettings.update(
+            GlobalAppSettings.current.copy(
+                verticalNavigation = AppSettings.VerticalNavigation.Paged,
+            )
+        )
+        val actions = RecordingGestureActions()
+        composeRule.setContent {
+            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
+                EditorGestureReceiver(actions)
+            }
+        }
+
+        // Swipe left = next page, the paged default mapping.
+        composeRule.onNodeWithTag("gesture-area").performTouchInput {
+            down(Offset(width * 0.9f, center.y))
+            moveTo(Offset(width * 0.1f, center.y), delayMillis = 40)
+            up()
+        }
+        composeRule.waitForIdle()
+
+        assertTrue("a sideways swipe is Pagination's page turn", actions.nextPageCalls == 1)
+    }
+
     private class RecordingGestureActions : GestureActions {
         val scrollDeltas = mutableListOf<Offset>()
+        val hints = mutableListOf<String>()
+        var nextPageCalls = 0
 
         override fun requestScroll(delta: Offset) { scrollDeltas += delta }
         override fun requestPageStep(direction: Int) = Unit
         override fun onGestureEnd() = Unit
         override fun onPinchToZoom(delta: Float, center: Offset?) = Unit
-        override fun goToNextPage() = Unit
+        override fun goToNextPage() { nextPageCalls++ }
         override fun goToPreviousPage() = Unit
         override fun toggleTool() = Unit
         override fun toggleZen() = Unit
         override fun undo() = Unit
         override fun redo() = Unit
         override fun setIsDrawing(value: Boolean) = Unit
-        override fun showHint(text: String) = Unit
+        override fun showHint(text: String) { hints += text }
         override fun selectRectangle(rect: Rect) = Unit
         override fun redrawCanvas() = Unit
     }

@@ -266,7 +266,6 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
 
     if (page.crossPageScrollActive) {
         val nextId = page.nextPageId ?: return
-        val zoom2 = page.zoomLevel.value
         canvas.save()
         try {
             canvas.clipRect(0f, pageEndY, viewWidthUnits, viewHeightUnits)
@@ -275,10 +274,10 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
             canvas.translate(0f, pageEndY)
             canvas.drawColor(Color.WHITE)
             when (page.pageDataManager.nativeBackgroundOf(nextId)) {
-                "dotted" -> drawDottedBg(canvas, Offset(scroll.x, 0f), zoom2)
-                "lined" -> drawLinedBg(canvas, Offset(scroll.x, 0f), zoom2)
-                "squared" -> drawSquaredBg(canvas, Offset(scroll.x, 0f), zoom2)
-                "hexed" -> drawHexedBg(canvas, Offset(scroll.x, 0f), zoom2)
+                "dotted" -> drawDottedBg(canvas, Offset(scroll.x, 0f), zoom)
+                "lined" -> drawLinedBg(canvas, Offset(scroll.x, 0f), zoom)
+                "squared" -> drawSquaredBg(canvas, Offset(scroll.x, 0f), zoom)
+                "hexed" -> drawHexedBg(canvas, Offset(scroll.x, 0f), zoom)
                 // "blank", an unknown template, or a non-native background (PDF, image — whose
                 // bitmaps are per-current-page state): plain paper until the page is entered.
                 else -> {}

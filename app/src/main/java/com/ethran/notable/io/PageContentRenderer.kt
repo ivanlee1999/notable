@@ -143,8 +143,10 @@ class PageContentRenderer @Inject constructor(
         val imageBottom = data.images.maxOfOrNull { it.y + it.height } ?: 0
         val imageRight = data.images.maxOfOrNull { it.x + it.width } ?: 0
 
-        val rawHeight = maxOf(strokeBottom, imageBottom) +
-                if (GlobalAppSettings.current.visualizePdfPagination) 0 else 50
+        // The same 50-unit slack the canvas keeps past overflowing content (CONTENT_SLACK).
+        // This used to consult the retired pagination-preview setting; content-based export
+        // sizing is not a preference.
+        val rawHeight = maxOf(strokeBottom, imageBottom) + 50
         val rawWidth = maxOf(strokeRight, imageRight) + 50
 
         val height = rawHeight.coerceAtLeast(sheet.height)
