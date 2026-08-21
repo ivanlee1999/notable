@@ -59,6 +59,7 @@ import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.messageRes
 import com.ethran.notable.ui.noRippleClickable
+import com.ethran.notable.ui.rememberAppScope
 import com.ethran.notable.ui.rememberCouchSyncController
 import com.ethran.notable.ui.rememberKvProxy
 import com.ethran.notable.ui.requestNotebookSync
@@ -82,6 +83,14 @@ fun NotebookConfigDialog(
 
     val book by bookRepository.getByIdLive(bookId).observeAsState()
     val scope = rememberCoroutineScope()
+
+    /**
+     * For the actions that close this dialog as part of doing their work — delete, move, copy,
+     * export. `scope` dies with the dialog, so a write launched into it and then followed by
+     * `onClose()` is racing the next frame, and losing that race meant the tap did nothing at all.
+     * See [rememberAppScope].
+     */
+    val appScope = rememberAppScope()
     val snackManager = LocalSnackContext.current
     val couchSync = rememberCouchSyncController()
     val kvProxy = rememberKvProxy()
@@ -159,7 +168,13 @@ fun NotebookConfigDialog(
                 // everywhere, and a restore from any device puts it back on all of them. The
                 // tombstone still waits for `AppRepository.deleteNotebookLocally`, which the purge
                 // calls when the Trash is emptied.
-                scope.launch {
+                //
+                // On `appScope`, not the dialog's: `onClose()` on the next line unmounts this
+                // composable, and a trashing still waiting on Room when that happens is cancelled
+                // where it stands. That is the whole of the "sometimes I can delete a notebook and
+                // sometimes I can't" bug — the write and the dispose were racing, the loser was
+                // whichever the device felt like that second, and a lost write said nothing.
+                appScope.launch {
                     appRepository.trashRepository.trashNotebook(bookId)
                         .forEach { couchSync.noteDocumentChanged(it) }
                 }
@@ -201,8 +216,11 @@ fun NotebookConfigDialog(
                 log.i("folder: $selectedFolder")
                 val updatedBook = book!!.copy(parentFolderId = selectedFolder)
                 bookFolder = selectedFolder
-                scope.launch {
-                    // be careful, not to cause race condition.
+                // `appScope`, for the same reason the delete uses it: `onClose()` just ran, so the
+                // dialog's own scope is on its way out and a move launched into it could be
+                // cancelled before the row was written — the notebook staying where it was, with
+                // no error to say why.
+                appScope.launch {
                     saveBook(updatedBook)
                 }
             })
@@ -372,7 +390,10 @@ fun NotebookConfigDialog(
                 }
                 ActionButton(stringResource(R.string.details_notebook_buttons_copy)) {
                     onClose()
-                    scope.launch {
+                    // `appScope`: the line above has already unmounted this dialog. A copy is the
+                    // longest of these writes — a whole notebook's pages — so it is also the one
+                    // the dialog's scope was most likely to cut short, snack and all.
+                    appScope.launch {
                         snackManager.runWithSnack("Copying notebook…", 3000) {
                             val copyId = appRepository.duplicateNotebook(bookId)
                             if (copyId == null) "Could not copy this notebook"
