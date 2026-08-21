@@ -43,6 +43,7 @@ import com.ethran.notable.data.db.StrokeMigrationHelper
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.io.ExportEngine
+import com.ethran.notable.recognition.HandwritingRecognizer
 import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.couch.CouchSyncController
 import com.ethran.notable.ui.AppEventUiBridge
@@ -100,6 +101,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var couchSyncController: dagger.Lazy<CouchSyncController>
+
+    @Inject
+    lateinit var handwritingRecognizer: dagger.Lazy<HandwritingRecognizer>
 
     @Inject
     lateinit var snackDispatcher: SnackDispatcher
@@ -270,6 +274,9 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // No-op unless CouchDB is the selected backend; the controller checks for itself.
         couchSyncController.get().start()
+        // Text recognized while offline has been waiting for a network; this is the moment there
+        // is most likely to be one.
+        handwritingRecognizer.get().publishPending()
     }
 
     override fun onStop() {
@@ -296,6 +303,10 @@ class MainActivity : ComponentActivity() {
         // Last chance before the process may be killed. The push is per-document, so a truncated
         // run leaves the rest queued rather than a half-written notebook.
         controller.requestPushNow()
+
+        // Recognition waits out a debounce that a backgrounded process may not live to finish, so
+        // whatever is outstanding is recognized now and the firmware service is handed back.
+        handwritingRecognizer.get().flush()
     }
 
     override fun onRestart() {
