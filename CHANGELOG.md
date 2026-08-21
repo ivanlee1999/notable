@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.43.0
+
+Every page is one sheet now — the last traces of the old endless canvas, and its "Subpage"
+markers, are gone.
+
+- **Old notebooks no longer show "Subpage" lines.** Pages created before paper sizes existed
+  used to keep the old behaviour: an endless canvas that grew as you wrote, with red "Subpage"
+  break lines drawn across it — on screen and in exported PDFs. Those pages are now ordinary
+  bounded pages like every other, and the markers are gone everywhere.
+- **A legacy page is the same size on every device.** An old page used to be laid out at
+  whatever screen it happened to be shown on, so the same page was a different page on the
+  BOOX and the iPad. Both apps now lay it out on the same fixed sheet (1404×1872 — the BOOX
+  screen the ink was originally written against, so nothing moves here).
+- **Old notebooks stop producing more legacy pages.** A new page added to a notebook from
+  before paper sizes now gets a real declared size matching its siblings, on both apps.
+- **Writing and scrolling past the end of a legacy page behaves like every other page.** In
+  Scrolling mode, running off the last page's end creates the next page; in Pagination mode,
+  the page ends at its paper and says so. Ink an old page already holds below its sheet stays
+  reachable until opening the notebook divides it onto real pages, as before.
+- The "Preview PDF Pagination" toggle is retired — there is no break inside a page left to
+  preview. PDF export still splits overgrown legacy pages at the same sheet boundaries.
+
+### Worth knowing
+
+The matching iPad change shipped in bopa alongside this release; the two apps now agree on the
+size of every page, old or new. No ink moves as part of this change.
+
+No database change.
+
 ## 0.42.1
 
 One fix: deleting a notebook works every time, instead of most of the time.
