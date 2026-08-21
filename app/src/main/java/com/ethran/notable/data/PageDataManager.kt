@@ -866,25 +866,46 @@ class PageDataManager @Inject constructor(
     // Copy-on-write: build a new list and swap the reference under [lock] instead of mutating in
     // place, so a reader that took the old reference from getStrokes/getImages (lock-free, on the
     // drawing thread) iterates an immutable snapshot — no ConcurrentModification on join-during-load.
+    //
+    // By id, because the two sides of the join can be the same stroke. Ink drawn while the page
+    // was still loading goes into this cache *and* into Room; if its row lands before the load's
+    // own query runs, the load reads back the very stroke already sitting here and a plain append
+    // files it twice. It is then drawn twice, exported twice and counted twice, and nothing
+    // downstream can tell the copies apart — [getStrokes] is the editor's only source of ink.
+    //
+    // This is the one writer into a loaded page's strokes that could do that: [setStrokes]
+    // replaces, [addStrokesToPage] appends only what is not already resident,
+    // [removeStrokesFromPage] removes, and [reloadCurrentPage] diffs by id through
+    // [withInkDrawnSince]. A page holding one stroke id twice is never right.
     private fun appendStrokesLocked(entry: PageCacheEntry, newStrokes: List<Stroke>) {
         val existing = entry.strokes
-        entry.strokes = if (existing == null) newStrokes.toMutableList()
-        else {
-            log.d("Joining strokes drawn during page loading and existing strokes")
-            ArrayList<Stroke>(existing.size + newStrokes.size).apply {
-                addAll(existing); addAll(newStrokes)
-            }
+        if (existing == null) {
+            entry.strokes = newStrokes.toMutableList()
+            return
+        }
+        val resident = existing.mapTo(HashSet(existing.size)) { it.id }
+        val fresh = newStrokes.filterNot { it.id in resident }
+        if (fresh.isEmpty()) return
+        log.d("Joining strokes drawn during page loading and existing strokes")
+        entry.strokes = ArrayList<Stroke>(existing.size + fresh.size).apply {
+            addAll(existing); addAll(fresh)
         }
     }
 
+    /** By id, for the reason [appendStrokesLocked] is: an image placed while the page was still
+     *  loading is in this cache and in Room, and the load reads it back. */
     private fun appendImagesLocked(entry: PageCacheEntry, newImages: List<Image>) {
         val existing = entry.images
-        entry.images = if (existing == null) newImages.toMutableList()
-        else {
-            log.d("Joining images drawn during page loading and existing images")
-            ArrayList<Image>(existing.size + newImages.size).apply {
-                addAll(existing); addAll(newImages)
-            }
+        if (existing == null) {
+            entry.images = newImages.toMutableList()
+            return
+        }
+        val resident = existing.mapTo(HashSet(existing.size)) { it.id }
+        val fresh = newImages.filterNot { it.id in resident }
+        if (fresh.isEmpty()) return
+        log.d("Joining images drawn during page loading and existing images")
+        entry.images = ArrayList<Image>(existing.size + fresh.size).apply {
+            addAll(existing); addAll(fresh)
         }
     }
 

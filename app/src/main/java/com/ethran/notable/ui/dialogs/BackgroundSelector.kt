@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -29,7 +30,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
@@ -299,13 +302,18 @@ fun BackgroundSelector(
         }
     }
 
+    // A ceiling, not a fixed height. Pinned at 550dp the box ignored the window it was in: on a
+    // phone-width screen the mode buttons and the placement row wrap taller, the template chips
+    // are laid out past the bottom edge, and a control outside its own window cannot be tapped at
+    // all — not clipped, unreachable. `heightIn` respects the constraints the dialog is given, so
+    // the box is as tall as its content up to this, and never taller than the screen.
     val modalHeight = 550.dp
     Dialog(onDismissRequest = { onClose() }) {
         Column(
             modifier = Modifier
                 .background(Color.White)
                 .fillMaxWidth()
-                .height(modalHeight)
+                .heightIn(max = modalHeight)
                 .border(2.dp, Color.Black, RectangleShape)
         ) {
             Box(
@@ -314,11 +322,14 @@ fun BackgroundSelector(
                     .padding(vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Row(
+                // FlowRow, not Row: four buttons do not fit across a phone, and a Row does not
+                // wrap — it squeezes, until each label is one letter per line and the last button
+                // is off the edge.
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.Center,
                 ) {
                     // Background Mode Buttons
                     listOf("Native", "Image", "Cover", "PDF").forEach { modeName ->
@@ -342,6 +353,16 @@ fun BackgroundSelector(
                     .fillMaxWidth()
                     .background(Color.Black)
             )
+            // Everything below the mode row scrolls. What it holds depends on the mode and on
+            // whether the page can be placed, so its height is not something the dialog can know
+            // in advance; whatever does not fit has to be reachable by scrolling rather than laid
+            // out past the edge. `fill = false` keeps the dialog from stretching to the ceiling
+            // when the content is short.
+            Column(
+                Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+            ) {
             if (canPlacePages) {
                 PlacementSelector(placement = placement, onPlacementChange = { placement = it })
             }
@@ -446,6 +467,7 @@ fun BackgroundSelector(
 
                 }
             }
+            }
         }
     }
 }
@@ -471,18 +493,21 @@ private fun PlacementSelector(
         TemplatePlacement.NEW_PAGE_BEFORE to stringResource(R.string.template_placement_before),
         TemplatePlacement.NEW_PAGE_AFTER to stringResource(R.string.template_placement_after),
     )
-    Row(
+    // The label and three chips are wider than a phone. Wrapped rather than squeezed: a Row
+    // gave every chip 12dp and 222dp of height, one character per line, which is not a control
+    // anyone can read or hit.
+    FlowRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             stringResource(R.string.template_placement_label),
             fontWeight = FontWeight.Bold,
             fontSize = 14.sp,
+            modifier = Modifier.padding(end = 10.dp),
         )
-        Spacer(Modifier.width(10.dp))
         options.forEach { (value, label) ->
             // A border rather than a fill for the selected one: an inverted chip on e-ink is a
             // black block that ghosts into whatever is drawn over it next ([OptionChip]).

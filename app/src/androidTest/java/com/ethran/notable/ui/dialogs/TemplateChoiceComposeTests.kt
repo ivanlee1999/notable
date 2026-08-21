@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSizePreset
@@ -113,8 +114,11 @@ class TemplateChoiceComposeTests {
             )
         }
 
-        composeRule.onNodeWithText("New page after").performClick()
-        composeRule.onNodeWithText("Lines").performClick()
+        // Scrolled to, not merely clicked: the selector's body scrolls, and on a phone-width
+        // screen the template chips start below the fold. `performClick` alone taps wherever the
+        // node happens to sit, which on a short screen is not the node at all.
+        composeRule.onNodeWithText("New page after").performScrollTo().performClick()
+        composeRule.onNodeWithText("Lines").performScrollTo().performClick()
         composeRule.waitForIdle()
 
         assertEquals(1, chosen.size)
@@ -140,9 +144,9 @@ class TemplateChoiceComposeTests {
             )
         }
 
-        composeRule.onNodeWithText("New page before").performClick()
-        composeRule.onNodeWithText("Lines").performClick()
-        composeRule.onNodeWithText("Dot grid").performClick()
+        composeRule.onNodeWithText("New page before").performScrollTo().performClick()
+        composeRule.onNodeWithText("Lines").performScrollTo().performClick()
+        composeRule.onNodeWithText("Dot grid").performScrollTo().performClick()
         composeRule.waitForIdle()
 
         assertEquals(2, chosen.size)
