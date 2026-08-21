@@ -70,9 +70,6 @@ class EditorControlTower(
                     viewModel.changePage(pageId)
                     history.cleanHistory()
                 }
-                // no need for this, we are listening for change of current page,
-                // in EditorView
-//                page.changePage(pageId)
                 refreshScreen()
             }
         }
@@ -97,7 +94,14 @@ class EditorControlTower(
         // above it rather than turning by a whole screen. The switch itself lands the previous
         // page at *exactly* the state that draws the same pixels — its scroll past its own end,
         // with this page under the seam — so nothing on screen moves except by the finger.
-        if (page.crossPageScrollActive && delta.x == 0f && delta.y > 0 &&
+        // Scrolling is the ONLY navigation under continuous scrolling — and it navigates by
+        // flowing, never by jumping. Two edges need help beyond the plain scroll bounds:
+        //
+        // Upward at the top: the previous page slides in above this one. Not gated on this
+        // page having a *next* page (it used to be, which made the top of the last page turn
+        // discretely instead of flowing): the seam illusion only needs the previous page,
+        // which draws this one under its own seam.
+        if (page.continuousScrollEnabled && delta.x == 0f && delta.y > 0 &&
             page.scroll.y <= 0f && page.previousPageId != null
         ) {
             if (crossTurnAllowed()) {
@@ -106,47 +110,43 @@ class EditorControlTower(
             }
             return
         }
-        // Scrolling past the end of the last page creates *and enters* the next page in one
-        // gesture. This used to create the row asynchronously but leave the view on the old
-        // page, hoping another sample from the same drag would arrive after the database write
-        // and start crossing the new seam. A discrete drag has no later sample, and a quick
-        // smooth drag often ends first, so "Scrolling" appeared to do nothing while
-        // "Pagination" worked. There is no existing next-page content to preserve continuously
-        // here; opening the new blank sheet is the only visible completion of the request.
+        // Downward past the end of the last page: the notebook grows. The page is appended
+        // *silently* — the view stays put, the seam and the blank sheet appear below it, and
+        // the same scroll keeps flowing into them (Xournal++'s scroll-to-end append and
+        // Notability's auto-extend behave this way; a jump would break the one thing this
+        // mode promises, that the notebook moves only as far as the finger). Latched once per
+        // gesture; the redraw after the append makes the new paper visible even when the drag
+        // has already ended.
         if (page.continuousScrollEnabled && delta.x == 0f && delta.y < 0 &&
             page.nextPageId == null && page.isAtVerticalEdge(-delta.y)
         ) {
             if (!edgeTurnTaken) {
                 edgeTurnTaken = true
-                goToNextPage()
+                appendNextPage()
             }
             return
         }
-        // Dragging on when the page has no more to give is how you turn it. Asked before the
-        // scroll is queued: once it is in the accumulator it has been coalesced with other
-        // movement and the edge is no longer legible. Under continuous scrolling both
-        // directions are handled above, so this discrete turn serves Pagination mode (and the
-        // upward turn at a page's top).
-        //
-        // Deliberately *not* conditioned on the page-turn direction. It was — and "Side to
-        // side" then meant the bottom of a page was a wall: no turn, no new page, nothing to do
-        // but stop. The two settings answer different questions. Which way a *swipe* turns the
-        // page is one; whether running off the bottom of the paper gets you the next sheet is
-        // not a preference at all, it is the only sane answer, and every note app that paginates
-        // gives it. Sideways swiping keeps working exactly as configured.
-        if (delta.x == 0f && page.isAtVerticalEdge(-delta.y) &&
-            !(page.crossPageScrollActive && delta.y < 0)
-        ) {
-            if (!edgeTurnTaken) {
-                edgeTurnTaken = true
-                // A drag up asks for what is below, which is the next page. Through this
-                // class's own methods, not the view model's, so the turn drops the undo
-                // history the way every other navigation route does.
-                if (delta.y < 0) goToNextPage() else goToPreviousPage()
-            }
-            return
-        }
+        // No discrete edge-turn lives here any more. Pagination's vertical steps go through
+        // requestPageStep, which offers the turn at the sheet's edge itself; sideways swipes
+        // are Pagination's gesture and resolve in the gesture receiver. Under continuous
+        // scrolling, every remaining delta is exactly what it looks like: scrolling.
         pendingScroll.update { it + delta }
+    }
+
+    /**
+     * Appends the next page after the current last one, without entering it. The seam draws
+     * the new blank sheet as soon as the neighbor is recorded; the ordinary overshoot bound
+     * then lets the in-flight scroll continue across it, and the commit enters it only when
+     * the finger has actually carried the view there.
+     */
+    private fun appendNextPage() {
+        scope.launch(Dispatchers.IO) {
+            val created = page.pageDataManager.ensureNextPage(page.currentPageId)
+            if (created != null) {
+                // The redraw that makes the appended sheet visible under the seam.
+                CanvasEventBus.forceUpdate.emit(null)
+            }
+        }
     }
 
     /**
@@ -190,7 +190,10 @@ class EditorControlTower(
         page.pageDataManager.setPageScroll(
             nextId, Offset(page.scroll.x, page.scroll.y - page.height)
         )
-        goToNextPage()
+        // The page whose viewport was just staged, by id — not a re-resolved "next page".
+        // The two can disagree when the notebook is reordered mid-scroll, and a preset landing
+        // on one page while the view enters another opens the entered page unpositioned.
+        enterPage(nextId)
     }
 
     /**
@@ -205,7 +208,13 @@ class EditorControlTower(
         // Far past any real page extent, small enough to stay safe in float arithmetic until
         // the entry clamp lands it on the page's true end.
         page.pageDataManager.setPageScroll(prevId, Offset(page.scroll.x, 1e7f))
-        goToPreviousPage()
+        enterPage(prevId)
+    }
+
+    /** Enters exactly [pageId], dropping the undo history the way every navigation does. */
+    private fun enterPage(pageId: String) {
+        viewModel.changePage(pageId)
+        history.cleanHistory()
     }
 
     /**

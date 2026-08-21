@@ -267,16 +267,10 @@ class PageView(
     val previousPageId: String? get() = pageDataManager.previousPageIdOf(currentPageId)
 
     /**
-     * Whether the "Scrolling" choice under Vertical Navigation is in force: the notebook is one
-     * long surface, and vertical scrolling is allowed to flow across the seam between pages.
-     * "Pagination" keeps the discrete turn, which on e-ink is one clean refresh.
-     *
-     * Deliberately *not* gated on the page-turn direction. It was at first — "a sideways turn
-     * has no seam to scroll over" — which quietly turned the whole feature off for anyone who
-     * turns pages sideways: their vertical drags stopped dead at the sheet's end and the space
-     * below it stayed gray, which read as "scrolling is still paginated" and "the edge cannot
-     * be written on". The two settings answer different questions: the page turn is what a
-     * *sideways swipe* does; this is what *scrolling down* does when the page runs out.
+     * Whether the "Scrolling" choice under Page Navigation is in force: the notebook is one
+     * long surface, vertical scrolling flows across the seam between pages, and scrolling is
+     * the *only* navigation — sideways swipes do not turn pages in this mode. "Pagination"
+     * is the inverse: swipes turn whole pages, and there is no continuous scrolling.
      */
     val continuousScrollEnabled: Boolean
         get() = !GlobalAppSettings.current.verticalNavigation.isPaged
@@ -497,14 +491,6 @@ class PageView(
         cleanJob()
     }
 
-
-    // To be removed.
-    private fun redrawAll(scope: CoroutineScope) {
-        scope.launch(Dispatchers.Main.immediate) {
-            val viewRectangle = Rect(0, 0, windowedCanvas.width, windowedCanvas.height)
-            drawAreaScreenCoordinates(viewRectangle)
-        }
-    }
 
     /**
      * Starts loading the current page's content.

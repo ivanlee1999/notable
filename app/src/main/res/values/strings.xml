@@ -54,9 +54,6 @@
     <string name="enable_scribble_to_erase">Enable scribble-to-erase (scribble out your mistakes to erase them)</string>
     <string name="enable_smooth_scrolling">Enable smooth scrolling</string>
     <string name="vertical_navigation">Page navigation</string>
-    <string name="page_turn">Turn the page</string>
-    <string name="page_turn_vertical">Up and down</string>
-    <string name="page_turn_horizontal">Side to side</string>
     <string name="vertical_navigation_continuous">Continuous scrolling</string>
     <string name="vertical_navigation_paged">One page at a time</string>
     <string name="continuous_zoom">Continuous Zoom</string>
@@ -130,11 +127,11 @@
     <string name="welcome_view_prevent_frozen_recommended">This step is highly recommended for a smooth experience.</string>
     <string name="welcome_view_quick_start_title"><![CDATA[📖 Quick Start & Gestures Guide]]></string>
     <string name="welcome_view_quick_start_navigation">Navigation</string>
-    <string name="welcome_view_quick_start_navigation_details">• Swipe up/down: Scroll page\n• Swipe left/right: Previous/next page\n• Pinch with 2 fingers: Zoom\n• Tap page number: Quick jump\n• Two-finger swipe left/right: Show/hide toolbar</string>
+    <string name="welcome_view_quick_start_navigation_details">• Scrolling mode: scroll through pages — past the last page starts a new one\n• Pagination mode: swipe for previous/next page — past the last page starts a new one\n• Pinch with 2 fingers: Zoom\n• Tap page number: Page overview\n• Three-finger swipe up: QuickNav</string>
     <string name="welcome_view_quick_start_selection_editing_title"><![CDATA[Selection & Editing]]></string>
     <string name="welcome_view_quick_start_selection_editing_details"><![CDATA[• Hold & drag: Select items\n• Double tap: Undo\n• Double tap on selection: Copy\n• Drag selection: Move\n• Scribble to erase (if enabled)]]></string>
     <string name="welcome_view_quick_start_tips_title">Tips</string>
-    <string name="welcome_view_quick_start_tips_details">• Use \'Selection Export\' to quickly share images.\n• Tap the page number to quickly jump between pages.\n• Try enabling \'Scribble to Erase\' in Settings for natural erasing.\n• Double tap to undo, or on a selection to copy it.\n• You can use Notable as a live PDF viewer for LaTeX—see README.\n• You can customize gesture actions in Settings.</string>
+    <string name="welcome_view_quick_start_tips_details">• Use \'Selection Export\' to quickly share images.\n• Tap the page number to open the page overview.\n• Try enabling \'Scribble to Erase\' in Settings for natural erasing.\n• Double tap to undo, or on a selection to copy it.\n• You can use Notable as a live PDF viewer for LaTeX—see README.\n• You can customize gesture actions in Settings.</string>
 
     <string name="export_page_to">Export page to %1$s</string>
     <string name="export_page_to_error">Error exporting page to %1$s</string>

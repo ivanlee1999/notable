@@ -484,9 +484,9 @@ private fun resolveGesture(
 ) {
     when (action) {
         AppSettings.GestureAction.None -> log.i("No Action")
-        AppSettings.GestureAction.PreviousPage -> ctx.actions.goToPreviousPage()
+        AppSettings.GestureAction.PreviousPage -> turnPageByGesture(ctx, forward = false)
 
-        AppSettings.GestureAction.NextPage -> ctx.actions.goToNextPage()
+        AppSettings.GestureAction.NextPage -> turnPageByGesture(ctx, forward = true)
 
         AppSettings.GestureAction.ChangeTool -> ctx.actions.toggleTool()
 
@@ -501,6 +501,23 @@ private fun resolveGesture(
             ctx.actions.selectRectangle(rectangle)
         }
     }
+}
+
+/**
+ * Discrete page turns are Pagination's navigation. Under continuous scrolling the notebook is
+ * one long surface and scrolling is the only way through it — a sideways flick that silently
+ * jumped a whole page (and, on the last page, *created* one) was a second, competing metaphor
+ * living on the same paper: it left users with duplicate blank pages and a view that disagreed
+ * with where scrolling had just shown them to be. One axis, one meaning, per mode — the same
+ * separation GoodNotes, Notability and the e-ink readers all enforce. The hint tells the
+ * swiper what the mode's own navigation is instead of silently ignoring them.
+ */
+private fun turnPageByGesture(ctx: GestureContext, forward: Boolean) {
+    if (!ctx.appSettings.verticalNavigation.isPaged) {
+        ctx.actions.showHint("Scroll to move between pages")
+        return
+    }
+    if (forward) ctx.actions.goToNextPage() else ctx.actions.goToPreviousPage()
 }
 
 private fun Offset.toIntOffset() = IntOffset(x.toInt(), y.toInt())

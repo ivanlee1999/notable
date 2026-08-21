@@ -65,8 +65,8 @@ data class AppSettings(
     val toolbarPosition: Position = Position.Top,
     val smoothScroll: Boolean = true,
     val verticalNavigation: VerticalNavigation = VerticalNavigation.Continuous,
-    // Kept only so older settings blobs continue to decode and round-trip. Page direction is
-    // controlled by verticalNavigation plus the remappable left/right swipe actions.
+    // Kept only so older settings blobs continue to decode and round-trip. Navigation is
+    // owned entirely by [verticalNavigation]: scrolling in Continuous, swiping in Paged.
     val pageTurn: PageTurn = PageTurn.Vertical,
     val continuousZoom: Boolean = false,
     val continuousStrokeSlider: Boolean = false,
@@ -145,20 +145,21 @@ data class AppSettings(
     }
 
     /**
-     * How a one-finger vertical gesture moves the canvas.
+     * How the notebook is navigated. One axis, one meaning, per mode — the separation every
+     * major note app enforces (GoodNotes documents that sideways swipes are dead in its
+     * vertical-scrolling mode; Notability's Seamless gives horizontal no navigation role).
      *
-     * [Continuous] follows the finger — the notebook is one long surface and you stop
-     * wherever you let go, *including across the seam between two pages*: scrolling runs on
-     * into the next page rather than stopping at this one's end, whichever way sideways page
-     * turns are configured (see PageView.crossPageScrollActive), and dragging or writing past
-     * the last page's end creates the next one. [Paged] advances exactly one screen per swipe
-     * regardless of how far the finger travelled, and turns between pages discretely — so a
-     * turn is a single full refresh instead of a run of partial ones. On an e-ink panel that
-     * is the difference between reading handwriting back cleanly and watching it smear; it
-     * also means a line always lands in the same place on screen.
+     * [Continuous]: **scrolling is the only navigation.** The notebook is one long surface;
+     * scrolling follows the finger and flows across the seam between pages, and scrolling or
+     * writing past the last page's end grows the notebook by a page — appended under the seam,
+     * never jumped to. Sideways swipes do not turn pages here; the two metaphors on one sheet
+     * of paper is exactly what produced duplicate blank pages and a view that disagreed with
+     * itself.
      *
-     * Both modes keep the horizontal axis as it was: left/right still turns between the
-     * notebook's pages.
+     * [Paged]: **swiping is the only navigation.** One whole sheet is fitted per screen; a
+     * swipe (sideways, or vertical) turns exactly one page, and swiping forward past the last
+     * page creates the next one. A turn is a single full refresh — on an e-ink panel that is
+     * the difference between reading handwriting back cleanly and watching it smear.
      */
     enum class VerticalNavigation {
         Continuous, Paged;

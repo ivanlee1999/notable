@@ -121,14 +121,17 @@ class AppRepository @Inject constructor(
         notebookId: String,
         pageId: String
     ): String {
-        val index = getNextPageIdFromBookAndPage(notebookId, pageId)
-        if (index != null)
-            return index
         // One transaction: turning the last page creates a page *and* moves the notebook's
         // manifest, and a crash between the two leaves a page nothing points at.
+        //
+        // The existence check lives INSIDE the transaction. It used to run before it, and two
+        // callers racing past that check — a drag off the page's end and a pen stroke past it
+        // can fire within the same frame — each saw "no next page" and each created one: the
+        // duplicate blank pages that used to accumulate at the end of a notebook. Room
+        // serializes the transactions, so the second caller now finds the page the first made.
         return db.withTransaction {
+            getNextPageIdFromBookAndPage(notebookId, pageId)?.let { return@withTransaction it }
             val book = bookRepository.getById(notebookId = notebookId)
-            // creating a new page
             val page = book!!.newPage()
             pageRepository.create(page)
             bookRepository.addPage(notebookId, page.id)
