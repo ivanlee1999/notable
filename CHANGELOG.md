@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.44.0
+
+Scrolling and swiping each mean one thing now — and scrolling to the end of the notebook
+reliably starts a new page.
+
+- **Scrolling off the last page now works, every time.** The scroll could park a hair short of
+  the page's true end and stay there — the drag stopped dead and no page ever came. The scroll
+  now lands exactly on the edge, and running off the last page grows the notebook.
+- **The new page appears under your scroll instead of yanking you to it.** Scrolling past the
+  end quietly adds the next page below the seam and your scroll flows straight onto it — the
+  way Notability and Xournal++ extend a notebook — rather than jumping the view.
+- **Scrolling and swiping no longer fight.** In Scrolling mode, scrolling is the only way to
+  move — a sideways swipe no longer silently jumps a page (it tells you to scroll instead). In
+  Pagination mode, swiping is the only way to move — sideways for next/previous, past the last
+  page to add one. Before, both worked in both modes, which is how notebooks ended up with
+  surprise duplicate blank pages.
+- **Duplicate blank pages can no longer be created.** Two near-simultaneous "next page"
+  requests — a swipe racing a pen stroke past the end — used to each create one. They now
+  converge on a single page.
+- **Scrolling up from the top of the last page flows into the previous page** like everywhere
+  else, instead of turning with a jump.
+- The welcome screen's gesture guide now describes how the app actually navigates.
+
+### Worth knowing
+
+Extra blank pages that earlier versions created at the end of a notebook are ordinary pages —
+delete them from the page overview if you don't want them. If you had remapped a gesture to
+Next/Previous Page, it now acts only in Pagination mode.
+
+No database change.
+
 ## 0.43.0
 
 Every page is one sheet now — the last traces of the old endless canvas, and its "Subpage"
