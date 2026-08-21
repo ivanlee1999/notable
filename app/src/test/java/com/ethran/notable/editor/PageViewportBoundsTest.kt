@@ -148,7 +148,9 @@ class PageViewportBoundsTest {
     fun `content inside the sheet does not stretch the canvas`() {
         assertEquals(
             a4.height,
-            PageViewportBounds.contentExtent(a4.height, listOf(10f, a4.height / 2f))
+            PageViewportBounds.contentExtent(
+                a4.height, listOf(10f, a4.height / 2f, a4.height - 0.1f)
+            )
         )
     }
 
@@ -214,13 +216,11 @@ class PageViewportBoundsTest {
     }
 
     /**
-     * Turning sideways shows a whole page; turning downward fits the width and lets the page run
-     * off the bottom. A sideways fit that cut the page off would be the worst of both — you could
-     * neither see the page nor scroll to the rest of it, because sideways turning is the one mode
-     * where nothing scrolls.
+     * A physical page is one sheet whichever gesture turns it. The width fit is still useful when
+     * zooming, but the fitted page uses the whole-sheet answer so it cannot look like two pages.
      */
     @Test
-    fun `the sideways fit shows the whole sheet, the downward fit only its width`() {
+    fun `the whole sheet fit keeps one physical page in one viewport`() {
         val sheet = PageSizePreset.A4.size
         val viewWidth = 1400
         val viewHeight = 1000

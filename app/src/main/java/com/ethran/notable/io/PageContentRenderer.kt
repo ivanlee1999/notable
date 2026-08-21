@@ -17,6 +17,7 @@ import com.ethran.notable.data.db.getBackgroundType
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.BackgroundType.Native
 import com.ethran.notable.data.model.PageSize
+import com.ethran.notable.data.model.declaredPageSize
 import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.drawing.drawBg
 import com.ethran.notable.editor.drawing.drawImage
@@ -120,7 +121,10 @@ class PageContentRenderer @Inject constructor(
                 scroll = scroll,
                 resourceBitmap = bgImage,
                 scale = scaleFactor,
-                repeat = resolvedBackgroundType is BackgroundType.ImageRepeating
+                repeat = resolvedBackgroundType is BackgroundType.ImageRepeating,
+                // A declared sheet is already one export page. Subpage markers only describe
+                // legacy continuous canvases that have no physical page declaration of their own.
+                showPagination = data.page.declaredPageSize() == null
             )
 
             data.images.forEach { drawImage(context, canvas, it, -scroll) }
