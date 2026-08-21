@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.42.0
+
+Notebooks can be one continuous, full-width writing surface.
+
+- **Continuous scrolling uses the full screen width.** Each physical sheet is fitted to the
+  available width, and vertical scrolling flows through the real page boundaries instead of
+  shrinking every sheet into a one-page preview.
+- **A quick upward swipe no longer disappears.** Smooth scrolling used to discard the first
+  movement while it entered scroll mode, so a short swipe at the bottom could move nothing and
+  never create the next page. That first movement now reaches the editor and creates or opens the
+  next sheet normally.
+- **There is one page-navigation setting.** The unused “Turn the page” selector has been removed.
+  Choose “Continuous scrolling” for the full-width document flow or “One page at a time” for a
+  whole-sheet paginated view; Reset view now returns to the fit selected by that setting.
+
+No database change. Existing notebooks need no repair or migration.
+
 ## 0.41.1
 
 One hotfix: scrolling past the last sheet visibly gives you the next page.
