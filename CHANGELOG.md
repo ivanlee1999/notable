@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.41.1
+
+One hotfix: scrolling past the last sheet visibly gives you the next page.
+
+- **“Scrolling” now creates and opens page 2 in the same gesture.** It previously created the
+  database row in the background but stayed on page 1, waiting for another movement sample that a
+  completed or quick swipe never sent. “Pagination” already opened the new page immediately; both
+  vertical-navigation settings now do, while scrolling across pages that already exist remains
+  continuous.
+
+No database change. Existing notebooks need no repair.
+
 ## 0.41.0
 
 The writing tools look like the rest of the app.
