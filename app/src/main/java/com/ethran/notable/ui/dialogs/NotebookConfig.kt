@@ -64,10 +64,12 @@ import com.ethran.notable.ui.rememberCouchSyncController
 import com.ethran.notable.ui.rememberKvProxy
 import com.ethran.notable.ui.requestNotebookSync
 import com.ethran.notable.ui.SnackConf
+import com.ethran.notable.ui.SnackState
 import com.ethran.notable.ui.components.BreadCrumb
 import com.ethran.notable.ui.components.PagePreview
 import com.ethran.notable.ui.components.getFolderList
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private val log = ShipBook.getLogger("NotebookConfig")
@@ -175,8 +177,10 @@ fun NotebookConfigDialog(
                 // sometimes I can't" bug — the write and the dispose were racing, the loser was
                 // whichever the device felt like that second, and a lost write said nothing.
                 appScope.launch {
-                    appRepository.trashRepository.trashNotebook(bookId)
-                        .forEach { couchSync.noteDocumentChanged(it) }
+                    reportingFailure(snackManager, "Could not move this notebook to the Trash") {
+                        appRepository.trashRepository.trashNotebook(bookId)
+                            .forEach { couchSync.noteDocumentChanged(it) }
+                    }
                 }
                 showDeleteDialog = false
                 onClose()
@@ -221,7 +225,9 @@ fun NotebookConfigDialog(
                 // cancelled before the row was written — the notebook staying where it was, with
                 // no error to say why.
                 appScope.launch {
-                    saveBook(updatedBook)
+                    reportingFailure(snackManager, "Could not move this notebook") {
+                        saveBook(updatedBook)
+                    }
                 }
             })
     }
@@ -490,5 +496,31 @@ fun NotebookLinkRow(
                 Text("Link")
             }
         }
+    }
+}
+/**
+ * Runs a library action and says so if it fails, rather than leaving the user looking at a
+ * notebook that did not move and a tap that appears to have done nothing.
+ *
+ * bopa has always had this — every Trash action there goes through a `perform(_:error:)` that puts
+ * the failure in an alert — and notable had nowhere to put one, because these actions were fired
+ * into a scope that was about to be cancelled anyway. Now that they outlive the dialog there is
+ * something left to report with.
+ *
+ * `CancellationException` is deliberately not caught: it is not a failure, and reporting it would
+ * be reporting normal shutdown as an error.
+ */
+private suspend fun reportingFailure(
+    snackManager: SnackState,
+    message: String,
+    block: suspend () -> Unit,
+) {
+    try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.e("$message: ${e.message}", e)
+        snackManager.displaySnack(SnackConf(text = message, duration = 3000))
     }
 }
