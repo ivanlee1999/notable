@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.41.0
+
+The writing tools look like the rest of the app.
+
+- **The tool buttons are drawn in one hand.** The pen, the fountain pen, the pencil, the
+  highlighter, the eraser and the selection lasso were solid black silhouettes, while every
+  other button in the editor is a light outline. On the six buttons you reach for most, that
+  read as a different app's furniture. They are outlines now, at the same weight and the same
+  rounded corners as everything around them — and the same drawings the iPad app uses, so a
+  tool is recognisably the same tool on either device.
+
+No database change.
+
 ## 0.40.0
 
 A page is one physical sheet again, whichever direction you use to turn it.
