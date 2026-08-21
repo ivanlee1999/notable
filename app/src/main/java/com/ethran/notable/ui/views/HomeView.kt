@@ -38,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -69,7 +71,9 @@ import com.ethran.notable.ui.messageRes
 import com.ethran.notable.ui.rememberKvProxy
 import com.ethran.notable.ui.requestFullSync
 import com.ethran.notable.ui.components.CoverActionTile
+import com.ethran.notable.ui.components.FILE_BAR_WIDTH
 import com.ethran.notable.ui.components.Kicker
+import com.ethran.notable.ui.components.LibraryFileBar
 import com.ethran.notable.ui.components.ListRow
 import com.ethran.notable.ui.components.NotebookCoverCard
 import com.ethran.notable.ui.components.NotebookListRow
@@ -86,6 +90,7 @@ import com.ethran.notable.ui.dialogs.PdfImportChoiceDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.KaleidoMetrics
+import com.ethran.notable.ui.theme.coverColumnsForShelf
 import com.ethran.notable.ui.theme.kaleidoMetrics
 import com.ethran.notable.ui.viewmodels.LibrarySort
 import com.ethran.notable.ui.viewmodels.LibrarySortOrder
@@ -95,6 +100,7 @@ import com.ethran.notable.sync.SyncBadge
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.FolderPlus
+import compose.icons.feathericons.MoreVertical
 import compose.icons.feathericons.Plus
 import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Search
@@ -254,8 +260,18 @@ fun LibraryContent(
             .fillMaxSize()
             .background(Kaleido.Paper)
     ) {
-        val metrics = kaleidoMetrics(maxWidth)
+        val screen = kaleidoMetrics(maxWidth)
         val pickImportFile = rememberImportPicker(onImportPdf, onImportXopp)
+
+        // The file bar takes its width off the shelf, so the covers have to be measured against
+        // what is left rather than against the panel. Sized against the panel they stayed at
+        // three columns and simply got narrower, which is the one thing the cover width is
+        // supposed to be fixed against.
+        val shelfWidth = if (screen.wide) maxWidth - FILE_BAR_WIDTH - Kaleido.SectionRule
+        else maxWidth
+        val metrics =
+            if (screen.wide) screen.copy(coverColumns = coverColumnsForShelf(shelfWidth))
+            else screen
 
         // Sorted here rather than in the view model: the order is a snapshot-state setting, and
         // reading it during composition is what makes a change to it redraw the shelf.
@@ -272,6 +288,24 @@ fun LibraryContent(
             )
         }
 
+        Row(Modifier.fillMaxSize()) {
+            // Only on a screen with the room: a one-handed device has one column's worth and
+            // spends it on the shelf.
+            if (screen.wide) LibraryFileBar(
+                tree = uiState.tree,
+                selectedFolderId = uiState.folderId,
+                syncBadges = uiState.syncBadges,
+                isSyncing = uiState.isSyncing,
+                onSelectFolder = onNavigateToFolder,
+                onOpenNotebook = { book ->
+                    // A book with no page has nothing to open — the empty-import leftover the
+                    // shelf warns about. Silently doing nothing beats crashing on `first()`.
+                    val page = book.openPageId ?: book.pageIds.firstOrNull()
+                    if (page != null) onNavigateToEditor(page, book.id)
+                },
+                onSyncNow = onSyncNow,
+            )
+
         Column(Modifier.fillMaxSize()) {
             LibraryHeader(
                 metrics = metrics,
@@ -281,6 +315,7 @@ fun LibraryContent(
                 onSyncNow = onSyncNow,
                 onCreateNewNotebook = onCreateNewNotebook,
                 onCreateNewNote = onCreateNewNote,
+                onImport = pickImportFile,
                 onQueryChanged = onQueryChanged,
                 onSortChanged = onSortChanged,
             )
@@ -390,7 +425,9 @@ fun LibraryContent(
                     // one scroll region, and the covers per row is a design constant, not a
                     // measured fit. The trailing null is the import tile, so it takes the next
                     // free cell instead of needing a row of its own.
-                    val rows = (drawable + listOf(null)).chunked(metrics.coverColumns)
+                    // No trailing null any more: the import tile used to take the next free
+                    // cell, and a shelf's last row is not where a once-a-year action belongs.
+                    val rows = drawable.chunked(metrics.coverColumns)
                     itemsIndexed(rows) { index, row ->
                         NotebookRow(
                             books = row,
@@ -401,33 +438,10 @@ fun LibraryContent(
                             syncBadges = uiState.syncBadges,
                             onNavigateToEditor = onNavigateToEditor,
                             onPreviewNeeded = onPreviewNeeded,
-                            importTile = { ImportTile(onClick = pickImportFile) },
                         )
                         if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
                     }
                 } else {
-                    item(key = "import-row") {
-                        ListRow(
-                            // Matches NotebookListRow, so the cover chips line up down the list.
-                            hit = metrics.hit + 22.dp,
-                            label = stringResource(R.string.home_import_notebook),
-                            onClick = pickImportFile,
-                            showChevron = false,
-                            leading = {
-                                Box(
-                                    Modifier
-                                        .size(34.dp, 46.dp)
-                                        .border(1.dp, Kaleido.Edge),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        FeatherIcons.Upload, null,
-                                        tint = Kaleido.Ink, modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        )
-                    }
                     items(drawable, key = { "book-${it.id}" }) { book ->
                         NotebookEntry(
                             book = book,
@@ -450,6 +464,7 @@ fun LibraryContent(
                 )
             }
         }
+        }
     }
 }
 
@@ -466,10 +481,12 @@ private fun LibraryHeader(
     onSyncNow: () -> Unit,
     onCreateNewNotebook: () -> Unit,
     onCreateNewNote: () -> Unit,
+    onImport: () -> Unit,
     onQueryChanged: (String) -> Unit = {},
     onSortChanged: (LibrarySortOrder, Boolean) -> Unit = { _, _ -> },
 ) {
     val root = stringResource(R.string.home_view_name)
+    var isOverflowOpen by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -536,6 +553,32 @@ private fun LibraryHeader(
                             .background(Kaleido.Red)
                     )
                 }
+            }
+            Spacer(Modifier.width(8.dp))
+            // Import lives here rather than in the shelf. It was a permanent row above the first
+            // notebook — and a permanent tile in the last grid cell — for something a library
+            // does once or twice in its life; the shelf is for what you have, not for how it got
+            // there.
+            Box {
+                SquareButton(
+                    hit = metrics.hit,
+                    onClick = { isOverflowOpen = true },
+                    filled = isOverflowOpen,
+                ) {
+                    Icon(
+                        FeatherIcons.MoreVertical, stringResource(R.string.home_more_actions),
+                        tint = if (isOverflowOpen) Kaleido.Paper else Kaleido.Ink,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                if (isOverflowOpen) LibraryOverflowMenu(
+                    below = metrics.hit,
+                    onImport = {
+                        isOverflowOpen = false
+                        onImport()
+                    },
+                    onDismiss = { isOverflowOpen = false },
+                )
             }
             Spacer(Modifier.width(8.dp))
             SquareButton(hit = metrics.hit, onClick = onCreateNewNotebook) {
@@ -660,6 +703,59 @@ private fun LibrarySearchRow(
     }
 }
 
+/**
+ * The header's overflow: what the library can do that is not about a particular notebook.
+ *
+ * One entry today. It is a menu rather than a fifth square because the header is already four
+ * squares wide and a one-handed panel has no room for a fifth beside a title.
+ */
+@Composable
+private fun LibraryOverflowMenu(
+    below: Dp,
+    onImport: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // A Popup's alignment is relative to its parent — here the button's own box — so TopEnd
+    // alone drops the menu straight on top of the header, covering sync and settings with it.
+    // Offsetting by the button's height puts it under the button that opened it, which is where
+    // a menu is expected to come from.
+    val drop = with(LocalDensity.current) { below.roundToPx() }
+    Popup(
+        alignment = Alignment.TopEnd,
+        offset = IntOffset(0, drop),
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Column(
+            Modifier
+                .border(Kaleido.SectionRule, Kaleido.Ink)
+                .background(Kaleido.Paper)
+                .width(IntrinsicSize.Max)
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .noRippleClickable(onImport)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    FeatherIcons.Upload, null,
+                    tint = Kaleido.Ink, modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = stringResource(R.string.home_import_notebook),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Kaleido.Ink,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
 /** The sort choices, as a popup rather than a screen: it is one decision with six answers. */
 @Composable
 private fun LibrarySortMenu(
@@ -743,7 +839,7 @@ private fun FolderRow(
  */
 @Composable
 private fun NotebookRow(
-    books: List<Notebook?>,
+    books: List<Notebook>,
     columns: Int,
     appRepository: AppRepository,
     exportEngine: ExportEngine,
@@ -751,7 +847,6 @@ private fun NotebookRow(
     syncBadges: Map<String, SyncBadge>,
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
-    importTile: @Composable () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -759,8 +854,7 @@ private fun NotebookRow(
     ) {
         books.forEach { book ->
             Box(Modifier.weight(1f)) {
-                if (book == null) importTile()
-                else NotebookEntry(
+                NotebookEntry(
                     book = book,
                     compactHit = null,
                     appRepository = appRepository,
@@ -833,20 +927,6 @@ private fun NotebookEntry(
             title = book.title,
             onClose = { isConflictOpen = false })
     }
-}
-
-@Composable
-private fun ImportTile(onClick: () -> Unit) {
-    CoverActionTile(
-        label = stringResource(R.string.home_import_notebook),
-        onClick = onClick,
-        icon = {
-            Icon(
-                FeatherIcons.Upload, null,
-                tint = Kaleido.Ink, modifier = Modifier.size(32.dp)
-            )
-        }
-    )
 }
 
 /**
@@ -1039,6 +1119,7 @@ private fun LibraryPreview(uiState: LibraryUiState) {
                 onSyncNow = {},
                 onCreateNewNotebook = {},
                 onCreateNewNote = {},
+                onImport = {},
             )
             Column(Modifier.padding(metrics.pad)) {
                 SectionHeader(stringResource(R.string.home_folders))

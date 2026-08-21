@@ -285,8 +285,8 @@ private fun editedLabel(updatedAt: Date): String =
         DateUtils.FORMAT_ABBREV_RELATIVE
     ).toString()
 
-/** Icon for the corner badge, or null when there is nothing worth showing. */
-private fun SyncBadge.iconOrNull(): ImageVector? = when (this) {
+/** Icon for a badge, or null when there is nothing worth showing. Shared with the file bar. */
+internal fun SyncBadge.iconOrNull(): ImageVector? = when (this) {
     SyncBadge.SYNCED -> Icons.Default.CloudDone
     SyncBadge.NOT_SYNCED -> Icons.Default.CloudOff
     SyncBadge.SCHEDULED -> Icons.Default.Schedule

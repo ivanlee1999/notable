@@ -5,6 +5,8 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.unit.Dp
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.PageSizePreset
+import com.ethran.notable.editor.ui.toolbar.model.ERASER_BASE_WIDTH
+import com.ethran.notable.editor.ui.toolbar.model.NibWidth
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.ui.theme.KALEIDO_WIDE_BREAKPOINT
 import com.ethran.notable.ui.theme.kaleidoMetrics
@@ -55,6 +57,11 @@ data class AppSettings(
     val defaultPageSizeKey: String = PageSizePreset.DEFAULT.key,
     val quickNavPages: List<String> = listOf(),
     val scribbleToEraseEnabled: Boolean = false,
+    // How broad the eraser is, as a [NibWidth] key. The eraser was the one implement with a
+    // single fixed size — a rubber the size of a nib takes all day to clear a paragraph, and
+    // there was no way to ask for a bigger one. Defaults to the step whose width is the swath
+    // it always deleted, so an eraser nobody has touched behaves exactly as it did.
+    val eraserWidth: String = NibWidth.MEDIUM.key,
     val toolbarPosition: Position = Position.Top,
     val smoothScroll: Boolean = true,
     val verticalNavigation: VerticalNavigation = VerticalNavigation.Continuous,
@@ -107,6 +114,14 @@ data class AppSettings(
     val destructiveMigrations: Boolean = false,
 
     ) {
+    /**
+     * The swath the eraser deletes, in page units — [eraserWidth] resolved against the eraser's
+     * own ramp base. Read at the point of erasing rather than threaded through the input path,
+     * the same way [scribbleToEraseEnabled] is.
+     */
+    val eraserSwathWidth: Float
+        get() = NibWidth.fromKeyOrDefault(eraserWidth).sizeFor(ERASER_BASE_WIDTH)
+
     /**
      * The sheet new pages get. Falls back to the default rather than throwing if the stored key
      * came from a build with a preset this one does not have.

@@ -23,6 +23,7 @@ import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.state.SelectionState
 import com.ethran.notable.editor.state.Shape
+import com.ethran.notable.editor.ui.toolbar.model.NibWidth
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.Eraser
@@ -129,6 +130,9 @@ sealed class ToolbarAction {
     data class ChangePen(val presetId: String) : ToolbarAction()
     data class ChangePenSetting(val presetId: String, val setting: PenSetting) : ToolbarAction()
     data class ChangeEraser(val eraser: Eraser) : ToolbarAction()
+
+    /** How broad the eraser is — a [NibWidth] step, persisted like a pen's size is. */
+    data class ChangeEraserWidth(val width: NibWidth) : ToolbarAction()
 
     /** Picks the shape *and* selects the shape tool: choosing a shape means "draw that". */
     data class ChangeShape(val shape: Shape) : ToolbarAction()
@@ -328,6 +332,7 @@ class EditorViewModel @Inject constructor(
             is ToolbarAction.ChangePenSetting ->
                 handlePenSettingChange(action.presetId, action.setting)
             is ToolbarAction.ChangeEraser -> handleEraserChange(action.eraser)
+            is ToolbarAction.ChangeEraserWidth -> handleEraserWidthChange(action.width)
             is ToolbarAction.ChangeShape -> handleShapeChange(action.shape)
             is ToolbarAction.ToggleMenu -> {
                 _toolbarState.update { it.copy(isMenuOpen = !it.isMenuOpen) }
@@ -411,6 +416,20 @@ class EditorViewModel @Inject constructor(
      * The alternative — set the shape and leave the mode alone — means choosing "Rectangle" from a
      * menu while drawing does nothing visible, which reads as the menu being broken.
      */
+    /**
+     * Sets how broad the eraser is. Straight to settings, because that is where the erase path
+     * reads it from — see `eraserSwathWidth`. [GlobalAppSettings] is updated synchronously so
+     * the very next stroke erases at the new width; only the DB write is async.
+     */
+    private fun handleEraserWidthChange(width: NibWidth) {
+        val updated = GlobalAppSettings.current.copy(eraserWidth = width.key)
+        GlobalAppSettings.update(updated)
+        updateDrawingState()
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.kvProxy.setAppSettings(updated)
+        }
+    }
+
     private fun handleShapeChange(shape: Shape) {
         _toolbarState.update { it.copy(shape = shape, mode = Mode.Line) }
         updateDrawingState()

@@ -63,9 +63,21 @@ data class LibraryUiState(
     val trashedCount: Int = 0,
     /** What the user is looking for. Empty means "show me where I am" rather than "show nothing". */
     val query: String = "",
+    /**
+     * Every folder and notebook in the library, whatever folder the user is standing in — what
+     * the file bar draws its tree from. Untouched by a search: the tree is where you *are*, and
+     * filtering it to search hits would take the place away while you were looking for it.
+     */
+    val tree: LibraryTree = LibraryTree(),
 ) {
     val isSearching: Boolean get() = query.isNotBlank()
 }
+
+/** The whole library, flat. [LibraryFileBar] resolves it into a tree for drawing. */
+data class LibraryTree(
+    val folders: List<Folder> = emptyList(),
+    val books: List<Notebook> = emptyList(),
+)
 
 /** What a search turned up. Null rather than an instance of this means no search is running. */
 private data class SearchResults(
@@ -82,6 +94,14 @@ private data class LibraryScreenState(
     val query: String = "",
 )
 
+/** The flows that describe the library as a whole rather than the folder on screen. */
+private data class LibraryWholeLibrary(
+    val folderBookCounts: Map<String, Int>,
+    val trashedCount: Int,
+    val lastEdited: Map<String, Date>,
+    val tree: LibraryTree,
+)
+
 // Private data class for clean Flow combining
 private data class LibraryDatabaseState(
     val folders: List<Folder> = emptyList(),
@@ -91,6 +111,7 @@ private data class LibraryDatabaseState(
     val folderBookCounts: Map<String, Int> = emptyMap(),
     val trashedCount: Int = 0,
     val lastEdited: Map<String, Date> = emptyMap(),
+    val tree: LibraryTree = LibraryTree(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -140,13 +161,21 @@ class LibraryViewModel @Inject constructor(
      * knowing where the thing is, so a search that only looked here would answer a question nobody
      * asked. Empty while the query is blank, so the ordinary listing costs nothing.
      */
-    private val _searchResultsFlow = combine(
-        _query, folderRepository.getAllVisibleFlow(), bookRepository.getAllFlow()
-    ) { query, folders, books ->
+    /**
+     * The whole library, flat — every folder and every notebook that is not in the Trash.
+     *
+     * One subscription serving both the search and the file bar's tree. Search was already
+     * reading exactly these two tables, so the tree costs nothing beyond holding the result.
+     */
+    private val _treeFlow = combine(
+        folderRepository.getAllVisibleFlow(), bookRepository.getAllFlow()
+    ) { folders, books -> LibraryTree(folders, books) }
+
+    private val _searchResultsFlow = combine(_query, _treeFlow) { query, all ->
         if (query.isBlank()) null
         else SearchResults(
-            folders = folders.filter { LibrarySort.matches(it.title, query) },
-            books = books.filter { LibrarySort.matches(it.title, query) },
+            folders = all.folders.filter { LibrarySort.matches(it.title, query) },
+            books = all.books.filter { LibrarySort.matches(it.title, query) },
         )
     }
 
@@ -162,8 +191,10 @@ class LibraryViewModel @Inject constructor(
     // Grouped rather than combined as sixth/seventh flows: `combine` has typed overloads up to
     // five, and one more argument would drop the whole group into the untyped array form.
     private val _countsFlow = combine(
-        _folderBookCountsFlow, _trashedCountFlow, _lastEditedFlow
-    ) { folderCounts, trashed, lastEdited -> Triple(folderCounts, trashed, lastEdited) }
+        _folderBookCountsFlow, _trashedCountFlow, _lastEditedFlow, _treeFlow
+    ) { folderCounts, trashed, lastEdited, tree ->
+        LibraryWholeLibrary(folderCounts, trashed, lastEdited, tree)
+    }
 
     // Whether *anything* is syncing, as opposed to the per-notebook badges: the two backends report
     // through different channels, and the header's Sync now button is about the run as a whole.
@@ -198,9 +229,10 @@ class LibraryViewModel @Inject constructor(
 
     private val _dbDataFlow = combine(
         _listingFlow, _syncStatusFlow, _countsFlow
-    ) { (folders, books), (badges, syncing), (folderCounts, trashed, lastEdited) ->
+    ) { (folders, books), (badges, syncing), whole ->
         LibraryDatabaseState(
-            folders, books, badges, syncing, folderCounts, trashed, lastEdited
+            folders, books, badges, syncing,
+            whole.folderBookCounts, whole.trashedCount, whole.lastEdited, whole.tree
         )
     }
 
@@ -226,7 +258,8 @@ class LibraryViewModel @Inject constructor(
             folderBookCounts = dbData.folderBookCounts,
             trashedCount = dbData.trashedCount,
             lastEdited = dbData.lastEdited,
-            query = screen.query
+            query = screen.query,
+            tree = dbData.tree
         )
     }.stateIn(
         scope = viewModelScope,

@@ -1,9 +1,15 @@
 package com.ethran.notable.editor.ui.toolbar
 
+import com.ethran.notable.data.datastore.AppSettings
+import com.ethran.notable.editor.ui.toolbar.model.ERASER_BASE_WIDTH
+import com.ethran.notable.editor.ui.toolbar.model.NibWidth
 import com.ethran.notable.editor.ui.toolbar.model.PenElement
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElementId
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.editor.ui.toolbar.model.baseWidth
+import com.ethran.notable.editor.utils.ERASER_SWATH_WIDTH
 import com.ethran.notable.editor.utils.Pen
+import com.ethran.notable.ui.theme.Kaleido
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -92,45 +98,106 @@ class RailGroupsTest {
             RailGroups.of(pens).tools.map { it.id })
     }
 
-    // --- nib choices ---
+    // --- the nib ramp ---
 
     @Test
-    fun `nib dots are the pen's own sizes, in ascending order`() {
+    fun `every implement offers the same five steps, ascending`() {
+        assertEquals(5, NibWidth.entries.size)
+        for (pen in ToolbarPen.BASE_TYPES) {
+            val ramp = NibWidth.entries.map { it.sizeFor(pen.baseWidth) }
+            assertEquals("${pen.penName} ramp must ascend", ramp.sorted(), ramp)
+            assertEquals(
+                "${pen.penName} must not collapse two steps onto one width",
+                ramp.size, ramp.distinct().size
+            )
+        }
+        assertEquals(
+            "the dots have to read as one ramp too",
+            NibWidth.entries.map { it.dot }.sortedBy { it.value },
+            NibWidth.entries.map { it.dot },
+        )
+    }
+
+    @Test
+    fun `a step scales off the implement, so a highlighter's medium is still a highlighter`() {
+        val marker = NibWidth.MEDIUM.sizeFor(Pen.MARKER.baseWidth)
+        val ballpen = NibWidth.MEDIUM.sizeFor(Pen.BALLPEN.baseWidth)
+        assertTrue("a marker at medium must be broader than a pen at medium", marker > ballpen)
+        // The old rail read these from each preset's own list, so the same dot meant 5 under one
+        // pen and 40 under the next. What is fixed now is the step, not the number.
+        assertEquals(24f, marker, 0.001f)
+        assertEquals(5f, ballpen, 0.001f)
+    }
+
+    @Test
+    fun `a size that is not on the ramp still lights exactly one dot`() {
+        // 40 is what the marker preset shipped with, and it sits between the ramp's 24 and 48.
+        assertEquals(NibWidth.BROAD, NibWidth.nearest(Pen.MARKER.baseWidth, 40f))
+        // Anything at all, from a stroke menu or an older build.
+        for (size in listOf(0.5f, 1f, 7f, 13f, 500f)) {
+            assertTrue(NibWidth.nearest(Pen.BALLPEN.baseWidth, size) in NibWidth.entries)
+        }
+    }
+
+    @Test
+    fun `an untouched eraser still deletes the swath it always did`() {
+        // The default is MEDIUM, and MEDIUM of the eraser's base has to be the constant the
+        // erase path used when the eraser had no width at all — or every existing install would
+        // silently start erasing a different amount.
+        assertEquals(
+            ERASER_SWATH_WIDTH,
+            NibWidth.fromKeyOrDefault(AppSettings(version = 1).eraserWidth)
+                .sizeFor(ERASER_BASE_WIDTH),
+            0.001f
+        )
+        assertEquals(ERASER_SWATH_WIDTH, AppSettings(version = 1).eraserSwathWidth, 0.001f)
+    }
+
+    @Test
+    fun `an unknown persisted step falls back rather than throwing`() {
+        assertEquals(NibWidth.MEDIUM, NibWidth.fromKeyOrDefault("from-a-newer-build"))
+        assertEquals(NibWidth.MEDIUM, NibWidth.fromKeyOrDefault(null))
+    }
+
+    // --- the palette ---
+
+    @Test
+    fun `the rail offers the twelve inks the iPad does, in the same order`() {
+        // Positions are what the two apps agree on; changing one renames an ink on the other
+        // device. Append-only.
+        assertEquals(12, Kaleido.Inks.size)
+        assertEquals(0xFF201E1D.toInt(), Kaleido.Inks[0])
+        assertEquals(0xFFAE1800.toInt(), Kaleido.Inks[1])
+        assertEquals(0xFF1B4FA0.toInt(), Kaleido.Inks[8])
+        assertEquals(0xFF6B4423.toInt(), Kaleido.Inks[11])
+        assertEquals(Kaleido.Inks.size, Kaleido.Inks.distinct().size)
+    }
+
+    @Test
+    fun `a pen with no configured colours offers the whole palette`() {
         val ballpen = pens.first { it.id == "ball" }
-        assertEquals(ToolbarPen.DEFAULT_STROKE_SIZES.sorted(), ballpen.nibChoices(5f))
-
-        val marker = pens.first { it.id == "marker" }
-        assertEquals(ToolbarPen.DEFAULT_MARKER_SIZES.sorted(), marker.nibChoices(40f))
+        assertEquals(Kaleido.Inks, ballpen.effectiveColorOptions())
     }
 
     @Test
-    fun `the size in hand survives the cut to four`() {
-        val many = ToolbarPen(
-            "many", Pen.BALLPEN, android.graphics.Color.BLACK, size = 30f,
-            sizeOptions = listOf(1f, 2f, 3f, 5f, 8f, 30f),
-        )
-        val choices = many.nibChoices(30f)
-        assertEquals(4, choices.size)
-        assertTrue("The nib being written with must be one of the dots", 30f in choices)
-        assertEquals(choices.sorted(), choices)
+    fun `every seed preset writes with an ink that is in the palette`() {
+        // Otherwise the strip would show twelve swatches and prepend a thirteenth to mark the
+        // selection, which is a hole in the grid on a fresh install.
+        for (preset in ToolbarPen.DEFAULT_PENS) {
+            assertTrue(
+                "${preset.id} writes ${Integer.toHexString(preset.color)}, not a palette ink",
+                preset.color in Kaleido.Inks
+            )
+        }
     }
 
     @Test
-    fun `a size not among the options still shows as the selected dot`() {
-        val pen = ToolbarPen(
-            "odd", Pen.BALLPEN, android.graphics.Color.BLACK, size = 7f,
-            sizeOptions = listOf(3f, 5f, 10f),
+    fun `a narrowed pen keeps only what the user picked`() {
+        val narrowed = ToolbarPen(
+            "narrow", Pen.BALLPEN, Kaleido.Inks[0], 5f,
+            colorOptions = listOf(Kaleido.Inks[0], Kaleido.Inks[1]),
         )
-        assertEquals(listOf(3f, 5f, 7f, 10f), pen.nibChoices(7f))
-    }
-
-    @Test
-    fun `a single-size pen draws no dots, because there is nothing to choose`() {
-        val fixed = ToolbarPen(
-            "fixed", Pen.BALLPEN, android.graphics.Color.BLACK, size = 5f,
-            sizeOptions = listOf(5f),
-        )
-        assertTrue(fixed.nibChoices(5f).isEmpty())
+        assertEquals(listOf(Kaleido.Inks[0], Kaleido.Inks[1]), narrowed.effectiveColorOptions())
     }
 
     private fun idOf(element: com.ethran.notable.editor.ui.toolbar.model.ToolbarElement) = element.id

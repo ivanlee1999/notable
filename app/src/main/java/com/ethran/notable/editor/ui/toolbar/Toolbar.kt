@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,10 +45,12 @@ import com.ethran.notable.editor.ToolbarAction
 import com.ethran.notable.editor.ToolbarUiState
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.ui.toolbar.model.IconRef
+import com.ethran.notable.editor.ui.toolbar.model.NibWidth
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElement
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElementId
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElements
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.editor.ui.toolbar.model.baseWidth
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.editor.utils.PenSetting
@@ -60,14 +63,18 @@ import com.ethran.notable.ui.theme.Kaleido
  *
  * The rail is docked to one of the four edges — never floating, never draggable, because a
  * moving overlay costs a full-screen e-ink refresh. Docked left or right it becomes the
- * tablet arrangement: a vertical rail within thumb reach of the bezel, ending in the ink
- * strip for the pen currently in hand. Docked top or bottom — where a one-handed device
- * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the strip has no
+ * tablet arrangement: a vertical rail within thumb reach of the bezel, carrying the whole ink
+ * palette for the pen currently in hand. Docked top or bottom — where a one-handed device
+ * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the palette has no
  * room to lie down, so the same choice becomes a single [InkSwatch] and a popover.
+ *
+ * Everything but the last group scrolls. Whatever does not fit has to be reachable by
+ * scrolling rather than clipped off the end, and the group that must never be scrolled away
+ * from is the one holding the way out.
  *
  * The order of the groups is the rail's whole argument, and it does not vary:
  *
- *     tools │ nibs │ history │ overflow… │ pinned │ inks
+ *     tools │ nibs │ history │ overflow… │ inks │ pinned
  *
  * The four implements, then how broad the nib is, then undo — the sequence of a single
  * stroke, left where the hand already is. A user-ordered rail could express that too, but it
@@ -249,16 +256,22 @@ private fun HorizontalRail(
 /**
  * The inks the pen in hand can take, and which one it is holding.
  *
- * The ink in hand always leads, so the strip shows a selection and the pen's real colour is
- * never the one that got cut. Four fits the rail without scrolling; a pen offering more keeps
- * the rest in its stroke menu. Empty when there is nothing to choose between.
+ * The whole palette, in its own order — twelve by default ([ToolbarPen.DEFAULT_COLOR_OPTIONS]),
+ * fewer if the user has narrowed this pen in settings. It used to be cut to four, which meant
+ * eight of the twelve were reachable only through the stroke menu and the row's order shuffled
+ * every time the pen changed colour; a fixed palette is one you learn the shape of.
+ *
+ * The ink in hand only leads when it is not in the palette at all — a colour left over from a
+ * narrowed pen or an older build — so that the strip never shows twelve swatches and no
+ * selection. Null when there is nothing to choose between.
  */
 @Composable
 private fun inkOptions(uiState: ToolbarUiState): Pair<PenSetting, List<Int>>? {
     val presetId = uiState.penPresetId
     val preset = GlobalAppSettings.current.toolbarPens.find { it.id == presetId } ?: return null
     val current = uiState.penSettings[presetId] ?: preset.setting()
-    val inks = (listOf(current.color) + preset.effectiveColorOptions()).distinct().take(4)
+    val palette = preset.effectiveColorOptions()
+    val inks = if (current.color in palette) palette else listOf(current.color) + palette
     return if (inks.size < 2) null else current to inks
 }
 
@@ -302,33 +315,43 @@ private fun InkSwatch(
         properties = PopupProperties(focusable = true),
         alignment = placement.alignment,
     ) {
-        Row(
+        // Two columns, like the vertical rail's strip — a single row of twelve would be wider
+        // than the panel this arrangement exists for. Off the rail there is room for a proper
+        // 36dp target, so the popover's swatches are the ones a finger wants.
+        Column(
             Modifier
                 .padding(placement.padding)
                 .background(Kaleido.Rail)
                 .border(Kaleido.SectionRule, Kaleido.Ink)
                 .padding(5.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            inks.forEach { ink ->
-                val selected = ink == current.color
-                Box(
-                    Modifier
-                        .size(36.dp)
-                        .background(Color(ink))
-                        .border(
-                            width = if (selected) 2.dp else 1.dp,
-                            color = if (selected) Kaleido.Ink else Kaleido.Edge
-                        )
-                        .noRippleClickable {
-                            onAction(
-                                ToolbarAction.ChangePenSetting(
-                                    uiState.penPresetId, PenSetting(current.strokeSize, ink)
+            inks.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    row.forEach { ink ->
+                        val selected = ink == current.color
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .background(Color(ink))
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) Kaleido.Ink else Kaleido.Edge
                                 )
-                            )
-                            isOpen = false
-                        }
-                )
+                                .noRippleClickable {
+                                    onAction(
+                                        ToolbarAction.ChangePenSetting(
+                                            uiState.penPresetId,
+                                            PenSetting(current.strokeSize, ink)
+                                        )
+                                    )
+                                    isOpen = false
+                                }
+                                .semantics { contentDescription = inkDescription(ink) }
+                        )
+                    }
+                    if (row.size == 1) Spacer(Modifier.size(36.dp))
+                }
             }
         }
     }
@@ -367,6 +390,12 @@ private fun VerticalRail(
 
             // As on the horizontal rail: one scroller holding the groups in rail order, so a
             // short screen scrolls rather than clipping whatever falls past its bottom edge.
+            //
+            // The inks are inside it. They used to sit below the pinned group as a fixed foot,
+            // which worked while there were four of them; twelve is 119dp of rail, and a column
+            // that tall cannot be fixed — a portrait 10" panel laid the last four swatches out
+            // past the bottom edge and took the menu button with them. Everything that can be
+            // scrolled to is scrolled to, and only the way out is nailed down.
             Column(
                 Modifier
                     .weight(1f)
@@ -378,49 +407,39 @@ private fun VerticalRail(
                 renderGroup(groups.history)
                 ToolbarDivider()
                 renderGroup(groups.overflow)
+                InkStrip(uiState = uiState, onAction = onAction)
             }
 
-            // Outside the scroller: the way out, and the inks at the foot.
+            // Outside the scroller, so the way out of the editor is always at the foot of the
+            // rail however long the rest of it gets.
             ToolbarDivider()
             Column { renderGroup(groups.pinned) }
-
-            InkStrip(uiState = uiState, onAction = onAction)
         }
         if (position == AppSettings.Position.Left) ToolbarEdgeRule(vertical = true)
     }
 }
 
 /**
- * The nibs the pen in hand can take, and the one it is writing with.
- *
- * Read from the pen's own configured sizes, so a highlighter's dots mean 25/40/60 and a
- * ballpen's mean 3/5/10 — what is being chosen is a size, not a name, and each implement
- * keeps its character. The size in hand leads the list for the same reason the ink does: it
- * has to survive the cut to four, or the rail would show no selection at all. Null when
- * there is nothing to choose between.
- */
-@Composable
-private fun nibOptions(uiState: ToolbarUiState): Pair<PenSetting, List<Float>>? {
-    val presetId = uiState.penPresetId
-    val preset = GlobalAppSettings.current.toolbarPens.find { it.id == presetId } ?: return null
-    val current = uiState.penSettings[presetId] ?: preset.setting()
-    val sizes = preset.nibChoices(current.strokeSize)
-    return if (sizes.isEmpty()) null else current to sizes
-}
-
-/**
  * How broad the nib is, as the dot it draws — one tap, in the rail, next to the tool it
  * applies to.
  *
- * Sizes were reachable only through the pen's stroke menu, which is two taps and a popup over
- * the canvas for the single most-changed property a pen has. While the eraser is in hand the
- * same cells become its two kinds instead, because that is the choice that actually applies
- * then: a nib width means nothing to an eraser, and rubbing part of a stroke out and taking
- * the whole stroke away are different intentions that were themselves buried in a popup.
+ * Five fixed steps ([NibWidth]) scaled off whatever implement is in hand, so a step means the
+ * same thing whichever tool it is under and every pen has the same five. The dots used to come
+ * from each preset's own configured `sizeOptions`, which made the same dot a hairline on one
+ * pen and a slab on the next, and drew no dots at all for a pen configured with a single size.
+ *
+ * While the eraser is in hand the row applies to *it* — the eraser is an implement with a
+ * width like any other, and a rubber the size of a nib takes all day to clear a paragraph. Its
+ * two kinds join the row below a rule rather than replacing it, which is how the eraser ended
+ * up the one implement with a single fixed size.
  */
 @Composable
 private fun NibGroup(uiState: ToolbarUiState, onAction: (ToolbarAction) -> Unit) {
     if (uiState.mode == Mode.Erase) {
+        ToolbarDivider()
+        NibRamp(NibWidth.fromKeyOrDefault(GlobalAppSettings.current.eraserWidth)) { width ->
+            onAction(ToolbarAction.ChangeEraserWidth(width))
+        }
         ToolbarDivider()
         for (eraser in listOf(Eraser.PEN, Eraser.SELECT)) {
             ToolbarButton(
@@ -433,30 +452,32 @@ private fun NibGroup(uiState: ToolbarUiState, onAction: (ToolbarAction) -> Unit)
         return
     }
 
-    val (current, sizes) = nibOptions(uiState) ?: return
+    val presetId = uiState.penPresetId
+    val preset = GlobalAppSettings.current.toolbarPens.find { it.id == presetId } ?: return
+    val current = uiState.penSettings[presetId] ?: preset.setting()
+    val base = preset.pen.baseWidth
+
     ToolbarDivider()
-    sizes.forEachIndexed { index, size ->
-        NibCell(
-            diameter = nibDot(index, sizes.size),
-            selected = size == current.strokeSize,
-            label = "nib ${ToolbarElements.sizeLabel(size)}",
-        ) {
-            onAction(
-                ToolbarAction.ChangePenSetting(
-                    uiState.penPresetId, PenSetting(size, current.color)
-                )
+    NibRamp(NibWidth.nearest(base, current.strokeSize)) { width ->
+        onAction(
+            ToolbarAction.ChangePenSetting(
+                presetId, PenSetting(width.sizeFor(base), current.color)
             )
-        }
+        )
     }
 }
 
-/**
- * How big the dot for [index] of [count] is drawn — by rank, not by the stroke width itself.
- * A highlighter's 80 would otherwise want a dot wider than the rail, and the group has to read
- * as ascending nibs whatever numbers the pen behind it happens to carry.
- */
-private fun nibDot(index: Int, count: Int): Dp =
-    if (count < 2) 11.dp else (6f + 14f * index / (count - 1)).dp
+/** The five steps as cells, ascending. */
+@Composable
+private fun NibRamp(selected: NibWidth, onSelect: (NibWidth) -> Unit) {
+    for (width in NibWidth.entries) {
+        NibCell(
+            diameter = width.dot,
+            selected = width == selected,
+            label = "nib ${width.label}",
+        ) { onSelect(width) }
+    }
+}
 
 /** A rail cell holding one dot: filled ink when it is the nib in hand, as a tool button is. */
 @Composable
@@ -487,8 +508,17 @@ private fun NibCell(
  *
  * Saturated squares are the one thing a Kaleido panel prints cleanly, and this is the only
  * place in the editor colour is spent. Tapping one writes to the active preset — the same
- * edit the pen's stroke menu makes, one tap deep instead of two. The vertical rail has the
- * room to show them all at once; a horizontal one spends the same choice on [InkSwatch].
+ * edit the pen's stroke menu makes, one tap deep instead of two.
+ *
+ * Two columns, not one. A single file of twelve swatches would be longer than the rest of the
+ * rail put together, and the point of showing the palette at all is that a colour is one tap
+ * away rather than one tap and a menu. Two columns is also what fits: the rail is
+ * [BUTTON_SIZE] across, so the swatches are [SWATCH] rather than the 25dp a single file could
+ * afford — narrower than the iPad's, which has 60pt of rail to spend.
+ *
+ * A ring rather than a fill marks the current one: the swatch itself has to stay pure colour,
+ * or the ink you chose is the one you cannot see. A horizontal rail has no room for a grid and
+ * spends the same choice on [InkSwatch].
  */
 @Composable
 private fun InkStrip(
@@ -499,34 +529,82 @@ private fun InkStrip(
     val presetId = uiState.penPresetId
 
     ToolbarDivider()
+    // A plain Column of Rows rather than a LazyVerticalGrid: the rail is already inside a
+    // scrolling parent on the horizontal arrangement, and a lazy grid nested in a scroller
+    // measures at infinite height.
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp),
+            .padding(vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        verticalArrangement = Arrangement.spacedBy(SWATCH_GAP)
     ) {
-        inks.forEach { ink ->
-            val selected = ink == current.color
-            Box(
-                Modifier
-                    .size(25.dp)
-                    .background(Color(ink))
-                    .border(
-                        width = if (selected) 2.dp else 1.dp,
-                        color = if (selected) Kaleido.Ink else Kaleido.Edge
-                    )
-                    .noRippleClickable {
+        inks.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(SWATCH_GAP)) {
+                row.forEach { ink ->
+                    InkSquare(ink = ink, selected = ink == current.color) {
                         onAction(
                             ToolbarAction.ChangePenSetting(
                                 presetId, PenSetting(current.strokeSize, ink)
                             )
                         )
                     }
-            )
+                }
+                // An odd palette leaves a hole rather than centring its last swatch: the
+                // columns have to stay columns.
+                if (row.size == 1) Spacer(Modifier.size(SWATCH_CELL))
+            }
         }
     }
 }
+
+/**
+ * The swatch cell in the vertical rail: two of them and the gap between are exactly
+ * [BUTTON_SIZE] across (18 + 1 + 18 = 37), which is what fixes the grid at two columns.
+ * [SWATCH] is the colour inside it; the 2dp left over is where a selection ring goes.
+ */
+private val SWATCH_CELL = 18.dp
+private val SWATCH = 14.dp
+private val SWATCH_GAP = 1.dp
+
+/**
+ * One ink, as a cell holding a square of colour.
+ *
+ * The selection ring is drawn on the *cell*, around the colour, rather than as a border on the
+ * swatch itself: at this size a 2dp border would eat a quarter of the square, so the ink you
+ * chose would be the one you could see least. The swatch keeps its own hairline edge in both
+ * states, because a pale ink against the rail needs one to read as a square at all.
+ */
+@Composable
+private fun InkSquare(
+    ink: Int,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(SWATCH_CELL)
+            .then(if (selected) Modifier.border(2.dp, Kaleido.Ink) else Modifier)
+            .noRippleClickable(onSelect)
+            .semantics { contentDescription = inkDescription(ink) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(SWATCH)
+                .background(Color(ink))
+                .border(1.dp, Kaleido.Edge)
+        )
+    }
+}
+
+/**
+ * What an ink swatch is called to a screen reader and to a test — the colour as #RRGGBB.
+ *
+ * By value rather than by a name, because a pen narrowed in settings may carry an ink that is
+ * no longer in the palette, and every swatch still has to be addressable.
+ */
+internal fun inkDescription(ink: Int): String = "ink #%06X".format(ink and 0xFFFFFF)
 
 @Composable
 private fun CollapsedToolbarButton(
