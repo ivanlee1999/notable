@@ -106,28 +106,19 @@ class EditorControlTower(
             }
             return
         }
-        // Scrolling past the end of the last page: the next page is created in place, with no
-        // whole-screen turn — the seam then slides in under the same drag, and the commit below
-        // takes over once it leaves the screen. This is the continuous counterpart of the jump
-        // branch underneath, which used to serve the last page even in Scrolling mode: creating
-        // a page is right, arriving on it by a full-screen flip mid-drag is not.
-        //
-        // In Pagination mode there is no seam to slide in, so the created page is *entered*
-        // instead (the branch below turns onto it) — but it is still created here, because
-        // running out of paper has one answer in every mode: more paper.
+        // Scrolling past the end of the last page creates *and enters* the next page in one
+        // gesture. This used to create the row asynchronously but leave the view on the old
+        // page, hoping another sample from the same drag would arrive after the database write
+        // and start crossing the new seam. A discrete drag has no later sample, and a quick
+        // smooth drag often ends first, so "Scrolling" appeared to do nothing while
+        // "Pagination" worked. There is no existing next-page content to preserve continuously
+        // here; opening the new blank sheet is the only visible completion of the request.
         if (page.continuousScrollEnabled && delta.x == 0f && delta.y < 0 &&
             page.nextPageId == null && page.isAtVerticalEdge(-delta.y)
         ) {
             if (!edgeTurnTaken) {
                 edgeTurnTaken = true
-                scope.launch(Dispatchers.IO) {
-                    // Null only if the loaded page has moved on under us, in which case this
-                    // drag is about a page that is no longer open and has nothing to extend.
-                    if (page.pageDataManager.ensureNextPage(page.currentPageId) != null) {
-                        // Redraw so the seam appears under the still-moving finger.
-                        CanvasEventBus.forceUpdate.emit(null)
-                    }
-                }
+                goToNextPage()
             }
             return
         }
