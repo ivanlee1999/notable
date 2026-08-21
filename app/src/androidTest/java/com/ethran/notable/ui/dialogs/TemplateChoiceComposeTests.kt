@@ -59,9 +59,14 @@ class TemplateChoiceComposeTests {
             )
         }
 
-        composeRule.onNodeWithText("Lecture 3").assertIsDisplayed()
+        // Scrolled to, then asserted: the options scroll, and on a phone-width screen with the
+        // keyboard up the library section starts below the fold. That it can be reached is the
+        // claim worth making — `assertIsDisplayed` on its own only says the tablet is big enough.
+        // "Create" is deliberately not scrolled to: it sits outside the scrolling body, so asking
+        // for a scroll parent it does not have would fail.
+        composeRule.onNodeWithText("Lecture 3").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Lecture 3").performClick()
-        composeRule.onNodeWithText("Create").performClick()
+        composeRule.onNodeWithText("Create").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
 
         assertEquals(
@@ -87,8 +92,8 @@ class TemplateChoiceComposeTests {
             )
         }
 
-        composeRule.onNodeWithText("Lines").performClick()
-        composeRule.onNodeWithText("Create").performClick()
+        composeRule.onNodeWithText("Lines").performScrollTo().performClick()
+        composeRule.onNodeWithText("Create").assertIsDisplayed().performClick()
         composeRule.waitForIdle()
 
         assertEquals(Triple("Daily", "lined", BackgroundType.Native.key), confirmed)

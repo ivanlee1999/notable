@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicTextField
@@ -103,6 +102,13 @@ fun NewNotebookDialog(
     // replacing the suggested name stays one keystroke. That brings up the keyboard, which on a
     // short screen covers part of a dialog that is now taller than one line, hence the scroll:
     // every option stays reachable while the keyboard is up.
+    //
+    // Only the options scroll. The name and the buttons are the two things that must be on screen
+    // whatever the window is — the field because it is what has focus, the buttons because a
+    // dialog whose "Create" has to be found by scrolling is a dialog with no way out. On a
+    // Palma-class screen with the keyboard up there is about 500dp left for a body that wants
+    // more, so something has to give; what gives is the middle, which is the part a scrollbar
+    // makes sense of.
     val scrollState = rememberScrollState()
 
     fun commit() {
@@ -115,7 +121,6 @@ fun NewNotebookDialog(
             modifier = Modifier
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
-                .verticalScroll(scrollState)
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -154,51 +159,65 @@ fun NewNotebookDialog(
                 )
             }
 
-            OptionSection(label = stringResource(R.string.new_notebook_page_size)) {
-                PageSizePreset.entries.forEach { preset ->
-                    OptionChip(
-                        label = preset.displayName,
-                        detail = preset.millimetreLabel,
-                        selected = preset == pageSize,
-                        onClick = { pageSize = preset }
-                    )
-                }
-            }
-
-            OptionSection(label = stringResource(R.string.new_notebook_template)) {
-                nativeTemplateOptions().forEach { (key, label) ->
-                    OptionChip(
-                        label = label,
-                        selected = key == template && templateType == BackgroundType.Native.key,
-                        onClick = {
-                            template = key
-                            templateType = BackgroundType.Native.key
-                        }
-                    )
-                }
-            }
-
-            // Only when there are any: an empty section would be a heading over nothing, and a
-            // library with no imported documents is the common case on a fresh install.
-            if (libraryTemplates.isNotEmpty()) {
-                OptionSection(label = stringResource(R.string.new_notebook_template_library)) {
-                    libraryTemplates.forEach { known ->
-                        val path = known.file.absolutePath
+            // `fill = false` so a short body — a fresh library offers no documents at all — leaves
+            // the dialog the height of its content rather than stretching it to the whole window.
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                OptionSection(label = stringResource(R.string.new_notebook_page_size)) {
+                    PageSizePreset.entries.forEach { preset ->
                         OptionChip(
-                            label = known.label,
-                            detail = known.asNotebookDefault.folderName,
-                            selected = path == template,
+                            label = preset.displayName,
+                            detail = preset.millimetreLabel,
+                            selected = preset == pageSize,
+                            onClick = { pageSize = preset }
+                        )
+                    }
+                }
+
+                OptionSection(label = stringResource(R.string.new_notebook_template)) {
+                    nativeTemplateOptions().forEach { (key, label) ->
+                        OptionChip(
+                            label = label,
+                            selected = key == template && templateType == BackgroundType.Native.key,
                             onClick = {
-                                template = path
-                                templateType = known.asNotebookDefault.key
+                                template = key
+                                templateType = BackgroundType.Native.key
                             }
                         )
                     }
                 }
+
+                // Only when there are any: an empty section would be a heading over nothing, and a
+                // library with no imported documents is the common case on a fresh install.
+                if (libraryTemplates.isNotEmpty()) {
+                    OptionSection(label = stringResource(R.string.new_notebook_template_library)) {
+                        libraryTemplates.forEach { known ->
+                            val path = known.file.absolutePath
+                            OptionChip(
+                                label = known.label,
+                                detail = known.asNotebookDefault.folderName,
+                                selected = path == template,
+                                onClick = {
+                                    template = path
+                                    templateType = known.asNotebookDefault.key
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
-            Row(
+            // FlowRow rather than Row, for the reason the option sections are one: [ActionButton]
+            // is a fixed 100dp, two of them plus this dialog's padding want more width than the
+            // narrowest window gives, and a Row answers that by squeezing both labels rather than
+            // putting the second on its own line.
+            FlowRow(
                 horizontalArrangement = Arrangement.SpaceAround,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
