@@ -44,10 +44,11 @@ object PageSplit {
      * The sheet a page is divided by: what it declares, else the notebook's default, else the
      * geometry a page written before sheets existed is read with.
      *
-     * The fallback has to be this constant and not "the screen", which is what this app lays an
-     * undeclared page out at: a sheet the two apps disagree about would divide the page into a
-     * different number of pages on each of them, which is exactly the split the derived ids exist
-     * to prevent. Every page this produces declares its size, so the ambiguity is spent once.
+     * The fallback has to be this constant and not "the screen": a sheet the two apps disagree
+     * about would divide the page into a different number of pages on each of them, which is
+     * exactly the split the derived ids exist to prevent. Layout resolves an undeclared page to
+     * the same constant (`Page.sheet()`), so the page divides exactly where it visibly ends.
+     * Every page this produces declares its size, so the ambiguity is spent once.
      */
     fun sheetFor(pageWidth: Int?, pageHeight: Int?, notebookDefault: PageSize?): PageSize {
         if (pageWidth != null && pageHeight != null && pageWidth > 0 && pageHeight > 0) {
@@ -56,7 +57,7 @@ object PageSplit {
         if (notebookDefault != null && notebookDefault.width > 0 && notebookDefault.height > 0) {
             return notebookDefault
         }
-        return PageSize.LEGACY_UNDECLARED_ON_IPAD
+        return PageSize.LEGACY_UNDECLARED
     }
 
     /**

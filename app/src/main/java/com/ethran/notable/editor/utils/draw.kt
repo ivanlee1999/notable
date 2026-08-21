@@ -43,30 +43,28 @@ fun handleDraw(
             // writing is the next page — so it is created here, exactly the way turning past
             // the end creates it, and the ink files onto it. Asynchronous because the creation
             // is a database transaction; the stroke appears with the redraw that follows.
-            if (page.hasHardBounds) {
-                page.coroutineScope.launch(Dispatchers.IO) {
-                    val created = page.pageDataManager.ensureNextPage(page.currentPageId)
-                    withContext(Dispatchers.Main.immediate) {
-                        if (created != null) {
-                            handleDrawOntoNextPage(
-                                page, created, strokeSize, color, pen, touchPoints
-                            )
-                        } else {
-                            // The open page moved on under us, so there is nothing to extend.
-                            page.snackManager.showOrUpdateSnack(
-                                SnackConf(text = "The page ends here", duration = 2000)
-                            )
-                        }
+            page.coroutineScope.launch(Dispatchers.IO) {
+                val created = page.pageDataManager.ensureNextPage(page.currentPageId)
+                withContext(Dispatchers.Main.immediate) {
+                    if (created != null) {
+                        handleDrawOntoNextPage(
+                            page, created, strokeSize, color, pen, touchPoints
+                        )
+                    } else {
+                        // The open page moved on under us, so there is nothing to extend.
+                        page.snackManager.showOrUpdateSnack(
+                            SnackConf(text = "The page ends here", duration = 2000)
+                        )
                     }
                 }
-                return
             }
+            return
         }
 
         // Past the end with Pagination selected: the gray dead space of a bounded page. Nothing
         // there can be scrolled back to (the page never grows past its sheet), so ink accepted
         // there would be stored and unreachable. Refusing loudly beats losing it.
-        if (startY >= page.height && page.hasHardBounds) {
+        if (startY >= page.height) {
             page.snackManager.showOrUpdateSnack(
                 SnackConf(text = "The page ends here", duration = 2000)
             )
@@ -78,7 +76,7 @@ fun handleDraw(
         // be stored at an x no scroll can reach — the very complaint ("the margin is uneditable")
         // that the gray exists to answer, which is answered by refusing rather than by pretending.
         val startX = touchPoints.first().x
-        if (page.hasHardBounds && (startX < 0f || startX >= page.sheet.width)) {
+        if (startX < 0f || startX >= page.sheet.width) {
             page.snackManager.showOrUpdateSnack(
                 SnackConf(text = "The page ends here", duration = 2000)
             )

@@ -283,8 +283,9 @@ trailing slash and appends the path, percent-encoding each path segment.
 **page units** — the space stroke and image geometry is already expressed in, one unit being exactly
 0.15 mm (so A4 is 1400 x 1980 and converts to the standard 595 x 842 pt PDF box). Sizes are stored
 portrait; orientation is a fit, not a size. Absent, null or non-positive means the notebook was
-created before page sizes existed, and its pages fall back to the device's own screen width the way
-everything used to. See `PageSizes.kt`, and the normative table in bopa's
+created before page sizes existed; its undeclared pages resolve to the canonical legacy sheet
+(1404 x 1872, `PageSize.LEGACY_UNDECLARED`) on every device, and new pages created in it declare
+that same sheet. See `PageSizes.kt`, and the normative table in bopa's
 `docs/notable-sync-protocol.md` §3.1 — both apps have to agree on it exactly.
 
 ### 4.3 Page JSON (`pages/{uuid}.json`)

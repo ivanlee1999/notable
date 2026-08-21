@@ -1,10 +1,6 @@
 package com.ethran.notable.data.model
 
-import com.ethran.notable.SCREEN_HEIGHT
-import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.db.Page
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * The coordinate space a page's strokes, images and background all live in.
@@ -52,8 +48,9 @@ object PageUnits {
  * changes how much of the sheet is on screen, not how big the sheet is. "Landscape" is a fit, not
  * a size, which is why there is no orientation field.
  *
- * [height] is the *sheet* height, not a limit on writing — the canvas still scrolls past the
- * bottom of the sheet as it always has. It is what pagination and export divide by.
+ * [height] is where the page ends: export divides by it, and writing past it belongs to the next
+ * page. The only ink below a sheet is legacy overflow `PageSplit` has not yet divided, and the
+ * scroll extent stretches just far enough to keep that reachable until it does.
  */
 data class PageSize(val width: Int, val height: Int) {
     val widthInPoints: Float get() = PageUnits.pointsFromUnits(width.toFloat())
@@ -61,13 +58,17 @@ data class PageSize(val width: Int, val height: Int) {
 
     companion object {
         /**
-         * What the iPad app lays out for a page that declares no size. Named here only so the two
-         * fallbacks are documented in one place: *this* app's fallback for an undeclared page is
-         * still its own screen width, which is exactly why the two disagree about notebooks
-         * predating this field and agree about everything created after it. Nothing retrofits a
-         * size onto an old notebook.
+         * The sheet a page that declares no size is read with — on this app and on the iPad
+         * alike, the same constant `PageSplit` has always divided undeclared pages by.
+         *
+         * It used to be the iPad's fallback only, while this app laid an undeclared page out at
+         * *its own screen* — which made the same page a different size on every device, and made
+         * this app alone keep an endless canvas (with "Subpage" markers) below it. Both apps now
+         * resolve an undeclared page to this one sheet, so a legacy page is one ordinary bounded
+         * page everywhere. 1404x1872 is the screen the pre-page-size ink was actually written
+         * against on the BOOX, so nothing moves on the device that wrote it.
          */
-        val LEGACY_UNDECLARED_ON_IPAD = PageSize(1404, 1872)
+        val LEGACY_UNDECLARED = PageSize(1404, 1872)
 
         /** Pairs two nullable dimensions back into a size, or null if either is missing. */
         fun of(width: Int?, height: Int?): PageSize? =
@@ -135,21 +136,15 @@ enum class PageSizePreset(
 }
 
 /**
- * The sheet a page is laid out on: its own declaration, or this device's screen for a page created
- * before page sizes existed.
+ * The sheet a page is laid out on: its own declaration, or [PageSize.LEGACY_UNDECLARED] for a
+ * page created before page sizes existed.
  *
- * The screen fallback lives here, in one place, because it is the *only* place the screen is
- * allowed to decide how big a page is. The ink on those pages was written against the screen, so
- * moving the sheet under it would move every stroke relative to the paper — which is why nothing
- * retrofits a real paper size onto them.
+ * Every page resolves to a real sheet — there is no unbounded page. The fallback is a constant,
+ * never the screen: a screen-sized sheet is a different sheet on every device, which is the bug
+ * page sizes exist to remove, and it is also the sheet `PageSplit` already divides undeclared
+ * pages by — layout and division have to agree about where the page ends.
  */
-fun Page.sheet(): PageSize = declaredPageSize() ?: legacyScreenSheet()
+fun Page.sheet(): PageSize = declaredPageSize() ?: PageSize.LEGACY_UNDECLARED
 
 /** The sheet this page declares, or null for one written before page sizes existed. */
 fun Page.declaredPageSize(): PageSize? = PageSize.of(pageWidth, pageHeight)
-
-/** Portrait dimensions of this device's screen — the pre-page-size notion of "a page". */
-fun legacyScreenSheet(): PageSize = PageSize(
-    width = min(SCREEN_WIDTH, SCREEN_HEIGHT),
-    height = max(SCREEN_WIDTH, SCREEN_HEIGHT)
-)

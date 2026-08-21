@@ -233,11 +233,11 @@ private val pageSeamPaint = Paint().apply {
  *   one long surface rather than a jump. Only its resident cache is consulted; a neighbor whose
  *   prefetch has not landed yet draws as blank paper and fills in on the next redraw.
  *
- * - **Dead space**, on a page with a declared sheet: gray, not white. A declared page ends at its
- *   paper, and the old white fill made that region look like more page — ink aimed at it went
- *   nowhere, which read as "the margin is broken" rather than "the page is over". Gray is the
- *   difference between the two. An undeclared (legacy) page has no edge to mark, so it keeps its
- *   endless white canvas.
+ * - **Dead space**: gray, not white. A page ends at its paper, and the old white fill made that
+ *   region look like more page — ink aimed at it went nowhere, which read as "the margin is
+ *   broken" rather than "the page is over". Gray is the difference between the two. This holds
+ *   for every page now that an undeclared one resolves to the canonical legacy sheet: the last
+ *   trace of the endless white canvas is gone.
  *
  * Never on the export path: exports render through PageContentRenderer, which does not come here.
  */
@@ -254,14 +254,12 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
     // which centres a sheet narrower than the view and leaves a margin on either side of it —
     // and on any render wider than the page. Both sides, because the sheet is centred: the left
     // margin is the negative scroll the centring parks the view at.
-    if (page.hasHardBounds) {
-        if (pageEndX < viewWidthUnits) {
-            canvas.drawRect(pageEndX, 0f, viewWidthUnits, viewHeightUnits, offPagePaint)
-        }
-        val pageStartX = -scroll.x
-        if (pageStartX > 0f) {
-            canvas.drawRect(0f, 0f, pageStartX, viewHeightUnits, offPagePaint)
-        }
+    if (pageEndX < viewWidthUnits) {
+        canvas.drawRect(pageEndX, 0f, viewWidthUnits, viewHeightUnits, offPagePaint)
+    }
+    val pageStartX = -scroll.x
+    if (pageStartX > 0f) {
+        canvas.drawRect(0f, 0f, pageStartX, viewHeightUnits, offPagePaint)
     }
 
     if (pageEndY >= viewHeightUnits) return
@@ -301,7 +299,7 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
             canvas.restore()
         }
         canvas.drawLine(0f, pageEndY, viewWidthUnits, pageEndY, pageSeamPaint)
-    } else if (page.hasHardBounds) {
+    } else {
         canvas.drawRect(0f, pageEndY, viewWidthUnits, viewHeightUnits, offPagePaint)
     }
 }

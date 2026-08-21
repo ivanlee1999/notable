@@ -527,14 +527,18 @@ fun Notebook.getBackgroundType(): BackgroundType {
 }
 
 fun Notebook.newPage(): Page {
+    // Every new page declares its sheet. In a notebook without defaults the declared size is
+    // the same canonical sheet its legacy pages already resolve to, so the notebook stays
+    // uniform — and stops minting undeclared pages. The iPad app applies the same rule
+    // (manifest default, else the legacy constant), so a page created on either device is the
+    // same page on both.
+    val sheet = declaredDefaultPageSize() ?: PageSize.LEGACY_UNDECLARED
     return Page(
         notebookId = id,
         background = defaultBackground,
         backgroundType = defaultBackgroundType,
-        // A notebook that declares no sheet keeps declaring none, so it never ends up part
-        // page-sized and part legacy.
-        pageWidth = defaultPageWidth,
-        pageHeight = defaultPageHeight
+        pageWidth = sheet.width,
+        pageHeight = sheet.height
     )
 }
 
