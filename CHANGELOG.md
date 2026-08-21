@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.40.0
+
+A page is one physical sheet again, whichever direction you use to turn it.
+
+- **No more pages inside a page.** Declared sheets now fit as one whole page in both vertical and
+  side-to-side turn modes. Changing the turn gesture no longer makes the same sheet look like two
+  vertically scrollable subpages; pinch in when you want a closer writing view.
+- **Scrolling down keeps making real pages.** Pulling past the bottom reaches the next page, and
+  creates one when the current page is last, even when side-to-side turning is selected. The turn
+  setting chooses the preferred gesture; it no longer makes the bottom of the paper a dead end.
+- **Ink near the bottom stays on its sheet.** A normal stroke close to the physical edge no longer
+  adds a strip of scrollable canvas below it, and declared pages no longer show legacy “Subpage”
+  export markers.
+
+Existing notebooks need no migration, including notebooks already showing the problem. Their page
+data was valid; this release corrects how the saved sheets are fitted and bounded on screen.
+
+No database change.
+
 ## 0.39.0
 
 One fix: the new-notebook dialog works on a phone-sized screen.
