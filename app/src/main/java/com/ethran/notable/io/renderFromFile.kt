@@ -47,7 +47,20 @@ fun uriToBitmap(context: Context, uri: Uri): Bitmap? {
 }
 
 
-fun loadBackgroundBitmap(filePath: String, pageNumber: Int, scale: Float): Bitmap? {
+/**
+ * Decodes a page background.
+ *
+ * [targetWidthPx] is the width the caller is going to draw it at. Pass it whenever that is
+ * known — an export's resolution is a property of the *output*, not of the display that
+ * happens to be running it. Without it the old screen-derived budget applies, which is right
+ * for the on-screen canvas and wrong for anything leaving the device.
+ */
+fun loadBackgroundBitmap(
+    filePath: String,
+    pageNumber: Int,
+    scale: Float,
+    targetWidthPx: Int? = null,
+): Bitmap? {
     // TODO: it's very slow, needs to be changed for better tool
     if (filePath.isEmpty()) return null
     ensureNotMainThread("loadBackgroundBitmap")
@@ -76,7 +89,7 @@ fun loadBackgroundBitmap(filePath: String, pageNumber: Int, scale: Float): Bitma
             log.e("getOrLoadBackground: Error loading background - ${e.message}", e)
         }
     }
-    val targetWidth = SCREEN_WIDTH * (scale.coerceAtMost(2f))
+    val targetWidth = targetWidthPx?.toFloat() ?: (SCREEN_WIDTH * (scale.coerceAtMost(2f)))
     timer.step("start android Pdf")
     log.d("Rendering using ${if (GlobalAppSettings.current.muPdfRendering) "MuPdf" else "Android Pdf"}")
     val newBitmap: Bitmap? = if (GlobalAppSettings.current.muPdfRendering)
