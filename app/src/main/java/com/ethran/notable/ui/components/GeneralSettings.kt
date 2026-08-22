@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.AppSettings
+import com.ethran.notable.data.datastore.MAX_IMAGE_SIZE_STEPS
 import com.ethran.notable.data.model.PageSizePreset
 
 
@@ -96,6 +97,49 @@ fun GeneralSettings(
             value = settings.paginatePdf,
             onToggle = { isChecked ->
                 onSettingsChange(settings.copy(paginatePdf = isChecked))
+            })
+
+        // Pins the writing surface against knocks. Also reachable from the editor's own menu,
+        // which is where it is actually wanted — this row is for making it the default.
+        SettingToggleRow(
+            label = stringResource(R.string.canvas_lock_title),
+            value = settings.canvasLocked,
+            onToggle = { isChecked ->
+                onSettingsChange(settings.copy(canvasLocked = isChecked))
+            })
+
+        // Tri-state on purpose: the panel usually knows better than the user does, but a Kaleido
+        // owner who prefers greys and a mono owner who wants the hues back both exist.
+        SelectorRow(
+            label = stringResource(R.string.greyscale_inks_title), options = listOf(
+                null to stringResource(R.string.greyscale_inks_auto),
+                true to stringResource(R.string.greyscale_inks_greys),
+                false to stringResource(R.string.greyscale_inks_colours),
+            ), value = settings.greyscaleInks, onValueChange = { choice ->
+                onSettingsChange(settings.copy(greyscaleInks = choice))
+            })
+
+        SelectorRow(
+            label = stringResource(R.string.max_image_size_title),
+            options = MAX_IMAGE_SIZE_STEPS.map { it to "$it px" },
+            value = settings.maxImageSize,
+            onValueChange = { size -> onSettingsChange(settings.copy(maxImageSize = size)) })
+
+        // Denied is offered as a plain choice rather than hidden behind "advanced": the answer
+        // costs the user nothing either way, and an app that buries it is telling on itself.
+        SelectorRow(
+            label = stringResource(R.string.telemetry_settings_title), options = listOf(
+                AppSettings.TelemetryConsent.Granted to
+                        stringResource(R.string.telemetry_consent_allow),
+                AppSettings.TelemetryConsent.Denied to
+                        stringResource(R.string.telemetry_consent_deny),
+            ),
+            // An install that has not been asked yet shows as "Don't send", which is what is
+            // actually happening — nothing is uploaded until the answer is Granted.
+            value = if (settings.telemetryConsent == AppSettings.TelemetryConsent.Granted)
+                AppSettings.TelemetryConsent.Granted else AppSettings.TelemetryConsent.Denied,
+            onValueChange = { choice ->
+                onSettingsChange(settings.copy(telemetryConsent = choice))
             })
     }
 }

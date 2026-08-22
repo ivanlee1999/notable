@@ -372,4 +372,31 @@
 
     <string name="editor_title_bar_back">Back</string>
 
+    <!-- Telemetry consent -->
+    <string name="telemetry_consent_title">Send diagnostic logs?</string>
+    <string name="telemetry_consent_body">Notable can upload its diagnostic logs so crashes and sync failures can be investigated. It works exactly the same either way.</string>
+    <string name="telemetry_consent_detail">Logs include what the app was doing, your device model and Android version. They do not include your notes, your handwriting, or your sync server password. Nothing is uploaded until you allow it, and you can change this later in Settings.</string>
+    <string name="telemetry_consent_allow">Allow</string>
+    <string name="telemetry_consent_deny">Don\'t send</string>
+    <string name="telemetry_settings_title">Diagnostic logs</string>
+    <string name="telemetry_settings_description">Upload logs so crashes and sync failures can be investigated. Never includes notes or passwords.</string>
+    <string name="telemetry_settings_restart_note">Turning this off stops further uploads immediately; it takes effect fully after the next restart.</string>
+
+    <!-- Canvas lock -->
+    <string name="canvas_lock_title">Lock the canvas</string>
+    <string name="canvas_lock_description">Pins the page: no scrolling and no zooming, whatever your fingers do. The pen still writes.</string>
+    <string name="toolbar_menu_lock_canvas">Lock canvas</string>
+    <string name="toolbar_menu_unlock_canvas">Unlock canvas</string>
+
+    <!-- Images -->
+    <string name="max_image_size_title">Largest image size</string>
+    <string name="max_image_size_description">Longest edge a picked image is stored at. Bigger images stay sharper when zoomed but make the page slower to sync.</string>
+
+    <!-- Ink palette -->
+    <string name="greyscale_inks_title">Greyscale ink</string>
+    <string name="greyscale_inks_description">Offer greys instead of colours in the ink strip. Follows your screen by default — colours on a colour panel, greys on a black-and-white one.</string>
+    <string name="greyscale_inks_auto">Follow the screen</string>
+    <string name="greyscale_inks_greys">Always greys</string>
+    <string name="greyscale_inks_colours">Always colours</string>
+
 </resources>
