@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.45.0
+
+Notable now asks before anything leaves your device — and several things that were quietly
+wrong on e-ink are right.
+
+- **Nothing is uploaded unless you say so.** Notable used to start its diagnostic log uploader
+  the moment it launched, without asking, and it ships every line the app logs. It now asks
+  once and sends nothing until you agree. Saying no changes nothing else: the in-app log
+  viewer, the crash logs and the bug report all still work, because they read from the device.
+  You can change the answer at any time in Settings.
+- **You can pin the page down.** A new canvas lock — in the editor's ••• menu, or Settings —
+  stops the page scrolling or zooming under a stray palm or finger while the pen keeps writing.
+  Turning pages still works, so locking the page does not strand you on it.
+- **Photos land on the paper instead of over its edges.** An inserted image used to be placed
+  at its full camera size, which for any real photo overflowed the sheet on both sides into
+  space the view will not scroll to — leaving nothing to grab and shrink. It is now fitted to
+  the page. How large images are stored is a setting too (**Largest image size**); it used to
+  be decided by your screen, so the same photo came out a different size on different devices.
+- **Annotated PDFs export sharply.** Your handwriting was always exported as true vector lines,
+  but the document underneath was re-rendered at roughly screen resolution — about 72 dpi on an
+  A4 export — so the page you had marked up came out visibly blurry, and blurrier on a
+  small-screened device than a large one. It is now rendered for the page it is going onto.
+- **Exporting an unusually large page no longer risks killing the app.** A page carrying
+  content far outside its sheet could ask for an image big enough to run the app out of memory,
+  at exactly the moment you were trying to get that work out of it.
+- **Greys on a black-and-white screen.** The twelve inks are deep colours chosen for Kaleido
+  panels, and on a monochrome BOOX they all come out as much the same grey — twelve buttons
+  that make one mark. Notable now offers five distinguishable greys instead when it is running
+  on a screen without colour. Your existing notes are untouched: a stroke written in Blue is
+  still Blue, and still shows as Blue on the iPad.
+- **One consistent look.** Turning on the tablet's system dark theme used to repaint some of
+  Notable's screens and leave the others alone, so the library stayed light while Settings went
+  near-black in colours nobody chose. Notable now uses its own palette throughout.
+- **Attaching a keyboard or changing the system text size no longer restarts the editor
+  mid-stroke**, which on this hardware was one of the ways the screen could freeze.
+
+### Worth knowing
+
+If you had your tablet's dark theme on, Notable no longer follows it — it was only ever
+applying to half the app. A proper night mode, applied to everything including the ink, is a
+better answer and is not here yet.
+
+The first launch after updating will ask about diagnostic logs. Until you answer, nothing is
+sent; dismissing the question leaves it unanswered and asks again next time rather than
+treating it as a no.
+
+No database change.
+
 ## 0.44.0
 
 Scrolling and swiping each mean one thing now — and scrolling to the end of the notebook
