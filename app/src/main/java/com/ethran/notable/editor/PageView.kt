@@ -1047,6 +1047,14 @@ class PageView(
     suspend fun updateZoom(scaleDelta: Float, center: Offset?) {
         log.d("Zoom(delta): $scaleDelta. Center: $center")
 
+        // Belt and braces with the gesture layer's own gate. Zoom also arrives from the
+        // toolbar and from restored state, and a locked canvas should hold against every
+        // route into it, not only against fingers.
+        if (GlobalAppSettings.current.canvasLocked) {
+            log.d("Zoom ignored: the canvas is locked.")
+            return
+        }
+
         val oldZoom = zoomLevel.value
         val newZoom = calculateZoomLevel(scaleDelta, oldZoom)
         if (newZoom == oldZoom) {

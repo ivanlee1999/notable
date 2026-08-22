@@ -29,3 +29,51 @@ jobs:
       - name: Run Unit Tests
         # Replace with your specific unit test task if different
         run: ./gradlew testDebugUnitTest
+
+      # The merge vectors are a contract between two codebases, and the only thing that checks
+      # the two implementations agree. They are duplicated by design — each suite reads its own
+      # copy — so nothing but a diff can catch them drifting, and they have drifted once already:
+      # bopa grew two page-rename vectors this repo never got, and because this decoder simply
+      # dropped the field they described, this suite went on passing while a rename made on the
+      # iPad was erased by the BOOX.
+      #
+      # docs/couch-sync-protocol.md claimed CI asserted this long before CI did. It does now.
+      - name: Check out bopa for the shared merge vectors
+        uses: actions/checkout@v6
+        with:
+          repository: ivanlee1999/bopa
+          path: .bopa
+        # Both repos are public, so the default token reads it. Left as continue-on-error so a
+        # transient checkout failure warns rather than red-flagging an unrelated PR; the diff
+        # step below is the one that actually gates.
+        continue-on-error: true
+
+      - name: Couch sync vectors match bopa
+        run: |
+          mine=app/src/test/resources/couch-sync-vectors/vectors.json
+          theirs=.bopa/docs/couch-sync-vectors/vectors.json
+          if [ ! -f "$theirs" ]; then
+            echo "::warning::bopa checkout unavailable; vector parity not checked."
+            exit 0
+          fi
+          if ! diff -u "$theirs" "$mine"; then
+            echo "::error::couch-sync vectors differ between the repos. They are one contract;"
+            echo "::error::copy the newer file across both repos in the same change."
+            exit 1
+          fi
+          echo "couch sync vectors match"
+
+      # Advisory, not a gate. This codebase has never had a lint step, so turning one on as
+      # blocking would fail every PR on pre-existing findings rather than on the change under
+      # review. Report first; tighten once the baseline is clean.
+      - name: Android Lint
+        run: ./gradlew lintDebug
+        continue-on-error: true
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore

@@ -113,13 +113,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableFullScreen()
-        ShipBook.start(
-            this.application, BuildConfig.SHIPBOOK_APP_ID, BuildConfig.SHIPBOOK_APP_KEY
-        )
-        // ShipBook installs its own uncaught handler in start(); re-install ours on top so it is
-        // outermost and still writes the durable crash file even if ShipBook doesn't chain back,
-        // and flush any startup telemetry (crash-loop signal) that predated ShipBook being up.
-        (application as? NotableApp)?.onShipBookStarted()
+        // Telemetry deliberately does NOT start here. Nothing may be uploaded before the stored
+        // consent has been read, and that read needs the database — so it happens in the init
+        // effect below, next to the settings load. See [Telemetry].
         maybeShowCrashLoopHint()
 
         Log.i(TAG, "Notable started")
@@ -169,6 +165,9 @@ class MainActivity : ComponentActivity() {
                             )
 
                         GlobalAppSettings.update(savedSettings)
+                        // The first moment we are entitled to an opinion about uploading, because
+                        // it is the first moment the stored answer is known.
+                        Telemetry.startIfConsented(application, savedSettings.telemetryConsent)
                         strokeMigrationHelper.get().reencodeStrokePointsToBinary()
                         pageDataManager.get()
                             .registerComponentCallbacks(this@MainActivity.applicationContext)

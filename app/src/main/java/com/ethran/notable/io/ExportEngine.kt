@@ -404,6 +404,14 @@ class ExportEngine @Inject constructor(
         }
         val scaledHeight = (contentHeightPx * scaleFactor).toInt()
 
+        // The background is rasterised for the *page box*, not for the display. Previously it
+        // went through the on-screen budget — SCREEN_WIDTH * scaleFactor, and scaleFactor here
+        // is POINTS_PER_UNIT (~0.425) — so an A4 export asked for a ~600px-wide bitmap: the
+        // source document's own text re-encoded at roughly 72dpi, blurry and unsearchable, and
+        // a different blur on every device. The strokes over it were vector all along.
+        val backgroundTargetWidthPx =
+            Math.round(outWidth * PDF_BACKGROUND_SUPERSAMPLE).coerceAtLeast(1)
+
         if (GlobalAppSettings.current.paginatePdf) {
             // drawPage consumes `scroll` in *content* pixels (it offsets strokes/images before
             // canvas.scale). So the vertical step and the loop bound must be in content pixels too.
@@ -422,6 +430,7 @@ class ExportEngine @Inject constructor(
                     data = data,
                     scroll = Offset(0f, currentTop),
                     scaleFactor = scaleFactor,
+                    backgroundTargetWidthPx = backgroundTargetWidthPx,
                 )
                 doc.finishPage(page)
                 currentTop += pageContentHeightPx
@@ -435,6 +444,7 @@ class ExportEngine @Inject constructor(
                 data = data,
                 scroll = Offset.Zero,
                 scaleFactor = scaleFactor,
+                backgroundTargetWidthPx = backgroundTargetWidthPx,
             )
             doc.finishPage(page)
         }

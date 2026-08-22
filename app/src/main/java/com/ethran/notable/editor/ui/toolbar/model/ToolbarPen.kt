@@ -1,5 +1,7 @@
 package com.ethran.notable.editor.ui.toolbar.model
 
+import com.ethran.notable.data.datastore.GlobalAppSettings
+import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.Pen
 import com.ethran.notable.editor.utils.PenSetting
 import com.ethran.notable.ui.theme.Kaleido
@@ -49,14 +51,33 @@ data class ToolbarPen(
          * grey. The twelve here are all deep enough to read as handwriting, and they are the same
          * twelve, in the same order, as the iPad app's.
          */
-        val DEFAULT_COLOR_OPTIONS: List<Int> = Kaleido.Inks
+        val DEFAULT_COLOR_OPTIONS: List<Int> get() = inksForThisDevice()
 
         /**
          * Everything the settings editor offers for inclusion in [colorOptions] — the same
          * twelve. There is no thirteenth colour that belongs on this panel, and a pen may still
          * be narrowed to any subset of them.
          */
-        val COLOR_CANDIDATES: List<Int> = Kaleido.Inks
+        val COLOR_CANDIDATES: List<Int> get() = inksForThisDevice()
+
+        /**
+         * The strip this panel should offer: the hues, or the grey ramp on a screen that cannot
+         * print hues.
+         *
+         * The setting is tri-state and defaults to following the device, which already knows the
+         * answer — `DeviceCompat.isColorDevice()` has been consulted for thumbnail encoding and
+         * pen-up refresh delays all along, just never for the palette. A Kaleido owner who
+         * prefers greys and a mono owner who wants the hues back can both say so.
+         *
+         * A `get()` rather than a `val` because the answer changes when the setting does, and
+         * these are read afresh every time the strip is laid out.
+         */
+        fun inksForThisDevice(): List<Int> =
+            when (GlobalAppSettings.current.greyscaleInks) {
+                true -> Kaleido.GreyInks
+                false -> Kaleido.Inks
+                null -> if (DeviceCompat.isColorDevice()) Kaleido.Inks else Kaleido.GreyInks
+            }
 
         /**
          * The seed presets' own colours, by name. Taken from [Kaleido.Inks] rather than the

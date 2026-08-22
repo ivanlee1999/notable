@@ -141,6 +141,13 @@ sealed class ToolbarAction {
     data class ToggleBackgroundSelector(val isOpen: Boolean) : ToolbarAction()
     data class ToggleScribbleToErase(val enabled: Boolean) : ToolbarAction()
 
+    /**
+     * Pins or releases the writing surface. Lives on the menu as well as in Settings because
+     * the moment it is wanted is mid-page, and walking to Settings to stop the page moving
+     * costs two full refreshes of the thing you were trying to hold still.
+     */
+    data class ToggleCanvasLock(val locked: Boolean) : ToolbarAction()
+
     object Undo : ToolbarAction()
     object Redo : ToolbarAction()
     object Paste : ToolbarAction()
@@ -350,6 +357,7 @@ class EditorViewModel @Inject constructor(
             }
 
             is ToolbarAction.ToggleScribbleToErase -> updateScribbleToErase(action.enabled)
+            is ToolbarAction.ToggleCanvasLock -> updateCanvasLocked(action.locked)
             is ToolbarAction.ImagePicked -> handleImagePicked(action.uri)
             is ToolbarAction.ExportPage -> handleExport(
                 ExportTarget.Page(currentPageId),
@@ -470,6 +478,14 @@ class EditorViewModel @Inject constructor(
             )
         }
         updateDrawingState()
+    }
+
+    private fun updateCanvasLocked(locked: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.kvProxy.setAppSettings(
+                GlobalAppSettings.current.copy(canvasLocked = locked)
+            )
+        }
     }
 
     private fun updateScribbleToErase(enabled: Boolean) {

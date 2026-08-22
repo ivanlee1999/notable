@@ -24,6 +24,18 @@ const val BUTTON_SIZE = 37
  */
 const val TOOLBAR_THICKNESS = BUTTON_SIZE + 3
 
+/**
+ * The longest edge a picked image is kept at, in pixels, unless the user says otherwise.
+ *
+ * 1500 is roughly a full sheet at a comfortable reading density: large enough that a
+ * photographed page stays legible when zoomed, small enough that the encoded bytes do not
+ * dominate the page document they travel inside. The steps offered in Settings bracket it.
+ */
+const val MAX_IMAGE_SIZE_DEFAULT = 1500
+
+/** The sizes offered for [AppSettings.maxImageSize], longest edge in pixels. */
+val MAX_IMAGE_SIZE_STEPS = listOf(800, 1500, 2400, 4000)
+
 
 object GlobalAppSettings {
     private val _current = mutableStateOf(AppSettings(version = 1))
@@ -103,6 +115,36 @@ data class AppSettings(
     // stop working inside the app while this is on — hence opt-in.
     val blockSystemGestures: Boolean = false,
     val renameOnCreate: Boolean = true,
+    /**
+     * Pins the writing surface: no pan, no zoom, whatever the fingers do. The pen still writes.
+     *
+     * On a panel where putting a knocked-aside page back costs a full-screen refresh, an
+     * accidental palm-pan is not an annoyance, it is a lost place in a sentence. This is the
+     * one implement the stylus-only device was missing — the iPad has had a scroll lock since
+     * it shipped.
+     */
+    val canvasLocked: Boolean = false,
+    /**
+     * The longest edge, in pixels, that a picked image is stored at. A photograph arrives at
+     * whatever the camera produced and then travels as base64 inside a page document, so the
+     * cap is a sync cost as much as a storage one. Was derived from the screen — which made
+     * the same photo a different size on every device — and is now a stated number.
+     */
+    val maxImageSize: Int = MAX_IMAGE_SIZE_DEFAULT,
+    /**
+     * Whether the ink strip offers greys instead of hues. Null follows the panel: a colour
+     * device gets the hues, a monochrome one gets the ramp. Set it to override either way.
+     *
+     * Substituting the *picker* only — never a stored colour — is what keeps this a display
+     * preference rather than a fork in the document. A note written in Blue on a mono panel is
+     * still Blue, and still names itself that on the iPad.
+     */
+    val greyscaleInks: Boolean? = null,
+    /**
+     * Whether telemetry may leave the device. [TelemetryConsent.Unknown] means nobody has been
+     * asked yet, and nothing is sent until they are.
+     */
+    val telemetryConsent: TelemetryConsent = TelemetryConsent.Unknown,
 
     // Debug
     val showWelcome: Boolean = true,
@@ -132,6 +174,19 @@ data class AppSettings(
 
     enum class GestureAction {
         None, Undo, Redo, PreviousPage, NextPage, ChangeTool, ToggleZen, Select
+    }
+
+    /**
+     * Whether the user has agreed to logs leaving the device.
+     *
+     * Tri-state on purpose: [Unknown] is not [Denied]. It means the question has not been put
+     * yet, so the answer is "send nothing, and ask" rather than "send nothing, forever" —
+     * which is what lets the prompt appear once and then never again.
+     */
+    enum class TelemetryConsent {
+        Unknown, Granted, Denied;
+
+        val allowsUpload: Boolean get() = this == Granted
     }
 
     /** Legacy persisted value; no longer shown or consulted. */

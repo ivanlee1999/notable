@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
@@ -87,6 +88,7 @@ import com.ethran.notable.ui.dialogs.NamePromptDialog
 import com.ethran.notable.ui.dialogs.NewNotebookDialog
 import com.ethran.notable.ui.dialogs.NotebookConfigDialog
 import com.ethran.notable.ui.dialogs.PdfImportChoiceDialog
+import com.ethran.notable.ui.dialogs.TelemetryConsentDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.KaleidoMetrics
@@ -172,6 +174,30 @@ fun Library(
                 viewModel.onCreateNewNotebook(name, pageSize, template, templateType)
             },
             onDismiss = { pendingNewNotebook = false }
+        )
+    }
+
+    // Asked once, on the library rather than over a notebook, and only after the welcome screen
+    // has been cleared — a permissions wall is not the moment to put another question.
+    // Dismissing it leaves the consent Unknown, so it is asked again next launch rather than
+    // being read as a refusal.
+    var telemetryAsked by remember { mutableStateOf(false) }
+    val telemetryConsent = GlobalAppSettings.current.telemetryConsent
+    if (!telemetryAsked &&
+        !GlobalAppSettings.current.showWelcome &&
+        telemetryConsent == AppSettings.TelemetryConsent.Unknown
+    ) {
+        TelemetryConsentDialog(
+            onAllow = {
+                telemetryAsked = true
+                viewModel.setTelemetryConsent(AppSettings.TelemetryConsent.Granted)
+            },
+            onDeny = {
+                telemetryAsked = true
+                viewModel.setTelemetryConsent(AppSettings.TelemetryConsent.Denied)
+            },
+            // Not persisted: leaving it Unknown is what brings the question back.
+            onAskLater = { telemetryAsked = true },
         )
     }
 

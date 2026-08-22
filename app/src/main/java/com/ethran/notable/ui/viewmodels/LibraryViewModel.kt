@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.viewmodels
 
+import android.app.Application
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
@@ -7,6 +8,8 @@ import androidx.lifecycle.asFlow
 import androidx.lifecycle.viewModelScope
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.PageDataManager
+import com.ethran.notable.Telemetry
+import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
@@ -325,6 +328,23 @@ class LibraryViewModel @Inject constructor(
         )
         viewModelScope.launch(Dispatchers.IO) {
             appRepository.kvProxy.setAppSettings(updated)
+        }
+    }
+
+    /**
+     * Records the answer to the telemetry question, and brings the uploader up if it was yes.
+     *
+     * Starting here rather than waiting for the next launch is what makes "Allow" mean something
+     * in the session the user allowed it in. [Telemetry.startIfConsented] is idempotent, so the
+     * init effect calling it again on the next launch is harmless.
+     */
+    fun setTelemetryConsent(consent: AppSettings.TelemetryConsent) {
+        val updated = GlobalAppSettings.current.copy(telemetryConsent = consent)
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.kvProxy.setAppSettings(updated)
+            (context.applicationContext as? Application)?.let {
+                Telemetry.startIfConsented(it, consent)
+            }
         }
     }
 

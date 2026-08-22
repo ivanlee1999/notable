@@ -26,6 +26,18 @@ data class GestureFlags(
      * finger went — so it reaches the same classification branch.
      */
     val pagedScroll: Boolean = false,
+    /**
+     * The canvas is pinned: it may not be panned, scrolled or zoomed.
+     *
+     * Recognition rather than action-mapping, so it belongs here: a locked canvas should not
+     * enter the continuous modes at all, because entering one already costs an EPD refresh
+     * handle before a single pixel has moved.
+     *
+     * It deliberately does not silence *navigation*. A page turn is something the user asked
+     * for; the lock exists to stop the sheet drifting under a palm, not to trap them on a page.
+     * That is why [pagedScroll]'s vertical swipe survives below while an unpaged scroll does not.
+     */
+    val canvasLocked: Boolean = false,
 )
 
 /**
@@ -49,7 +61,9 @@ fun classifyGesture(
         if (isTwoFingerTap(tracker, mode, thresholds)) events += GestureEvent.Tap(fingers = 2)
 
         val pinchRatio = tracker.pinchRatio()
-        if (!flags.continuousZoom && abs(pinchRatio) > PINCH_ZOOM_THRESHOLD) {
+        if (!flags.canvasLocked &&
+            !flags.continuousZoom && abs(pinchRatio) > PINCH_ZOOM_THRESHOLD
+        ) {
             events += GestureEvent.PinchZoom(pinchRatio)
         }
     }
@@ -75,7 +89,11 @@ fun classifyGesture(
         }
     }
 
-    if ((!flags.smoothScroll || flags.pagedScroll) && fingers == 1) {
+    // A locked canvas still turns pages — in paged navigation this event *is* the turn — but
+    // it does not scroll. See GestureFlags.canvasLocked.
+    if ((!flags.smoothScroll || flags.pagedScroll) && fingers == 1 &&
+        (!flags.canvasLocked || flags.pagedScroll)
+    ) {
         val verticalDrag = tracker.verticalDrag(thresholds.swipeNoiseFloorPx)
         if (abs(verticalDrag) > thresholds.swipePx) {
             events += GestureEvent.VerticalScroll(verticalDrag)
@@ -136,7 +154,9 @@ fun shouldEnterTransform(
     mode: GestureMode,
     thresholds: GestureThresholds,
     continuousZoom: Boolean,
+    canvasLocked: Boolean = false,
 ): Boolean {
+    if (canvasLocked) return false
     if (mode != GestureMode.Normal) return false
     if (tracker.maxConcurrentPressed != 2 || tracker.pressedCount() != 2) return false
     val panning = tracker.centroidTravel() > thresholds.panEnterPx
@@ -148,8 +168,10 @@ fun shouldEnterScroll(
     tracker: PointerTracker,
     mode: GestureMode,
     thresholds: GestureThresholds,
+    canvasLocked: Boolean = false,
 ): Boolean {
-    return mode == GestureMode.Normal &&
+    return !canvasLocked &&
+            mode == GestureMode.Normal &&
             tracker.maxConcurrentPressed == 1 &&
             abs(tracker.verticalDrag(thresholds.swipeNoiseFloorPx)) > thresholds.smoothScrollEnterPx
 }

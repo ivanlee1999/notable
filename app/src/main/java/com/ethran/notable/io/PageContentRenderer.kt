@@ -37,6 +37,33 @@ sealed class RenderTarget {
 }
 
 @Singleton
+/**
+ * The longest edge a full-size raster export may have.
+ *
+ * 4000px comfortably exceeds any sheet at print density (A4 at 300dpi is 3508), so a normal
+ * page is never touched by it; it exists so a page with content far off the sheet cannot ask
+ * for an allocation that kills the process.
+ */
+const val MAX_EXPORT_EDGE_PX = 4000
+
+/**
+ * How much finer than the output box a PDF background is rasterised.
+ *
+ * The ink beside it is real PDF geometry, so the background is the only part of an annotated
+ * page whose sharpness is a choice. 3x puts A4 at ~1786px across, about 216dpi — enough that
+ * the source document's text reads as text rather than as a photograph of text.
+ */
+const val PDF_BACKGROUND_SUPERSAMPLE = 3f
+
+/**
+ * How far a full-size export has to shrink to stay inside [MAX_EXPORT_EDGE_PX]. 1 when it
+ * already fits, which is every ordinary page.
+ */
+fun exportRenderScale(contentWidth: Int, contentHeight: Int): Float {
+    val longest = maxOf(contentWidth, contentHeight)
+    return if (longest > MAX_EXPORT_EDGE_PX) MAX_EXPORT_EDGE_PX.toFloat() / longest else 1f
+}
+
 class PageContentRenderer @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val pageRepo: PageRepository,
@@ -57,7 +84,10 @@ class PageContentRenderer @Inject constructor(
                     canvas = Canvas(bitmap),
                     data = data,
                     scroll = Offset.Zero,
-                    scaleFactor = size.scale
+                    scaleFactor = size.scale,
+                    // The bitmap's own width: a raster export's background should be as sharp
+                    // as the raster it is being drawn into, no sharper and no blurrier.
+                    backgroundTargetWidthPx = size.width,
                 )
             }
         }
@@ -84,7 +114,8 @@ class PageContentRenderer @Inject constructor(
         canvas: Canvas,
         data: PageWithData,
         scroll: Offset,
-        scaleFactor: Float
+        scaleFactor: Float,
+        backgroundTargetWidthPx: Int? = null,
     ) {
         val resolvedBackgroundType = resolveExportBackgroundType(data)
 
@@ -102,7 +133,9 @@ class PageContentRenderer @Inject constructor(
                         val resId = R.drawable.iris
                         ImageBitmap.imageResource(context.resources, resId).asAndroidBitmap()
                     } else {
-                        loadBackgroundBitmap(data.page.background, pageNumber, scaleFactor)
+                        loadBackgroundBitmap(
+                            data.page.background, pageNumber, scaleFactor, backgroundTargetWidthPx
+                        )
                     }
                 }
 
@@ -161,7 +194,27 @@ class PageContentRenderer @Inject constructor(
         sheet: PageSize,
     ): RenderSize {
         return when (target) {
-            RenderTarget.Full -> RenderSize(contentWidth, contentHeight, 1f)
+            RenderTarget.Full -> {
+                // computeContentDimensions is unbounded above — it unions the sheet with the
+                // real extent of every stroke and image plus slack, so a legacy pre-PageSplit
+                // page, or one with a stray far-off stroke, can ask for a bitmap of any size.
+                // createBitmap then allocates it straight, and the export that OOM-kills the
+                // app is the one the user reached for precisely because they wanted the work
+                // out of it. Scale down to fit instead of failing.
+                val scale = exportRenderScale(contentWidth, contentHeight)
+                if (scale < 1f) {
+                    Log.i(
+                        "PageContentRenderer",
+                        "Export content is ${contentWidth}x${contentHeight}; " +
+                                "scaling by $scale to stay under ${MAX_EXPORT_EDGE_PX}px."
+                    )
+                }
+                RenderSize(
+                    (contentWidth * scale).toInt().coerceAtLeast(1),
+                    (contentHeight * scale).toInt().coerceAtLeast(1),
+                    scale,
+                )
+            }
             is RenderTarget.Thumbnail -> {
                 // The sheet's aspect, so a thumbnail is page-shaped rather than device-shaped.
                 val screenRatio = sheet.height.toFloat() / sheet.width.toFloat()
