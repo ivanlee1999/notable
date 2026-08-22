@@ -24,6 +24,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.BUTTON_SIZE
+import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.ToolbarAction
 import com.ethran.notable.editor.ToolbarUiState
 import com.ethran.notable.editor.state.Mode
@@ -123,6 +124,19 @@ private fun ToolbarMenuContent(
 
         MenuItem(stringResource(R.string.change_background)) {
             onAction(ToolbarAction.ToggleBackgroundSelector(true))
+            onAction(ToolbarAction.ToggleMenu)
+        }
+
+        // Reads as the action it performs rather than as a state: "Lock canvas" while it is
+        // free, "Unlock canvas" while it is pinned.
+        val locked = GlobalAppSettings.current.canvasLocked
+        MenuItem(
+            stringResource(
+                if (locked) R.string.toolbar_menu_unlock_canvas
+                else R.string.toolbar_menu_lock_canvas
+            )
+        ) {
+            onAction(ToolbarAction.ToggleCanvasLock(!locked))
             onAction(ToolbarAction.ToggleMenu)
         }
 

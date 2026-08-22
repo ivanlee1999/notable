@@ -235,14 +235,17 @@ private fun applyModeTransitions(recognizer: Recognizer, ctx: GestureContext) {
     // Paged navigation never streams: the turn happens once, when the finger lifts, so
     // there is nothing to follow mid-gesture and no partial refresh to pay for.
     if (ctx.appSettings.smoothScroll && !ctx.appSettings.verticalNavigation.isPaged &&
-        shouldEnterScroll(tracker, recognizer.mode, ctx.thresholds)
+        shouldEnterScroll(
+            tracker, recognizer.mode, ctx.thresholds, ctx.appSettings.canvasLocked
+        )
     )
         applyGestureMode(recognizer, GestureMode.Scroll, ctx)
     if (shouldEnterTransform(
             tracker,
             recognizer.mode,
             ctx.thresholds,
-            ctx.appSettings.continuousZoom
+            ctx.appSettings.continuousZoom,
+            ctx.appSettings.canvasLocked,
         )
     )
         applyGestureMode(recognizer, GestureMode.Transform, ctx)
@@ -326,6 +329,7 @@ private suspend fun AwaitPointerEventScope.handleGestureEnd(
             smoothScroll = ctx.appSettings.smoothScroll,
             continuousZoom = ctx.appSettings.continuousZoom,
             pagedScroll = ctx.appSettings.verticalNavigation.isPaged,
+            canvasLocked = ctx.appSettings.canvasLocked,
         ),
         thresholds = ctx.thresholds,
     )

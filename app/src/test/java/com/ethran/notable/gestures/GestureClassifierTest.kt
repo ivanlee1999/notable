@@ -343,4 +343,94 @@ class GestureClassifierTest {
             )
         )
     }
+
+    // --- Canvas lock --------------------------------------------------------------
+    //
+    // The lock pins the sheet; it does not trap the user on a page. Every case below is
+    // one half of that rule.
+
+    @Test
+    fun `a locked canvas does not enter scroll`() {
+        tracker.down(1, 100f, 100f, T0)
+        tracker.moveTo(1, 105f, 350f, T0 + 150)
+        assertTrue(
+            shouldEnterScroll(tracker, GestureMode.Normal, thresholds, canvasLocked = false)
+        )
+        assertFalse(
+            shouldEnterScroll(tracker, GestureMode.Normal, thresholds, canvasLocked = true)
+        )
+    }
+
+    @Test
+    fun `a locked canvas does not enter transform`() {
+        tracker.down(1, 0f, 0f, T0)
+        tracker.down(2, 100f, 0f, T0 + 10)
+        tracker.moveTo(1, 300f, 0f, T0 + 150)
+        tracker.moveTo(2, 400f, 0f, T0 + 150)
+        assertTrue(
+            shouldEnterTransform(
+                tracker, GestureMode.Normal, thresholds,
+                continuousZoom = false, canvasLocked = false,
+            )
+        )
+        assertFalse(
+            shouldEnterTransform(
+                tracker, GestureMode.Normal, thresholds,
+                continuousZoom = false, canvasLocked = true,
+            )
+        )
+    }
+
+    @Test
+    fun `a locked canvas suppresses the discrete zoom`() {
+        tracker.down(1, 0f, 0f, T0)
+        tracker.down(2, 100f, 0f, T0 + 10)
+        tracker.moveTo(2, 200f, 0f, T0 + 150)
+        tracker.up(2, 200f, 0f, T0 + 180)
+        tracker.up(1, 0f, 0f, T0 + 182)
+        val flags = GestureFlags(
+            smoothScroll = false, continuousZoom = false, canvasLocked = true,
+        )
+        assertTrue(classify(flags = flags).isEmpty())
+    }
+
+    @Test
+    fun `a locked canvas suppresses the discrete scroll`() {
+        tracker.down(1, 100f, 100f, T0)
+        tracker.moveTo(1, 105f, 350f, T0 + 150)
+        tracker.up(1, 105f, 350f, T0 + 180)
+        val flags = GestureFlags(
+            smoothScroll = false, continuousZoom = false, canvasLocked = true,
+        )
+        assertTrue(classify(flags = flags).isEmpty())
+    }
+
+    @Test
+    fun `a locked canvas still turns pages in paged navigation`() {
+        tracker.down(1, 100f, 100f, T0)
+        tracker.moveTo(1, 105f, 350f, T0 + 150)
+        tracker.up(1, 105f, 350f, T0 + 180)
+        val flags = GestureFlags(
+            smoothScroll = true, continuousZoom = false,
+            pagedScroll = true, canvasLocked = true,
+        )
+        // A turn is navigation, not canvas movement — locking the sheet must not strand
+        // the reader on the page they locked it on.
+        assertEquals(listOf(GestureEvent.VerticalScroll(250f)), classify(flags = flags))
+    }
+
+    @Test
+    fun `a locked canvas still swipes`() {
+        tracker.down(1, 400f, 100f, T0)
+        tracker.moveTo(1, 100f, 105f, T0 + 150)
+        tracker.up(1, 100f, 105f, T0 + 180)
+        val flags = GestureFlags(
+            smoothScroll = true, continuousZoom = false, canvasLocked = true,
+        )
+        // Swipes carry the user's page-turn bindings, so they survive the lock too.
+        assertEquals(
+            listOf(GestureEvent.Swipe(1, GestureEvent.Direction.Left)),
+            classify(flags = flags),
+        )
+    }
 }
