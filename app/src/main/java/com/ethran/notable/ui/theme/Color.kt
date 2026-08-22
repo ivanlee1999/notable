@@ -1,8 +1,5 @@
 package com.ethran.notable.ui.theme
 
-import androidx.compose.ui.graphics.Color
-
-val Purple200 = Color(0xFFBB86FC)
-val Purple500 = Color(0xFF6200EE)
-val Purple700 = Color(0xFF3700B3)
-val Teal200 = Color(0xFF03DAC5)
+// The Material template's Purple/Teal swatches used to live here, reached only by the dark
+// palette in Theme.kt. Both are gone: the app draws from Kaleido, which is the palette that was
+// actually designed for these panels.
