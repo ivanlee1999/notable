@@ -16,6 +16,7 @@ import android.provider.OpenableColumns
 import androidx.core.net.toUri
 import com.ethran.notable.SCREEN_HEIGHT
 import com.ethran.notable.SCREEN_WIDTH
+import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.PageUnits
 import com.ethran.notable.utils.logCallStack
@@ -50,10 +51,15 @@ fun saveImageFromContentUri(context: Context, fileUri: Uri, outputDir: File): Fi
     val destFile = File(outputDir, fileName)
 
 
-    // Decide max allowed pixel dimensions
-    val minDimension = 2048
-    val allowedW = max(SCREEN_WIDTH * 2, minDimension)
-    val allowedH = max(SCREEN_HEIGHT * 2, minDimension)
+    // Decide max allowed pixel dimensions.
+    //
+    // Was derived from the screen — max(SCREEN_WIDTH * 2, 2048) — which made the same photo a
+    // different size on every device, and about 2808px on a 1404-wide BOOX. The bytes then
+    // travel base64-encoded inside the page document on every sync, so this is a wire cost as
+    // much as a storage one, and it deserves a stated number the user can move.
+    val allowed = GlobalAppSettings.current.maxImageSize.coerceAtLeast(1)
+    val allowedW = allowed
+    val allowedH = allowed
 
     try {
         // Use ImageDecoder so we can set target size during decoding (avoids decoding huge bitmap)

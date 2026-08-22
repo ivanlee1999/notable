@@ -53,9 +53,19 @@ class ImageHandler(
         if (softwareBitmap != null) {
             CanvasEventBus.addImageByUri.value = null
 
-            // Get the image dimensions
-            val imageWidth = softwareBitmap.width
-            val imageHeight = softwareBitmap.height
+            // An image arrives at whatever pixel size it was decoded to, which on a phone camera
+            // is several times the paper. Placed at that size it overflows the sheet on both
+            // sides into space the viewport will not scroll to, so the only way to see what you
+            // dropped in is to shrink it first — which you cannot do to something you cannot
+            // reach. Fit it to the paper instead, keeping its aspect.
+            val sheet = page.pageDataManager.getSheet(page.currentPageId)
+            val fit = minOf(
+                1f,
+                sheet.width.toFloat() / softwareBitmap.width,
+                sheet.height.toFloat() / softwareBitmap.height,
+            )
+            val imageWidth = (softwareBitmap.width * fit).toInt().coerceAtLeast(1)
+            val imageHeight = (softwareBitmap.height * fit).toInt().coerceAtLeast(1)
 
             // Calculate the center position for the image relative to the page dimensions
             val centerX = (page.viewWidth - imageWidth) / 2 + page.scroll.x.toInt()
