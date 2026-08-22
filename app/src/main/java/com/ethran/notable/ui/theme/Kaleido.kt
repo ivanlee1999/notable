@@ -88,6 +88,27 @@ object Kaleido {
     )
 
     /**
+     * The same strip on a panel with no colour in it.
+     *
+     * [Inks] is deliberately twelve *deep* hues, because a pale one is indistinguishable from
+     * grey on Kaleido. That reasoning covers the colour case and quietly fails the other one: on
+     * a monochrome BOOX — Note Max, Tab X, most of the range — twelve deep hues all resolve to a
+     * handful of near-identical mid-greys, so the strip is twelve buttons that make the same
+     * mark and two annotation passes cannot be told apart.
+     *
+     * Five values the panel can actually separate is strictly more expressive than twelve it
+     * cannot. Substituted at the *picker* only, never in a stored stroke: a note written in Blue
+     * here is still Blue, and still names itself Blue on the iPad.
+     */
+    val GreyInks: List<Int> = listOf(
+        0xFF201E1D.toInt(), // Ink
+        0xFF4A4A4A.toInt(),
+        0xFF888888.toInt(), // Grid — the grey Inks already carries
+        0xFFC4C4C4.toInt(),
+        0xFFFFFFFF.toInt(), // White, for writing over a dark background image
+    )
+
+    /**
      * Fills a notebook spine may take. Ordered so the two reds do not land next to each
      * other for consecutive hashes.
      */
