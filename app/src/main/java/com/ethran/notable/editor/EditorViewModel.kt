@@ -32,6 +32,7 @@ import com.ethran.notable.editor.utils.PenSetting
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportTarget
+import com.ethran.notable.recognition.HandwritingRecognizer
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncOrchestrator
 import com.ethran.notable.sync.couch.CouchSyncHost
@@ -212,6 +213,7 @@ class EditorViewModel @Inject constructor(
     val pageDataManager: PageDataManager,
     private val syncOrchestrator: SyncOrchestrator,
     private val couchSyncHost: CouchSyncHost,
+    private val handwritingRecognizer: HandwritingRecognizer,
     val snackDispatcher: SnackDispatcher,
     private val historyFactory: History.Factory,
     @param:ApplicationScope private val appScope: CoroutineScope
@@ -312,6 +314,8 @@ class EditorViewModel @Inject constructor(
         //    editor is closing, so nothing will overwrite a newer remote copy (P18).
         val closingPageId = currentPageId
         appScope.launch { syncOrchestrator.syncFromPageId(closingPageId) }
+        // 5. The page is finished being written, which is when recognizing it is worth the work.
+        handwritingRecognizer.pageSettled(closingPageId)
     }
 
     fun createHistory(page: PageView): History = historyFactory.create(page)
@@ -846,6 +850,8 @@ class EditorViewModel @Inject constructor(
         if (newPageId != currentPageId) {
             // The View's LaunchedEffect will handle the full load once navigation syncs.
             Log.d("EditorView", "Page changed")
+            // The page being left is done for now, whether or not the editor closes next.
+            handwritingRecognizer.pageSettled(currentPageId)
             _toolbarState.update { it.copy(pageId = newPageId) }
             // Do NOT sync here: syncing the notebook that is open in the editor could download a
             // newer remote copy and rewrite Room underneath the live in-memory state (P19).

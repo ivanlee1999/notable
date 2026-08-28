@@ -75,6 +75,7 @@ import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.sync.SyncState
 import com.ethran.notable.sync.SyncStep
+import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.ui.components.SettingToggleRow
 import com.ethran.notable.ui.components.SettingsDivider
 import com.ethran.notable.ui.theme.InkaTheme
@@ -221,6 +222,13 @@ fun SyncSettings(
                 MissingConfigurationHint()
             }
         }
+
+        // Outside the backend branches on purpose: recognized text is published straight to its own
+        // database rather than through the sync engine, so it works whichever backend is driving —
+        // or none.
+        Spacer(modifier = Modifier.height(24.dp))
+
+        RecognitionSection(state = state, onUpdate = callbacks.onUpdateSyncSettings)
 
         // Outside the backend branches, and gated on nothing but a backend being chosen.
         //
@@ -382,6 +390,74 @@ private fun CapabilityCheckRow(label: String, ok: Boolean) {
             color = MaterialTheme.colors.onSurface.copy(alpha = if (ok) 1f else 0.7f)
         )
     }
+}
+
+/**
+ * Handwriting recognition, and where its text goes.
+ *
+ * Shown on every device, including the ones that cannot recognize: the toggle would otherwise
+ * look broken on hardware whose firmware has no recognizer, with nothing on screen to say why.
+ * Text recognized on the iPad still arrives here and is still searchable, so the section is not
+ * useless there either.
+ */
+@Composable
+private fun RecognitionSection(
+    state: SyncSettingsUiState,
+    onUpdate: (SyncSettings, Boolean) -> Unit,
+) {
+    val settings = state.syncSettings
+
+    EInkSection(
+        title = stringResource(R.string.recognition_title),
+        icon = Icons.Default.Settings
+    ) {
+        if (DeviceCompat.isOnyxDevice) {
+            SettingToggleRow(
+                label = stringResource(R.string.recognition_enable_label),
+                value = settings.recognizeHandwriting,
+                onToggle = { onUpdate(settings.copy(recognizeHandwriting = it), true) }
+            )
+            SettingsHint(stringResource(R.string.recognition_hint))
+        } else {
+            SettingsHint(stringResource(R.string.recognition_unsupported_hint))
+        }
+
+        if (settings.recognizeHandwriting && DeviceCompat.isOnyxDevice) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            EInkTextField(
+                label = stringResource(R.string.recognition_language_label),
+                value = settings.recognitionLanguage,
+                onValueChange = { onUpdate(settings.copy(recognitionLanguage = it), false) }
+            )
+        }
+
+        if (settings.recognizeHandwriting || settings.couchUrl.isNotBlank()) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (settings.couchUrl.isBlank()) {
+                SettingsHint(stringResource(R.string.recognition_no_server_hint))
+            } else {
+                EInkTextField(
+                    label = stringResource(R.string.recognition_database_label),
+                    value = settings.recognitionDatabase,
+                    onValueChange = { onUpdate(settings.copy(recognitionDatabase = it), false) }
+                )
+                SettingsHint(stringResource(R.string.recognition_database_hint))
+            }
+        }
+    }
+}
+
+/** A caption under a control, in the muted weight the rest of this screen uses for them. */
+@Composable
+private fun SettingsHint(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.caption,
+        color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f),
+        modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
+    )
 }
 
 @Composable

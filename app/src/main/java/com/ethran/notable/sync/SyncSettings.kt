@@ -82,11 +82,34 @@ data class SyncSettings(
      * that is all of them.
      */
     val lastClockSkewSeconds: Long? = null,
+
+    // ---- Handwriting recognition ----
+    // Recognized text is not part of the library's sync: it lives in its own database, reachable
+    // with the same credentials. See docs/recognized-text.md in the bopa repo.
+
+    /**
+     * Recognize handwriting on this device. Off by default — it is only useful on BOOX hardware,
+     * where the firmware provides the engine, and it should be the user's choice to run it.
+     */
+    val recognizeHandwriting: Boolean = false,
+    /** What the recognizer is told it is reading. */
+    val recognitionLanguage: String = "en_US",
+    /** Where recognized text is published, alongside [couchDatabase] on the same server. */
+    val recognitionDatabase: String = "notes_text",
 ) {
     /** Enough to build a client: an http(s) URL and a database name. */
     val couchConfigured: Boolean
         get() = (couchUrl.startsWith("http://") || couchUrl.startsWith("https://")) &&
                 couchDatabase.isNotBlank()
+
+    /**
+     * True when recognized text has somewhere to go. Independent of which sync backend is
+     * selected: the text database is reached directly, not through the sync engine, so text can
+     * be published from a device still syncing its library over WebDAV.
+     */
+    val recognitionPublishable: Boolean
+        get() = (couchUrl.startsWith("http://") || couchUrl.startsWith("https://")) &&
+                recognitionDatabase.isNotBlank()
 
     /** True when CouchDB is both selected and usable. */
     val couchActive: Boolean get() = backend == SyncBackend.COUCHDB && couchConfigured

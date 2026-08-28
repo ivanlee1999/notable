@@ -19,6 +19,7 @@ import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.data.db.PageSyncState
 import com.ethran.notable.data.db.PageSyncStateRepository
+import com.ethran.notable.data.db.PageTextRepository
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.StrokeRepository
 import com.ethran.notable.data.db.getPageIndex
@@ -58,6 +59,8 @@ class AppRepository @Inject constructor(
     // Staging a deletion, so a folder and its subtree can be thrown away and brought back. The
     // publishing half lives here, in [deleteFolderSubtreeLocally]. See [TrashRepository].
     val trashRepository: TrashRepository,
+    // Recognized handwriting. Not part of the library's sync — see docs/recognized-text.md.
+    val pageTextRepository: PageTextRepository,
     val kvProxy: KvProxy,
     private val db: AppDatabase
 ) {

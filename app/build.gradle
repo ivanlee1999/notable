@@ -112,6 +112,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // For the BOOX firmware's handwriting-recognition service; see recognition/OnyxHwrEngine.kt.
+        aidl = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = libs.versions.compose.get()

@@ -73,8 +73,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 48,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class, PageText::class],
+    version = 49,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -116,6 +116,9 @@ class Converters {
         // adds them itself and every existing notebook reads as having neither.
         AutoMigration(46, 47),
         // 47 -> 48 is hand-written: see MIGRATION_47_48 in Migrations.kt.
+        // Adds the `page_text` table for recognized handwriting. A new table with no backfill:
+        // every page simply reads as "not recognized yet" until a recognizer gets to it.
+        AutoMigration(48, 49),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -134,6 +137,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deletedImageDao(): DeletedImageDao
     abstract fun couchDeletionDao(): CouchDeletionDao
     abstract fun couchOutboxDao(): CouchOutboxDao
+    abstract fun pageTextDao(): PageTextDao
 
 //    companion object {
 //        private var INSTANCE: AppDatabase? = null
@@ -234,6 +238,10 @@ object DatabaseModule {
     @Provides
     fun provideDeletedImageDao(db: AppDatabase): DeletedImageDao =
         db.deletedImageDao()
+
+    @Provides
+    fun providePageTextDao(db: AppDatabase): PageTextDao =
+        db.pageTextDao()
 
     @Provides
     fun provideCouchDeletionDao(db: AppDatabase): CouchDeletionDao =
