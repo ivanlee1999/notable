@@ -11,6 +11,7 @@ import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.copyImageToDatabase
 import com.ethran.notable.data.datastore.EditorSettingCacheManager
 import com.ethran.notable.data.datastore.GlobalAppSettings
+import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.getPageIndex
 import com.ethran.notable.data.db.getParentFolder
 import com.ethran.notable.data.model.BackgroundType
@@ -34,6 +35,7 @@ import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportTarget
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.SyncOrchestrator
+import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.sync.couch.CouchSyncHost
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.ui.SnackConf
@@ -552,6 +554,7 @@ class EditorViewModel @Inject constructor(
                 )
             }
             appRepository.pageRepository.update(updatedPage)
+            rememberAsNotebookDefault(updatedPage.backgroundType, updatedPage.background)
 
             // Calculate background page number
             val bgPageNum = when (val bgTypeObj = BackgroundType.fromKey(type)) {
@@ -611,7 +614,41 @@ class EditorViewModel @Inject constructor(
         // The row and both outbox entries went in with the creation; this only starts the
         // debounce, the way every other edit here does.
         couchSyncHost.markPageDirty(newPageId)
+        rememberAsNotebookDefault(type, path)
         changePage(newPageId)
+    }
+
+    /**
+     * Makes the template just chosen the paper new pages in this notebook start on.
+     *
+     * A template used to be printed on the one page it was chosen for, so the next page came back
+     * blank and the choice had to be made again — every page, forever. It is the notebook's own
+     * [Notebook.defaultBackground] that decides what [Notebook.newPage] prints, and the iPad reads
+     * the same field out of `manifest.json`, so recording it here is what makes one choice hold for
+     * every page after it on both devices.
+     *
+     * Pages already written are untouched: this says what comes next, not what has already
+     * happened. A loose page has no notebook to remember anything, and cover art is chosen for the
+     * one page it fronts — see [BackgroundType.canBeNotebookDefault].
+     *
+     * [background] is null when only the type changed (repeating or not, which sheet of a PDF), and
+     * the notebook keeps the file it already names.
+     */
+    private suspend fun rememberAsNotebookDefault(backgroundType: String, background: String?) {
+        val notebookId = bookId ?: return
+        if (!BackgroundType.fromKey(backgroundType).canBeNotebookDefault) return
+        val book = appRepository.bookRepository.getById(notebookId) ?: return
+        val updated = book.copy(
+            defaultBackground = background ?: book.defaultBackground,
+            defaultBackgroundType = backgroundType,
+        )
+        if (updated.defaultBackground == book.defaultBackground &&
+            updated.defaultBackgroundType == book.defaultBackgroundType
+        ) return
+        // `update` stamps the envelope and queues the outbox entry in the same transaction; the
+        // mark after it only starts the debounce.
+        appRepository.bookRepository.update(updated)
+        couchSyncHost.markDocumentDirty(CouchDocId.notebook(notebookId))
     }
 
     private fun handleNavigateToLibrary() {
