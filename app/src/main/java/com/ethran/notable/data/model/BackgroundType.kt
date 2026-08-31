@@ -69,6 +69,22 @@ sealed class BackgroundType(val key: String, val folderName: String) {
         }
     }
 
+    /**
+     * Whether paper chosen for one page should also become the notebook's default — the paper
+     * every page made after it starts on.
+     *
+     * Choosing paper is a statement about the notebook rather than about one sheet: someone who
+     * switches to squares means the squares to still be there on the next page, and re-picking it
+     * for every page is an errand, not a choice. It is written to the same field the notebook's own
+     * background selector sets and the iPad reads out of `manifest.json`, so the choice holds on
+     * either device.
+     *
+     * Cover art is the exception. It is chosen for the one page it fronts, and printing it on every
+     * page after would be nobody's intent.
+     */
+    val canBeNotebookDefault: Boolean
+        get() = this !is CoverImage
+
     fun resolveForExport(currentPage: Int?): BackgroundType =
         when (this) {
             AutoPdf ->
