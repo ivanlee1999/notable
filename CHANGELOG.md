@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.46.0
+
+The paper you pick is the paper the rest of the notebook gets.
+
+- **A template you choose now sticks.** Picking a background printed it on the one page you were
+  on; the next page came back on the notebook's original paper, so the choice had to be made
+  again — every page, forever. Choosing it now also sets it as the notebook's paper, so every
+  page you add after that starts on it. It works the same whether you print the template on the
+  page you are on or use it to add a page before or after.
+- **The choice travels.** Notable and the iPad app keep this in the same place, so a template
+  picked on either device is the paper a page added on the *other* one starts on.
+
+### Worth knowing
+
+Pages you have already written are untouched — the choice says what comes next, not what has
+already happened. To change one of those, open it and pick the template there.
+
+A cover image is the one background that leaves nothing behind: it fronts the page you chose it
+for, and the pages after it are not covers.
+
+A notebook's paper is still settable directly, without opening a page, from the notebook's menu
+in the library.
+
+No database change.
+
 ## 0.45.0
 
 Notable now asks before anything leaves your device — and several things that were quietly
