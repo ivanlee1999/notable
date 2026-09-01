@@ -90,9 +90,15 @@ sealed class CouchDocBody {
         }
 
     /**
-     * The `asset:` documents this body names: a page's placed images and its background, and a
-     * notebook's default background. The engine uses this to send those bytes before the document
-     * that references them, so the peer never has a reference it cannot resolve.
+     * The `asset:` documents this body names: a page's placed images, the pictures and recordings
+     * its blocks carry, and its background; and a notebook's default background. The engine uses
+     * this to send those bytes before the document that references them, so the peer never has a
+     * reference it cannot resolve.
+     *
+     * It is also the referenced set the asset collector works from (protocol §3.5.1), which is why
+     * blocks belong here from the moment the field can be *read* rather than from the moment
+     * something writes one: a device that did not count a block's assets as referenced could
+     * publish a ledger declaring a recording garbage.
      *
      * The filter is the whole test. A `background` that is not a content-addressed id is a native
      * template's name (`"lined"`) or a path from a build that predates backgrounds travelling —
@@ -100,7 +106,9 @@ sealed class CouchDocBody {
      */
     val referencedAssetIds: List<String>
         get() = when (this) {
-            is Page -> (page.images.mapNotNull { it.assetId } + page.background)
+            is Page -> (page.images.mapNotNull { it.assetId }
+                + page.blocks.flatMap { it.referencedAssetIds }
+                + page.background)
                 .filter { CouchAssetId.sha256HexOfAssetId(it) != null }
 
             is Notebook -> listOf(notebook.defaultBackground)

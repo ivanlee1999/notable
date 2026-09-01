@@ -158,6 +158,146 @@ data class CouchImage(
     }
 }
 
+/**
+ * One segment of a recording — protocol §3.3.2.
+ *
+ * A recording is stored as several assets rather than one, because an asset travels as a single
+ * base64-inlined PUT with no chunking layer, and the smallest request-body cap on the path — an
+ * nginx `client_max_body_size` left at its 1 MB default — refuses anything much over 768 KiB of
+ * raw bytes (§3.4). Segmenting also bounds what a crash loses and lets a recording still in
+ * progress reach the peer.
+ */
+@Serializable
+data class CouchAudioSegment(
+    /** The `asset:<sha256>` document holding this segment's bytes. */
+    val assetId: String = "",
+    /**
+     * Offset of this segment's first sample from the block's [CouchBlock.startedAt], in
+     * milliseconds.
+     *
+     * Authoritative, and the reason this is not derived by summing durations: a reader that has not
+     * yet fetched segment 2 still needs to know where segment 3 begins, or everything after a gap
+     * plays at the wrong offset. A missing segment must read as silence, not as a shift.
+     */
+    val startMs: Int = 0,
+    /**
+     * This segment's length. Advisory — a reader holding the blob may recompute it, and a
+     * disagreement with the next segment's [startMs] is resolved in [startMs]'s favour.
+     */
+    val durationMs: Int = 0,
+)
+
+/**
+ * A block of page content that is not ink — protocol §3.3.1.
+ *
+ * A block with neither [x] nor [y] joins the page's linear top-to-bottom flow: the flowing blocks,
+ * in `(orderKey, id)` order, with their [text] joined by a blank line, are a markdown document. A
+ * block that declares both sits at that point on the canvas, like a placed image.
+ *
+ * Blocks merge exactly the way [CouchImage]s do — union by id, tombstones win, whole-element
+ * last-writer-wins — with one difference: they are ordered by [orderKey] rather than by creation
+ * time. See `CouchMerge.mergePage`.
+ */
+@Serializable
+data class CouchBlock(
+    /**
+     * The merge key. Never reused: retyping a paragraph after deleting it mints a new id, the same
+     * rule a redrawn stroke follows, and that is what makes remove-wins sound here.
+     */
+    val id: String,
+    /**
+     * `md` | `image` | `audio` | `ink`.
+     *
+     * A string rather than an enum, and an unrecognized value is carried verbatim and drawn as a
+     * placeholder — never dropped, never coerced. This is the field that lets a fifth kind ship on
+     * one app before the other without §6.5 quarantining every page that uses it. Writers must
+     * match `[a-z][a-z0-9-]*`, so it can never carry the `blockTiebreak` separator.
+     */
+    val kind: String = "md",
+    /**
+     * Where this block sits in the flow: a fractional index, compared as UTF-8 bytes like every
+     * other string in the merge. Flow order is `(orderKey, id)` ascending.
+     *
+     * **How a key is generated is not normative; only how it is compared.** Two devices minting
+     * different keys for concurrent inserts at one point are not in disagreement — the blocks sort
+     * adjacent, broken by [id]. That is the whole reason to prefer this to an ordered array: an
+     * array's order has to be *produced* identically by two languages, and a key only has to be
+     * *compared* identically, which §4 already guarantees.
+     *
+     * Carrying order per block rather than per page is also what keeps a move from colliding with
+     * an unrelated edit. A page-level order would be a scalar, and §5.5 would hand the whole of it
+     * to one writer — so dragging a paragraph on one device would be undone by a typo fix on the
+     * other. Empty sorts first and is legal: a writer with no opinion is not a decode failure.
+     */
+    val orderKey: String = "",
+    /**
+     * Markdown *source*, for `kind == "md"`; null otherwise.
+     *
+     * Not a parsed tree, not rendered HTML, not a table of attributed runs. Those would oblige two
+     * implementations to agree on a parser — which the conformance vectors could not pin, and which
+     * a peer with a different flavour would rewrite on re-encode. The source is the one
+     * representation both apps carry losslessly without agreeing on anything.
+     */
+    val text: String? = null,
+    /** The `asset:<sha256>` holding the picture, for `kind == "image"`; null otherwise. */
+    val imageAssetId: String? = null,
+    /** The recording, in playback order, for `kind == "audio"`; empty otherwise. */
+    val segments: List<CouchAudioSegment> = emptyList(),
+    /**
+     * The [CouchPage.strokes] this block groups, for `kind == "ink"`; empty otherwise.
+     *
+     * The strokes stay in the page's stroke list and are named from here rather than nested inside.
+     * A peer that has not learned about blocks strips this field, which costs the *grouping* — and
+     * the union merge restores that from whichever device still holds it. Nested, the same push
+     * would strip the *strokes*, and they would be gone from the list the peer would have
+     * re-offered them from. Ids naming strokes that no longer exist are kept, not filtered; readers
+     * skip them, the way §5.2.2 keeps an outline entry whose page is gone.
+     */
+    val strokeIds: List<String> = emptyList(),
+    /**
+     * Page units, top-left, the same coordinate space and the same `Int` type as [CouchImage].
+     *
+     * **Both null means flowing; both present means positioned; exactly one present means
+     * flowing** — a reader rule, never a decode failure. Unlike a page's sheet, zero is a
+     * meaningful value here (the top-left corner), so there is no non-positive rule.
+     */
+    val x: Int? = null,
+    val y: Int? = null,
+    /**
+     * The wrap width and laid-out height of a positioned block; null for a flowing one. [height] is
+     * advisory, since text reflows and a reader recomputes it, but it is carried so a peer can lay
+     * a page out before it has shaped the text.
+     */
+    val width: Int? = null,
+    val height: Int? = null,
+    /**
+     * When the recording started, on the corrected clock (§7.1a); `audio` only.
+     *
+     * The anchor ink replay is measured from: a stroke's offset into the recording is
+     * `stroke.createdAt - startedAt`. Storing that per stroke would be a wire field per stroke to
+     * say something both clocks already say.
+     */
+    val startedAt: String? = null,
+    val createdAt: String,
+    var updatedAt: String = "",
+    /** Which device last wrote this block. The first component of `blockTiebreak`. */
+    val deviceId: String = "",
+) {
+    init {
+        if (updatedAt.isEmpty()) updatedAt = createdAt
+    }
+
+    /** Whether this block joins the page's linear flow, rather than sitting at a point on it. */
+    val isFlowing: Boolean get() = x == null || y == null
+
+    /**
+     * The assets this block's bytes live in, whatever its kind — what the push ordering, the
+     * "still to download" enumeration and §3.5.1's referenced set all read.
+     */
+    val referencedAssetIds: List<String>
+        get() = listOfNotNull(imageAssetId) + segments.map { it.assetId }
+}
+
 @Serializable
 data class CouchPage(
     val type: String = CouchDocType.PAGE,
@@ -175,6 +315,13 @@ data class CouchPage(
     val deletedStrokes: List<CouchTombstone> = emptyList(),
     val images: List<CouchImage> = emptyList(),
     val deletedImages: List<CouchTombstone> = emptyList(),
+    // Typed text, pictures, recordings and ink groupings — see [CouchBlock]. Absent from every page
+    // written before blocks existed, and decoded as empty, which is what a page with none means
+    // anyway.
+    val blocks: List<CouchBlock> = emptyList(),
+    // The block half of [deletedStrokes]. Blocks tombstone rather than carrying a `removed` flag
+    // because, like a stroke and unlike a bookmark, a block never comes back under the same id.
+    val deletedBlocks: List<CouchTombstone> = emptyList(),
     val createdAt: String,
     var updatedAt: String = "",
     val updatedBy: String = "",
