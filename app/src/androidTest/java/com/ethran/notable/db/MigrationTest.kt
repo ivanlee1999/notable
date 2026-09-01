@@ -814,6 +814,87 @@ class MigrationTest {
         val openPageId: String?,
     )
 
+    @Test
+    fun migrate48To49_addsBlockTablesWithoutLosingData() {
+        val dbName = "migration-test-49"
+
+        val oldDb = helper.createDatabase(dbName, 48)
+        oldDb.execSQL(
+            """
+            INSERT INTO Notebook (id, title, openPageId, pageIds, parentFolderId,
+                defaultBackground, defaultBackgroundType, linkedExternalUri, createdAt, updatedAt)
+            VALUES ('notebook1', 'Kept', NULL, '["page1"]', NULL, 'blank', 'native', NULL,
+                1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.execSQL(
+            """
+            INSERT INTO Page (id, scroll, notebookId, background, backgroundType, createdAt,
+                updatedAt)
+            VALUES ('page1', 0, 'notebook1', 'blank', 'native', 1620000000000, 1620000000000)
+            """.trimIndent()
+        )
+        oldDb.close()
+
+        val roomDb = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
+            .addMigrations(*APP_MIGRATIONS)
+            .build()
+        val migratedDb = roomDb.openHelper.writableDatabase
+
+        // Nothing was dropped on the way. 48 -> 49 adds tables and touches no existing row, so a
+        // page that had no blocks before is a page with no blocks now.
+        migratedDb.query("SELECT title FROM Notebook WHERE id = 'notebook1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Kept", it.getString(it.getColumnIndexOrThrow("title")))
+        }
+        migratedDb.query("SELECT COUNT(*) FROM Block").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0, it.getInt(0))
+        }
+
+        // Inserting and reading back is what actually proves the column set, the NOT NULL-ness and
+        // the defaults — a COUNT on an empty table would pass against almost any schema.
+        migratedDb.execSQL(
+            """
+            INSERT INTO Block (id, pageId, kind, orderKey, text, payload, createdAt, updatedAt,
+                deviceId)
+            VALUES ('b1', 'page1', 'md', 'a0', '## Groceries', '{}', 1620000000010,
+                1620000000010, 'boox')
+            """.trimIndent()
+        )
+        migratedDb.query(
+            "SELECT pageId, kind, orderKey, text, payload FROM Block WHERE id = 'b1'"
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("page1", it.getString(it.getColumnIndexOrThrow("pageId")))
+            assertEquals("md", it.getString(it.getColumnIndexOrThrow("kind")))
+            assertEquals("a0", it.getString(it.getColumnIndexOrThrow("orderKey")))
+            assertEquals("## Groceries", it.getString(it.getColumnIndexOrThrow("text")))
+            assertEquals("{}", it.getString(it.getColumnIndexOrThrow("payload")))
+        }
+
+        // A tombstone deliberately has no foreign key, so it outlives the page it names — that is
+        // the whole point of it, and a cascade here would erase the record of the deletion.
+        migratedDb.execSQL(
+            "INSERT INTO DeletedBlock (blockId, pageId, deletedAt) VALUES ('b2', 'page1', 1620000000020)"
+        )
+        migratedDb.execSQL("PRAGMA foreign_keys = ON")
+        migratedDb.execSQL("DELETE FROM Page WHERE id = 'page1'")
+
+        // The block cascaded with its page...
+        migratedDb.query("SELECT COUNT(*) FROM Block WHERE id = 'b1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0, it.getInt(0))
+        }
+        // ...and the tombstone did not.
+        migratedDb.query("SELECT COUNT(*) FROM DeletedBlock WHERE blockId = 'b2'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1, it.getInt(0))
+        }
+
+        roomDb.close()
+    }
+
     /** The notebook 47 -> 48 built around [pageId]. */
     private fun notebookOf(db: SupportSQLiteDatabase, pageId: String): MigratedNotebook {
         val notebookId = db.query("SELECT notebookId FROM Page WHERE id = '$pageId'").use {

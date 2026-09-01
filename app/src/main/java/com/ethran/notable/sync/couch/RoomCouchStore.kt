@@ -4,6 +4,8 @@ import com.ethran.notable.data.AppRepository
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureImagesFolder
+import com.ethran.notable.data.db.Block
+import com.ethran.notable.data.db.DeletedBlock
 import com.ethran.notable.data.db.DeletedImage
 import com.ethran.notable.data.db.DeletedPage
 import com.ethran.notable.data.db.DeletedStroke
@@ -512,6 +514,9 @@ class RoomCouchStore(
             images = data.images.map(::couchImage),
             deletedImages = appRepository.deletedImageRepository.getByPage(id)
                 .map { CouchTombstone(id = it.imageId, deletedAt = iso(it.deletedAt)) },
+            blocks = data.blocks.map(::couchBlock),
+            deletedBlocks = appRepository.deletedBlockRepository.getByPage(id)
+                .map { CouchTombstone(id = it.blockId, deletedAt = iso(it.deletedAt)) },
             createdAt = iso(data.page.createdAt),
             updatedAt = iso(data.page.updatedAt),
             // Null means this device wrote it last; see [Page.updatedBy].
@@ -700,6 +705,78 @@ class RoomCouchStore(
         val hash = hashFile(file) ?: return null
         hashedFiles[file.path] = stamp to hash
         return hash
+    }
+
+    /**
+     * The kind-specific half of a block, as one column rather than several.
+     *
+     * A store detail, not a wire one: the document carries these as typed fields, and this is only
+     * how they are folded into [Block.payload] so that a future block kind needs no schema bump.
+     * Decoded with [couchJson], which is lenient, so a column written by a build that has since
+     * gained a field still reads.
+     */
+    @kotlinx.serialization.Serializable
+    private data class BlockPayload(
+        val imageAssetId: String? = null,
+        val segments: List<CouchAudioSegment> = emptyList(),
+        val strokeIds: List<String> = emptyList(),
+    ) {
+        fun isEmpty(): Boolean =
+            imageAssetId == null && segments.isEmpty() && strokeIds.isEmpty()
+    }
+
+    private fun blockPayload(json: String): BlockPayload =
+        if (json.isBlank() || json == "{}") BlockPayload()
+        else runCatching { couchJson.decodeFromString<BlockPayload>(json) }.getOrElse {
+            // A payload this build cannot read is carried as nothing rather than throwing: one
+            // unreadable block must not make the whole page fail to load, and §6.5's conflict-copy
+            // path is for documents, not for a column this device wrote itself.
+            BlockPayload()
+        }
+
+    private fun couchBlock(block: Block): CouchBlock {
+        val payload = blockPayload(block.payload)
+        return CouchBlock(
+            id = block.id,
+            kind = block.kind,
+            orderKey = block.orderKey,
+            text = block.text,
+            imageAssetId = payload.imageAssetId,
+            segments = payload.segments,
+            strokeIds = payload.strokeIds,
+            x = block.x,
+            y = block.y,
+            width = block.width,
+            height = block.height,
+            startedAt = block.startedAt?.let(::iso),
+            createdAt = iso(block.createdAt),
+            updatedAt = iso(block.updatedAt),
+            deviceId = block.deviceId,
+        )
+    }
+
+    private fun blockRow(block: CouchBlock, pageId: String): Block {
+        val payload = BlockPayload(
+            imageAssetId = block.imageAssetId,
+            segments = block.segments,
+            strokeIds = block.strokeIds,
+        )
+        return Block(
+            id = block.id,
+            pageId = pageId,
+            kind = block.kind,
+            orderKey = block.orderKey,
+            text = block.text,
+            payload = if (payload.isEmpty()) "{}" else couchJson.encodeToString(payload),
+            x = block.x,
+            y = block.y,
+            width = block.width,
+            height = block.height,
+            startedAt = block.startedAt?.let(::date),
+            createdAt = date(block.createdAt),
+            updatedAt = date(block.updatedAt),
+            deviceId = block.deviceId,
+        )
     }
 
     private fun couchImage(image: Image): CouchImage = CouchImage(
@@ -917,6 +994,29 @@ class RoomCouchStore(
         appRepository.deletedImageRepository.upsertAll(
             page.deletedImages.map {
                 DeletedImage(imageId = it.id, pageId = id, deletedAt = date(it.deletedAt))
+            }
+        )
+
+        // Blocks, by the same rules as the images above but without their complication: a block
+        // names its assets by id on both sides, so there is no local path to preserve and nothing
+        // to re-home.
+        val tombstonedBlocks = page.deletedBlocks.map { it.id }.toSet()
+        val incomingBlocks = page.blocks.map { blockRow(it, id) }
+        val incomingBlockIds = incomingBlocks.map { it.id }.toSet()
+        val existingBlockIds = existing?.blocks?.map { it.id }.orEmpty().toSet()
+        // §6.1a: only content the merge actually saw may be removed. A block typed while the merge
+        // was in flight is not something the merge decided against.
+        val mergedBlocks = basedOn?.blocks?.map { it.id }?.toSet() ?: existingBlockIds
+        appRepository.blockRepository.deleteByIds(
+            (((mergedBlocks - incomingBlockIds) + tombstonedBlocks) intersect existingBlockIds)
+                .toList()
+        )
+        appRepository.blockRepository.upsertAll(
+            incomingBlocks.filter { it.id !in tombstonedBlocks }
+        )
+        appRepository.deletedBlockRepository.upsertAll(
+            page.deletedBlocks.map {
+                DeletedBlock(blockId = it.id, pageId = id, deletedAt = date(it.deletedAt))
             }
         )
     }

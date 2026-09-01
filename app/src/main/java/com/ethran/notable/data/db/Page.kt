@@ -111,7 +111,20 @@ data class PageWithData(
         parentColumn = "id",
         entityColumn = "pageId",
         entity = Image::class
-    ) val images: List<Image>
+    ) val images: List<Image>,
+    /**
+     * Typed text, pictures, recordings and ink groupings — see [Block].
+     *
+     * Defaulted so callers that build a [PageWithData] by hand — the XOPP and PDF importers —
+     * keep compiling and keep meaning what they meant. Joining here rather than querying
+     * separately puts blocks on all three paths that need them at once: the editor's page load,
+     * the sync push, and the export renderer.
+     */
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "pageId",
+        entity = Block::class
+    ) val blocks: List<Block> = emptyList()
 )
 
 
