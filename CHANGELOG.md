@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.47.0
+
+Nothing you can see yet. This release is groundwork your tablet has to be
+carrying *before* the next one can be switched on.
+
+Notable and the iPad app are about to learn typed text, inserted pictures and
+voice recordings, which arrive as a new kind of content on a page. The two apps
+sync by merging documents, and neither of them keeps hold of a field it does not
+understand — so if one app started writing this content while the other had never
+heard of it, the second would quietly delete it every time it saved. That is not
+hypothetical: it happened once with page titles, and a note renamed on the iPad
+kept being un-renamed by the BOOX, with the tests on both sides passing the whole
+time.
+
+So the reading half ships first, on both devices, and the writing half waits. A
+tablet on this version understands the new content well enough to keep it, hand
+it on, and leave it alone.
+
+### Worth knowing
+
+There is nothing to try, nothing to turn on, and nothing you can do wrong. If you
+skip this version you will not lose anything today — but you will want it on the
+tablet before the version that starts writing.
+
+No database change.
+
 ## 0.46.0
 
 The paper you pick is the paper the rest of the notebook gets.
