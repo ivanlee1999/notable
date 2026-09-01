@@ -48,6 +48,29 @@ jobs:
         # step below is the one that actually gates.
         continue-on-error: true
 
+      # A vectors change has to land in both repos and git cannot make that one commit, so the two
+      # PRs are each red until the other merges: this job diffs against bopa's *default* branch,
+      # which does not have the new file yet, and bopa's job diffs against ours for the same reason.
+      # Neither can go first without someone overriding the check, and a check that is routinely
+      # overridden stops being a check.
+      #
+      # So when bopa has a branch named the same as this PR's, diff against that. The twin PRs go
+      # green together and merge together, which is the workflow the shared-vector design assumes.
+      # Anything else — a lone change here, a push to main — falls back to the default branch and
+      # gates exactly as before.
+      - name: Prefer bopa's matching branch
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: .bopa
+        run: |
+          branch='${{ github.head_ref }}'
+          if git fetch --depth 1 origin "$branch" 2>/dev/null; then
+            git checkout -q FETCH_HEAD
+            echo "::notice::bopa has a branch named $branch; diffing the vectors against it."
+          else
+            echo "bopa has no $branch; diffing against its default branch."
+          fi
+
       - name: Couch sync vectors match bopa
         run: |
           mine=app/src/test/resources/couch-sync-vectors/vectors.json
