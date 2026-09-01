@@ -73,8 +73,8 @@ class Converters {
 
 
 @Database(
-    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class],
-    version = 48,
+    entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class, Block::class, DeletedBlock::class],
+    version = 49,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -116,6 +116,11 @@ class Converters {
         // adds them itself and every existing notebook reads as having neither.
         AutoMigration(46, 47),
         // 47 -> 48 is hand-written: see MIGRATION_47_48 in Migrations.kt.
+        // Block / DeletedBlock: two new tables and nothing existing touched, so Room writes the
+        // CREATE TABLEs itself — the same shape as 39 -> 40, which added the tombstone tables. The
+        // hand-written migrations in this list are the ones that rewrite or backfill data; this
+        // does neither, and a page with no blocks is what every page already is.
+        AutoMigration(48, 49),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -132,6 +137,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deletedStrokeDao(): DeletedStrokeDao
     abstract fun deletedPageDao(): DeletedPageDao
     abstract fun deletedImageDao(): DeletedImageDao
+    abstract fun blockDao(): BlockDao
+    abstract fun deletedBlockDao(): DeletedBlockDao
     abstract fun couchDeletionDao(): CouchDeletionDao
     abstract fun couchOutboxDao(): CouchOutboxDao
 
@@ -234,6 +241,14 @@ object DatabaseModule {
     @Provides
     fun provideDeletedImageDao(db: AppDatabase): DeletedImageDao =
         db.deletedImageDao()
+
+    @Provides
+    fun provideBlockDao(db: AppDatabase): BlockDao =
+        db.blockDao()
+
+    @Provides
+    fun provideDeletedBlockDao(db: AppDatabase): DeletedBlockDao =
+        db.deletedBlockDao()
 
     @Provides
     fun provideCouchDeletionDao(db: AppDatabase): CouchDeletionDao =

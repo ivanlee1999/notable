@@ -75,9 +75,19 @@ object CouchAssetId {
             startsWith("RIFF".toByteArray()) && startsWith("WEBP".toByteArray(), 8) -> "image/webp"
             startsWith("ftypheic".toByteArray(), 4) -> "image/heic"
             startsWith("%PDF".toByteArray()) -> "application/pdf"
+            // Recordings. `M4A ` — trailing space, it is a four-character box type — is what an
+            // audio file *should* be branded, but MediaRecorder here routinely writes an audio-only
+            // .m4a branded `isom` or `mp42`, so sniffing only `M4A ` would label most recordings
+            // made on this device as raw bytes. Those three are also video-MP4 brands; this
+            // protocol carries no video, so the ambiguity is unreachable — and a future video kind
+            // must pass its content type explicitly rather than rely on this.
+            AUDIO_MP4_BRANDS.any { startsWith(it.toByteArray(), 4) } -> "audio/mp4"
             else -> "application/octet-stream"
         }
     }
+
+    private val AUDIO_MP4_BRANDS =
+        listOf("ftypM4A ", "ftypisom", "ftypiso2", "ftypmp41", "ftypmp42")
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 }

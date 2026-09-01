@@ -3,9 +3,11 @@ package com.ethran.notable.data
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
+import com.ethran.notable.data.db.BlockRepository
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CouchOutboxRepository
+import com.ethran.notable.data.db.DeletedBlockRepository
 import com.ethran.notable.data.db.DeletedImageRepository
 import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
@@ -53,6 +55,8 @@ class AppRepository @Inject constructor(
     val deletedStrokeRepository: DeletedStrokeRepository,
     val deletedPageRepository: DeletedPageRepository,
     val deletedImageRepository: DeletedImageRepository,
+    val blockRepository: BlockRepository,
+    val deletedBlockRepository: DeletedBlockRepository,
     val couchDeletionRepository: CouchDeletionRepository,
     val couchOutboxRepository: CouchOutboxRepository,
     // Staging a deletion, so a folder and its subtree can be thrown away and brought back. The
@@ -457,6 +461,9 @@ class AppRepository @Inject constructor(
         db.withTransaction {
             deletedStrokeRepository.deleteOlderThan(cutoffMillis)
             deletedImageRepository.deleteOlderThan(cutoffMillis)
+            // A block tombstone names content, not a position, so it prunes on the same horizon as
+            // a stroke's rather than being kept indefinitely like a page's.
+            deletedBlockRepository.deleteOlderThan(cutoffMillis)
         }
     }
 

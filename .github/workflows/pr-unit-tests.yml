@@ -90,6 +90,35 @@ jobs:
           [ $status -eq 0 ] && echo "couch sync vectors match"
           exit $status
 
+      # Room writes a JSON snapshot of every schema version, and the migration tests read the
+      # committed ones out of the androidTest assets — so a schema bump whose snapshot nobody
+      # committed compiles, ships, and fails only on the device, in the one test that would have
+      # caught it. Compiling above regenerates them; if that changed anything tracked, the commit is
+      # incomplete.
+      - name: Committed Room schemas are current
+        run: |
+          # --porcelain, not `git diff`: the case this exists for is a *new* version's snapshot,
+          # which is untracked, and `git diff` does not see untracked files at all.
+          changed="$(git status --porcelain -- app/schemas)"
+          if [ -n "$changed" ]; then
+            echo "::error::app/schemas is stale — the build produced a schema that is not"
+            echo "::error::committed. Download the room-schemas artifact from this run and commit"
+            echo "::error::the files it names."
+            echo "$changed"
+            exit 1
+          fi
+          echo "Room schemas are current"
+
+      # Uploaded whether or not the check above passed, because when it fails this is how you get
+      # the file it is asking for.
+      - name: Upload Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas
+          path: app/schemas
+          if-no-files-found: warn
+
       # Advisory, not a gate. This codebase has never had a lint step, so turning one on as
       # blocking would fail every PR on pre-existing findings rather than on the change under
       # review. Report first; tighten once the baseline is clean.

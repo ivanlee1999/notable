@@ -19,6 +19,12 @@ package com.ethran.notable.data
  *   header — [BYTES_PER_STROKE].
  * - An [com.ethran.notable.data.db.Image] row is metadata only (the bitmap is windowed separately),
  *   so [BYTES_PER_IMAGE] is small.
+ * - A [com.ethran.notable.data.db.Block] row is metadata plus its markdown, and the markdown is the
+ *   part that can actually be large — a page of prose is tens of kilobytes of `String`, which is
+ *   two bytes a character on the JVM. [BYTES_PER_BLOCK] covers the row, and [BYTES_PER_MD_CHAR]
+ *   the text. The *laid-out* text is deliberately not counted here: it is derived and evictable,
+ *   which makes it the analogue of a cached background rather than of a stroke row, and it belongs
+ *   on its own budget.
  *
  * These are counting constants, not a claim of exact heap layout; calibrate against the
  * estimate/actual telemetry (see [PageDataManager] admission logging).
@@ -27,15 +33,25 @@ object PageMemoryModel {
     const val BYTES_PER_STROKE = 160L
     const val BYTES_PER_POINT = 96L
     const val BYTES_PER_IMAGE = 256L
+    const val BYTES_PER_BLOCK = 512L
+    const val BYTES_PER_MD_CHAR = 4L
 
     /**
      * Resident bytes for a loaded page, from cheap counts (all O(1)/O(strokes), never O(points)).
      * [totalPointCount] is the summed `points.size` across the page's strokes.
      */
-    fun entryBytes(strokeCount: Int, totalPointCount: Long, imageCount: Int): Long =
+    fun entryBytes(
+        strokeCount: Int,
+        totalPointCount: Long,
+        imageCount: Int,
+        blockCount: Int = 0,
+        totalMarkdownChars: Long = 0,
+    ): Long =
         strokeCount * BYTES_PER_STROKE +
             totalPointCount * BYTES_PER_POINT +
-            imageCount * BYTES_PER_IMAGE
+            imageCount * BYTES_PER_IMAGE +
+            blockCount * BYTES_PER_BLOCK +
+            totalMarkdownChars * BYTES_PER_MD_CHAR
 
     /**
      * Expansion constant K mapping a page's compressed on-disk blob size (`SUM(LENGTH(points))`,
@@ -46,6 +62,17 @@ object PageMemoryModel {
 
     /** Pre-load resident estimate for admission, from the summed stroke-blob bytes of a page. */
     fun estimateResidentBytes(sumBlobBytes: Long): Long = sumBlobBytes * BLOB_EXPANSION_K
+
+    /**
+     * The same pre-load estimate, told about the page's markdown as well as its ink.
+     *
+     * [sumMarkdownChars] is `SUM(LENGTH(text))` over the page's blocks — the second half of the
+     * cheap query the admission check already makes. Without it a page carrying two hundred
+     * kilobytes of prose and no strokes estimates as *nothing*, at exactly the moment the cache is
+     * deciding whether it fits: the OOM guard would wave through the one page most able to trip it.
+     */
+    fun estimateResidentBytes(sumBlobBytes: Long, sumMarkdownChars: Long): Long =
+        estimateResidentBytes(sumBlobBytes) + sumMarkdownChars * BYTES_PER_MD_CHAR
 }
 
 /**

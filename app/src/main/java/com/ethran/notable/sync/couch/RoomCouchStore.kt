@@ -3,7 +3,10 @@ package com.ethran.notable.sync.couch
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.data.ensureBackgroundsFolder
+import com.ethran.notable.data.ensureAudioFolder
 import com.ethran.notable.data.ensureImagesFolder
+import com.ethran.notable.data.db.Block
+import com.ethran.notable.data.db.DeletedBlock
 import com.ethran.notable.data.db.DeletedImage
 import com.ethran.notable.data.db.DeletedPage
 import com.ethran.notable.data.db.DeletedStroke
@@ -80,6 +83,7 @@ class RoomCouchStore(
      * `android.*`.
      */
     private val imagesFolder: () -> File = ::ensureImagesFolder,
+    private val audioFolder: () -> File = ::ensureAudioFolder,
     /** Where a downloaded PDF or background picture is filed. Deferred for the same reason. */
     private val backgroundsFolder: () -> File = ::ensureBackgroundsFolder,
     /**
@@ -512,6 +516,9 @@ class RoomCouchStore(
             images = data.images.map(::couchImage),
             deletedImages = appRepository.deletedImageRepository.getByPage(id)
                 .map { CouchTombstone(id = it.imageId, deletedAt = iso(it.deletedAt)) },
+            blocks = data.blocks.map(::couchBlock),
+            deletedBlocks = appRepository.deletedBlockRepository.getByPage(id)
+                .map { CouchTombstone(id = it.blockId, deletedAt = iso(it.deletedAt)) },
             createdAt = iso(data.page.createdAt),
             updatedAt = iso(data.page.updatedAt),
             // Null means this device wrote it last; see [Page.updatedBy].
@@ -553,8 +560,11 @@ class RoomCouchStore(
         val images = runCatching { imagesFolder() }.getOrNull()
         val backgrounds = runCatching { backgroundsFolder() }.getOrNull()
 
+        val audio = runCatching { audioFolder() }.getOrNull()
+
         val named = buildList {
             images?.let { add(File(it, sha)) }
+            audio?.let { add(File(it, sha)) }
             backgrounds?.let { folder ->
                 CouchBackgroundFiles.fileNamesFor(sha).forEach { add(File(folder, it)) }
             }
@@ -564,6 +574,7 @@ class RoomCouchStore(
         referencedFile(sha)?.let { return it }
 
         images?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
+        audio?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
         // Backgrounds sit one level down, in `pdfs/` or `images/`, so this walks rather than lists.
         // Hashes are remembered ([hashOf]), so a notebook's own PDF is read once and not once per
         // page that names it.
@@ -700,6 +711,78 @@ class RoomCouchStore(
         val hash = hashFile(file) ?: return null
         hashedFiles[file.path] = stamp to hash
         return hash
+    }
+
+    /**
+     * The kind-specific half of a block, as one column rather than several.
+     *
+     * A store detail, not a wire one: the document carries these as typed fields, and this is only
+     * how they are folded into [Block.payload] so that a future block kind needs no schema bump.
+     * Decoded with [couchJson], which is lenient, so a column written by a build that has since
+     * gained a field still reads.
+     */
+    @kotlinx.serialization.Serializable
+    private data class BlockPayload(
+        val imageAssetId: String? = null,
+        val segments: List<CouchAudioSegment> = emptyList(),
+        val strokeIds: List<String> = emptyList(),
+    ) {
+        fun isEmpty(): Boolean =
+            imageAssetId == null && segments.isEmpty() && strokeIds.isEmpty()
+    }
+
+    private fun blockPayload(json: String): BlockPayload =
+        if (json.isBlank() || json == "{}") BlockPayload()
+        else runCatching { couchJson.decodeFromString<BlockPayload>(json) }.getOrElse {
+            // A payload this build cannot read is carried as nothing rather than throwing: one
+            // unreadable block must not make the whole page fail to load, and §6.5's conflict-copy
+            // path is for documents, not for a column this device wrote itself.
+            BlockPayload()
+        }
+
+    private fun couchBlock(block: Block): CouchBlock {
+        val payload = blockPayload(block.payload)
+        return CouchBlock(
+            id = block.id,
+            kind = block.kind,
+            orderKey = block.orderKey,
+            text = block.text,
+            imageAssetId = payload.imageAssetId,
+            segments = payload.segments,
+            strokeIds = payload.strokeIds,
+            x = block.x,
+            y = block.y,
+            width = block.width,
+            height = block.height,
+            startedAt = block.startedAt?.let(::iso),
+            createdAt = iso(block.createdAt),
+            updatedAt = iso(block.updatedAt),
+            deviceId = block.deviceId,
+        )
+    }
+
+    private fun blockRow(block: CouchBlock, pageId: String): Block {
+        val payload = BlockPayload(
+            imageAssetId = block.imageAssetId,
+            segments = block.segments,
+            strokeIds = block.strokeIds,
+        )
+        return Block(
+            id = block.id,
+            pageId = pageId,
+            kind = block.kind,
+            orderKey = block.orderKey,
+            text = block.text,
+            payload = if (payload.isEmpty()) "{}" else couchJson.encodeToString(payload),
+            x = block.x,
+            y = block.y,
+            width = block.width,
+            height = block.height,
+            startedAt = block.startedAt?.let(::date),
+            createdAt = date(block.createdAt),
+            updatedAt = date(block.updatedAt),
+            deviceId = block.deviceId,
+        )
     }
 
     private fun couchImage(image: Image): CouchImage = CouchImage(
@@ -919,6 +1002,29 @@ class RoomCouchStore(
                 DeletedImage(imageId = it.id, pageId = id, deletedAt = date(it.deletedAt))
             }
         )
+
+        // Blocks, by the same rules as the images above but without their complication: a block
+        // names its assets by id on both sides, so there is no local path to preserve and nothing
+        // to re-home.
+        val tombstonedBlocks = page.deletedBlocks.map { it.id }.toSet()
+        val incomingBlocks = page.blocks.map { blockRow(it, id) }
+        val incomingBlockIds = incomingBlocks.map { it.id }.toSet()
+        val existingBlockIds = existing?.blocks?.map { it.id }.orEmpty().toSet()
+        // §6.1a: only content the merge actually saw may be removed. A block typed while the merge
+        // was in flight is not something the merge decided against.
+        val mergedBlocks = basedOn?.blocks?.map { it.id }?.toSet() ?: existingBlockIds
+        appRepository.blockRepository.deleteByIds(
+            (((mergedBlocks - incomingBlockIds) + tombstonedBlocks) intersect existingBlockIds)
+                .toList()
+        )
+        appRepository.blockRepository.upsertAll(
+            incomingBlocks.filter { it.id !in tombstonedBlocks }
+        )
+        appRepository.deletedBlockRepository.upsertAll(
+            page.deletedBlocks.map {
+                DeletedBlock(blockId = it.id, pageId = id, deletedAt = date(it.deletedAt))
+            }
+        )
     }
 
     private suspend fun applyFolder(id: String, folder: CouchFolder) {
@@ -1069,11 +1175,27 @@ class RoomCouchStore(
     private suspend fun pendingAssets(): List<PendingAsset> {
         val pending = mutableListOf<PendingAsset>()
 
-        if (runCatching { imagesFolder() }.isSuccess) {
+        val images = runCatching { imagesFolder() }.getOrNull()
+        if (images != null) {
             appRepository.imageRepository.getAllUris()
                 .mapNotNull { uri -> CouchImageFiles.fileFor(uri) }
                 .filter { !it.exists() && CouchAssetId.isSha256Hex(it.name) }
                 .forEach { pending += PendingAsset(CouchDocId.asset(it.name), it) }
+        }
+
+        // A block names its bytes by id — a picture in the images folder, a recording's segments
+        // in the audio folder — so a missing file under a hash-shaped name is the record of a
+        // download still owed, exactly as it is for a placed image. Without this a received
+        // recording would merge, render as a pill, and never play: nothing would ever ask for it.
+        val audio = runCatching { audioFolder() }.getOrNull()
+        appRepository.blockRepository.getPayloads().forEach { json ->
+            val payload = blockPayload(json)
+            payload.imageAssetId?.let { assetId ->
+                pendingBlockAsset(assetId, images)?.let { pending += it }
+            }
+            payload.segments.forEach { segment ->
+                pendingBlockAsset(segment.assetId, audio)?.let { pending += it }
+            }
         }
 
         appRepository.pageRepository.getFileBackgrounds().forEach { row ->
@@ -1083,6 +1205,13 @@ class RoomCouchStore(
             pendingBackground(row.background, row.backgroundType)?.let { pending += it }
         }
         return pending
+    }
+
+    private fun pendingBlockAsset(assetId: String, folder: File?): PendingAsset? {
+        if (folder == null) return null
+        val sha = CouchAssetId.sha256HexOfAssetId(assetId) ?: return null
+        val file = File(folder, sha)
+        return if (file.exists()) null else PendingAsset(assetId, file)
     }
 
     private fun pendingBackground(background: String, backgroundType: String): PendingAsset? {
