@@ -212,8 +212,10 @@ object CouchMerge {
     fun mergePage(a: CouchPage, b: CouchPage): CouchPage {
         val deletedStrokes = unionTombstones(a.deletedStrokes, b.deletedStrokes)
         val deletedImages = unionTombstones(a.deletedImages, b.deletedImages)
+        val deletedBlocks = unionTombstones(a.deletedBlocks, b.deletedBlocks)
         val removedStrokeIds = deletedStrokes.map { it.id }.toSet()
         val removedImageIds = deletedImages.map { it.id }.toSet()
+        val removedBlockIds = deletedBlocks.map { it.id }.toSet()
 
         // Erasure beats drawing: a stroke one side still holds and the other tombstoned is gone on
         // both. Safe because a redrawn stroke always gets a fresh id, so "remove wins" can never
@@ -222,13 +224,27 @@ object CouchMerge {
             preferredStroke(x, y)
         }
             .filter { it.id !in removedStrokeIds }
-            .sortedBy { orderKey(it.createdAt, it.id) }
+            .sortedBy { contentSortKey(it.createdAt, it.id) }
 
         val images = unionById(a.images, b.images, id = { it.id }) { x, y ->
             preferredImage(x, y)
         }
             .filter { it.id !in removedImageIds }
-            .sortedBy { orderKey(it.createdAt, it.id) }
+            .sortedBy { contentSortKey(it.createdAt, it.id) }
+
+        // Blocks are the images clause with a different sort key, and the difference is the whole
+        // point: strokes and images order by when they were made, because that is what decides
+        // which is on top. A document orders by where its paragraphs are, and a creation instant
+        // cannot say "between these two" — so a block carries its own key and the merge sorts on
+        // it, bytewise like every other string here (§4).
+        val blocks = unionById(a.blocks, b.blocks, id = { it.id }) { x, y ->
+            preferredBlock(x, y)
+        }
+            .filter { it.id !in removedBlockIds }
+            .sortedWith { x, y ->
+                val byKey = byteCompare(x.orderKey, y.orderKey)
+                if (byKey != 0) byKey else byteCompare(x.id, y.id)
+            }
 
         val pageAWins = pageWins(a, b)
         val winner = if (pageAWins) a else b
@@ -250,6 +266,8 @@ object CouchMerge {
             deletedStrokes = deletedStrokes,
             images = images,
             deletedImages = deletedImages,
+            blocks = blocks,
+            deletedBlocks = deletedBlocks,
             createdAt = earlier(a.createdAt, b.createdAt),
             updatedAt = later(a.updatedAt, b.updatedAt),
             updatedBy = winner.updatedBy,
@@ -275,6 +293,13 @@ object CouchMerge {
         return if (byteCompare(imageTiebreak(x), imageTiebreak(y)) >= 0) x else y
     }
 
+    private fun preferredBlock(x: CouchBlock, y: CouchBlock): CouchBlock {
+        val mx = millis(x.updatedAt)
+        val my = millis(y.updatedAt)
+        if (mx != my) return if (mx > my) x else y
+        return if (byteCompare(blockTiebreak(x), blockTiebreak(y)) >= 0) x else y
+    }
+
     /**
      * Total order over every field of a stroke. Floats go in as their IEEE-754 bit patterns:
      * Swift's `Float.bitPattern` is a `UInt32`, so it is rendered here as an *unsigned* decimal —
@@ -298,10 +323,37 @@ object CouchMerge {
     ).joinToString("|")
 
     /**
-     * Sort key for page content: creation instant, then id to break exact ties. Determines the
-     * z-order two independently drawn strokes settle into.
+     * Total order over every field of a block.
+     *
+     * No floats appear, and that is by construction rather than by luck: a block's geometry is `Int`
+     * page units exactly like an image's, so the bit-pattern rendering [strokeTiebreak] needs is
+     * unreachable here.
+     *
+     * [CouchBlock.text] is last because it is the only component that can contain the separator.
+     * Every field before it is drawn from a grammar that excludes `|` — ids and asset ids are UUID-
+     * or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
+     * normatively `[a-z][a-z0-9-]*` — so with exactly one separator-bearing component, and it
+     * terminal, the map from block to key is injective and this order is genuinely total.
      */
-    private fun orderKey(createdAt: String, id: String): String =
+    private fun blockTiebreak(b: CouchBlock): String = listOf(
+        b.deviceId, b.createdAt, b.updatedAt, b.kind, b.orderKey,
+        b.x?.toString() ?: "", b.y?.toString() ?: "",
+        b.width?.toString() ?: "", b.height?.toString() ?: "",
+        b.startedAt ?: "", b.imageAssetId ?: "",
+        b.segments.joinToString(",") { "${it.assetId}:${it.startMs}:${it.durationMs}" },
+        b.strokeIds.joinToString(","),
+        b.text ?: "",
+    ).joinToString("|")
+
+    /**
+     * Sort key for drawn page content: creation instant, then id to break exact ties. Determines
+     * the z-order two independently drawn strokes settle into.
+     *
+     * Named apart from [CouchBlock.orderKey], which is a different thing entirely: this is derived
+     * from when content was made and decides what is on top, while a block's key is authored, says
+     * where a paragraph sits in a document, and is the one thing a reorder edits.
+     */
+    private fun contentSortKey(createdAt: String, id: String): String =
         // Fixed-width so string comparison matches numeric comparison of the instant.
         String.format(Locale.ROOT, "%020d|%s", millis(createdAt), id)
 
