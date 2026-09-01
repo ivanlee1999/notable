@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.48.0
+
+Still nothing you can see — but where 0.47.0 taught Notable to *recognise* typed
+content, this one gives it somewhere to keep it and the means to fetch it.
+
+A page can now hold typed paragraphs, pictures and voice recordings that were
+made on another device: the database has room for them, they survive being
+edited on both devices at once, and the audio actually downloads rather than
+sitting there as a button that does nothing. The iPad app gained the same in the
+same change, because a rule that only one of them follows is worse than no rule.
+
+### Worth knowing
+
+Your notebooks gain two new tables and nothing existing is touched, so there is
+nothing to migrate and nothing to wait for on first launch.
+
+There is still no way to *make* typed content here — that is the next release.
+This one is the half that has to be on the tablet first, because a device that
+receives a paragraph it does not understand deletes it, and the only way to stop
+that is to arrive first.
+
+Database version 49.
+
 ## 0.47.0
 
 Nothing you can see yet. This release is groundwork your tablet has to be
