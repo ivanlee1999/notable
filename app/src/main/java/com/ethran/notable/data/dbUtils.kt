@@ -45,6 +45,22 @@ fun dbDirPath(): File {
     return File(documentsDir, "notabledb")
 }
 
+/**
+ * Where recordings are kept, filed under the hash of their bytes exactly as images are.
+ *
+ * A folder of its own rather than a corner of `images/`: [assetFile] already searches two folders
+ * and a third costs one line, whereas an `.m4a` sitting in a directory called `images` is the kind
+ * of thing that survives one refactor and confuses the next.
+ */
+fun ensureAudioFolder(): File {
+    val dbDir = getDbDir()
+    val audioDir = File(dbDir, "audio")
+    if (!audioDir.exists()) {
+        audioDir.mkdirs()
+    }
+    return audioDir
+}
+
 fun ensureImagesFolder(): File {
     val dbDir = getDbDir()
     val imagesDir = File(dbDir, "images")

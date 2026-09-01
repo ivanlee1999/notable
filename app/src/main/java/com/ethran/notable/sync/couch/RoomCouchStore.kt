@@ -3,6 +3,7 @@ package com.ethran.notable.sync.couch
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.data.ensureBackgroundsFolder
+import com.ethran.notable.data.ensureAudioFolder
 import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.DeletedBlock
@@ -82,6 +83,7 @@ class RoomCouchStore(
      * `android.*`.
      */
     private val imagesFolder: () -> File = ::ensureImagesFolder,
+    private val audioFolder: () -> File = ::ensureAudioFolder,
     /** Where a downloaded PDF or background picture is filed. Deferred for the same reason. */
     private val backgroundsFolder: () -> File = ::ensureBackgroundsFolder,
     /**
@@ -558,8 +560,11 @@ class RoomCouchStore(
         val images = runCatching { imagesFolder() }.getOrNull()
         val backgrounds = runCatching { backgroundsFolder() }.getOrNull()
 
+        val audio = runCatching { audioFolder() }.getOrNull()
+
         val named = buildList {
             images?.let { add(File(it, sha)) }
+            audio?.let { add(File(it, sha)) }
             backgrounds?.let { folder ->
                 CouchBackgroundFiles.fileNamesFor(sha).forEach { add(File(folder, it)) }
             }
@@ -569,6 +574,7 @@ class RoomCouchStore(
         referencedFile(sha)?.let { return it }
 
         images?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
+        audio?.listFiles()?.firstOrNull { hashOf(it) == sha }?.let { return it }
         // Backgrounds sit one level down, in `pdfs/` or `images/`, so this walks rather than lists.
         // Hashes are remembered ([hashOf]), so a notebook's own PDF is read once and not once per
         // page that names it.
@@ -1169,11 +1175,27 @@ class RoomCouchStore(
     private suspend fun pendingAssets(): List<PendingAsset> {
         val pending = mutableListOf<PendingAsset>()
 
-        if (runCatching { imagesFolder() }.isSuccess) {
+        val images = runCatching { imagesFolder() }.getOrNull()
+        if (images != null) {
             appRepository.imageRepository.getAllUris()
                 .mapNotNull { uri -> CouchImageFiles.fileFor(uri) }
                 .filter { !it.exists() && CouchAssetId.isSha256Hex(it.name) }
                 .forEach { pending += PendingAsset(CouchDocId.asset(it.name), it) }
+        }
+
+        // A block names its bytes by id — a picture in the images folder, a recording's segments
+        // in the audio folder — so a missing file under a hash-shaped name is the record of a
+        // download still owed, exactly as it is for a placed image. Without this a received
+        // recording would merge, render as a pill, and never play: nothing would ever ask for it.
+        val audio = runCatching { audioFolder() }.getOrNull()
+        appRepository.blockRepository.getPayloads().forEach { json ->
+            val payload = blockPayload(json)
+            payload.imageAssetId?.let { assetId ->
+                pendingBlockAsset(assetId, images)?.let { pending += it }
+            }
+            payload.segments.forEach { segment ->
+                pendingBlockAsset(segment.assetId, audio)?.let { pending += it }
+            }
         }
 
         appRepository.pageRepository.getFileBackgrounds().forEach { row ->
@@ -1183,6 +1205,13 @@ class RoomCouchStore(
             pendingBackground(row.background, row.backgroundType)?.let { pending += it }
         }
         return pending
+    }
+
+    private fun pendingBlockAsset(assetId: String, folder: File?): PendingAsset? {
+        if (folder == null) return null
+        val sha = CouchAssetId.sha256HexOfAssetId(assetId) ?: return null
+        val file = File(folder, sha)
+        return if (file.exists()) null else PendingAsset(assetId, file)
     }
 
     private fun pendingBackground(background: String, backgroundType: String): PendingAsset? {
