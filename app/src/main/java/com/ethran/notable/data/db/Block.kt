@@ -10,6 +10,11 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
 import com.ethran.notable.sync.SyncClock
+import com.ethran.notable.sync.couch.CouchAudioSegment
+import com.ethran.notable.sync.couch.couchJson
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -72,7 +77,57 @@ data class Block(
     val createdAt: Date = SyncClock.nowDate(),
     val updatedAt: Date = SyncClock.nowDate(),
     @ColumnInfo(defaultValue = "") val deviceId: String = "",
-)
+) {
+    /** The kind-specific fields, decoded. */
+    val decodedPayload: BlockPayload get() = BlockPayload.decode(payload)
+
+    /**
+     * This block with its stroke references renamed through [strokeIds] — what duplicating a page
+     * needs, because the copy's strokes get fresh ids and an ink grouping that still named the
+     * originals would group ink on another page. A stroke the map does not know is dropped: it
+     * did not come along, so nothing on the copy answers to it.
+     */
+    fun withStrokeIdsRenamed(strokeIds: Map<String, String>): Block {
+        val decoded = decodedPayload
+        if (decoded.strokeIds.isEmpty()) return this
+        return copy(
+            payload = decoded.copy(strokeIds = decoded.strokeIds.mapNotNull { strokeIds[it] })
+                .encode()
+        )
+    }
+}
+
+/**
+ * The kind-specific half of a [Block], as one column rather than several.
+ *
+ * A store detail, not a wire one: the document carries these as typed fields, and this is only
+ * how they are folded into [Block.payload] so that a future block kind needs no schema bump.
+ * Decoded with [couchJson], which is lenient, so a column written by a build that has since
+ * gained a field still reads.
+ */
+@Serializable
+data class BlockPayload(
+    val imageAssetId: String? = null,
+    val segments: List<CouchAudioSegment> = emptyList(),
+    val strokeIds: List<String> = emptyList(),
+) {
+    fun isEmpty(): Boolean =
+        imageAssetId == null && segments.isEmpty() && strokeIds.isEmpty()
+
+    /** The column value: `{}` when there is nothing to say, so an empty payload is one string. */
+    fun encode(): String = if (isEmpty()) "{}" else couchJson.encodeToString(this)
+
+    companion object {
+        fun decode(json: String): BlockPayload =
+            if (json.isBlank() || json == "{}") BlockPayload()
+            else runCatching { couchJson.decodeFromString<BlockPayload>(json) }.getOrElse {
+                // A payload this build cannot read is carried as nothing rather than throwing:
+                // one unreadable block must not make the whole page fail to load, and §6.5's
+                // conflict-copy path is for documents, not for a column this device wrote itself.
+                BlockPayload()
+            }
+    }
+}
 
 @Dao
 interface BlockDao {
@@ -90,14 +145,19 @@ interface BlockDao {
     suspend fun deleteByIds(ids: List<String>)
 
     /**
-     * Every distinct asset a block anywhere in the library names, as raw payload JSON.
+     * Every distinct non-empty payload of a block anywhere in the library, as raw JSON.
      *
      * Read by the sync layer to work out which bytes are still missing. It returns the payloads
      * rather than the ids because the ids live inside the JSON, and teaching SQLite to reach into
-     * it would be a second, worse implementation of the decoder that already exists.
+     * it would be a second, worse implementation of the decoder that already exists. Distinct
+     * because a picture placed on many pages has one payload, and decoding it once is enough.
      */
-    @Query("SELECT payload FROM Block WHERE payload != '{}'")
+    @Query("SELECT DISTINCT payload FROM Block WHERE payload != '{}'")
     suspend fun getPayloads(): List<String>
+
+    /** The bytes of typed text on [pageId], for the memory budget. Zero for a page with none. */
+    @Query("SELECT COALESCE(SUM(LENGTH(text)), 0) FROM Block WHERE pageId = :pageId")
+    suspend fun textLengthByPage(pageId: String): Long
 }
 
 /**
@@ -161,6 +221,8 @@ class BlockRepository @Inject constructor(
     }
 
     suspend fun getPayloads(): List<String> = db.getPayloads()
+
+    suspend fun textLengthByPage(pageId: String): Long = db.textLengthByPage(pageId)
 }
 
 class DeletedBlockRepository @Inject constructor(

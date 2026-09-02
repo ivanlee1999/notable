@@ -107,6 +107,16 @@ class CacheBudgetTest {
         assertTrue(PageMemoryModel.BLOB_EXPANSION_K >= 1)
     }
 
+    @Test
+    fun `estimate charges for markdown, so a page of prose and no ink is not free`() {
+        val chars = 200_000L
+        assertEquals(
+            chars * PageMemoryModel.BYTES_PER_MD_CHAR,
+            PageMemoryModel.estimateResidentBytes(sumBlobBytes = 0, sumMarkdownChars = chars),
+        )
+        assertTrue(PageMemoryModel.BYTES_PER_MD_CHAR >= 2) // a JVM char is two bytes resident
+    }
+
     // --- admission policy (1b-4, with 1b-R4/R5 fixes) ---
 
     @Test

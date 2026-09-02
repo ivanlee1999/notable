@@ -27,8 +27,12 @@ import kotlin.math.floor
  *   would then keep both of. This is the whole reason the id is a hash and not a UUID.
  * - **Ink is never cut.** A stroke belongs to the sheet its top edge falls in and travels whole,
  *   so a descender crossing the boundary stays in one piece rather than being severed.
- * - **The parent remembers what left it.** The first sheet carries a tombstone for every stroke
- *   and image that moved to a child. Without them, a peer still holding the tall copy unions the
+ * - **A flowing block stays on the first sheet; a positioned one divides like an image.** A
+ *   document has no `top` to divide by — its blocks are laid out fresh on whatever sheet holds
+ *   them — so every flowing block keeps to sheet 0 and never counts toward the sheet total. A
+ *   text box on the canvas has a `y`, and travels exactly as an image at that `y` would.
+ * - **The parent remembers what left it.** The first sheet carries a tombstone for every stroke,
+ *   image and positioned block that moved to a child. Without them, a peer still holding the tall copy unions the
  *   moved ink straight back into the parent on merge — the page re-grows on every pull, each side
  *   pushes its own version back, and the notebook never converges. The tombstones are scoped to
  *   the parent *document*, so the same ink living on a child under the same id is untouched, and
@@ -100,6 +104,24 @@ object PageSplit {
     fun sheetCount(tops: List<Float>, sheetHeight: Int): Int =
         (tops.maxOfOrNull { sheetIndexOfTop(it, sheetHeight) } ?: 0) + 1
 
+    /** How many sheets [page] occupies when divided by [sheet]. */
+    fun sheetCount(page: CouchPage, sheet: PageSize): Int =
+        sheetCount(tops(page), sheet.height)
+
+    /** The top edge of everything on [page] that divides: strokes, images, positioned blocks. */
+    private fun tops(page: CouchPage): List<Float> =
+        page.strokes.map { it.top } +
+            page.images.map { it.y.toFloat() } +
+            page.blocks.mapNotNull { top(it) }
+
+    /** Where a block divides from, or null for a flowing block, which never divides. */
+    private fun top(block: CouchBlock): Float? =
+        if (block.isFlowing) null else block.y?.toFloat()
+
+    /** The sheet a block belongs to — sheet 0 for a flowing block, whatever its `y`. */
+    private fun sheetIndexOf(block: CouchBlock, sheetHeight: Int): Int =
+        top(block)?.let { sheetIndexOfTop(it, sheetHeight) } ?: 0
+
     /** A page the split produced, with the id it must be stored under. */
     data class Divided(val id: String, val page: CouchPage)
 
@@ -116,8 +138,7 @@ object PageSplit {
         now: String,
         updatedBy: String,
     ): List<Divided> {
-        val tops = page.strokes.map { it.top } + page.images.map { it.y.toFloat() }
-        val count = sheetCount(tops, sheet.height)
+        val count = sheetCount(page, sheet)
         if (count <= 1) return listOf(Divided(id, declaring(sheet, page)))
 
         // What the first sheet has to remember leaving it — see the class doc. Stamped with the
@@ -128,6 +149,9 @@ object PageSplit {
         val movedImages = page.images
             .filter { sheetIndexOfTop(it.y.toFloat(), sheet.height) > 0 }
             .map { CouchTombstone(id = it.id, deletedAt = now) }
+        val movedBlocks = page.blocks
+            .filter { sheetIndexOf(it, sheet.height) > 0 }
+            .map { CouchTombstone(id = it.id, deletedAt = now) }
 
         return (0 until count).map { index ->
             val offset = index * sheet.height.toFloat()
@@ -137,17 +161,26 @@ object PageSplit {
             val images = page.images
                 .filter { sheetIndexOfTop(it.y.toFloat(), sheet.height) == index }
                 .map { it.copy(y = it.y - offset.toInt()) }
+            val blocks = page.blocks
+                .filter { sheetIndexOf(it, sheet.height) == index }
+                .map { block ->
+                    val y = block.y
+                    if (index == 0 || y == null) block else block.copy(y = y - offset.toInt())
+                }
             Divided(
                 childId(id, index),
                 declaring(sheet, page).copy(
                     strokes = strokes,
                     images = images,
+                    blocks = blocks,
                     // Sheet 0 keeps the page's tombstones and adds the moved ink's; the children
                     // start clean — see the class doc for why handing one down would be a trap.
                     deletedStrokes =
                         if (index == 0) page.deletedStrokes + movedStrokes else emptyList(),
                     deletedImages =
                         if (index == 0) page.deletedImages + movedImages else emptyList(),
+                    deletedBlocks =
+                        if (index == 0) page.deletedBlocks + movedBlocks else emptyList(),
                     updatedBy = updatedBy,
                 ).also { it.updatedAt = now },
             )
