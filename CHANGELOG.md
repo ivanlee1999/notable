@@ -11,6 +11,13 @@ edited on both devices at once, and the audio actually downloads rather than
 sitting there as a button that does nothing. The iPad app gained the same in the
 same change, because a rule that only one of them follows is worse than no rule.
 
+Two edges of that were closed after a second review. Dividing a tall page into
+sheets now keeps typed paragraphs on the first sheet (a document has no top to
+divide by) while a text box placed on the page moves with the sheet it sits on,
+exactly as a picture does — and the iPad divides the same way, pinned by shared
+test vectors. Duplicating a page or a notebook now copies its typed content too,
+with any handwriting a paragraph refers to renamed along with the strokes.
+
 ### Worth knowing
 
 Your notebooks gain two new tables and nothing existing is touched, so there is
