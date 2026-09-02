@@ -55,7 +55,15 @@ class MergeTest {
         // both apps must emit the same tombstones or the peer's tall copy never converges.
         val deletedStrokes: List<ExpectedTombstone> = emptyList(),
         val deletedImages: List<ExpectedTombstone> = emptyList(),
+        // Absent in the vectors written before pages had blocks, which is the same as expecting
+        // none: a split must not invent blocks on a page that had none.
+        val blocks: List<ExpectedBlock> = emptyList(),
+        val deletedBlocks: List<ExpectedTombstone> = emptyList(),
     )
+
+    /** A block after the split: a flowing one has no `y` to check, a positioned one's must move. */
+    @Serializable
+    private data class ExpectedBlock(val id: String, val y: Int? = null)
 
     @Serializable
     private data class ExpectedTombstone(val id: String, val deletedAt: String)
@@ -511,6 +519,20 @@ class MergeTest {
                 "${vector.name}: image tombstones on ${want.id}",
                 want.deletedImages.map { it.id to it.deletedAt },
                 made.page.deletedImages.map { it.id to it.deletedAt },
+            )
+            assertEquals(
+                "${vector.name}: blocks on ${want.id}",
+                want.blocks.map { it.id }, made.page.blocks.map { it.id })
+            for ((block, wantBlock) in made.page.blocks.zip(want.blocks)) {
+                if (wantBlock.y != null) {
+                    assertEquals(
+                        "${vector.name}: ${block.id} y on ${want.id}", wantBlock.y, block.y)
+                }
+            }
+            assertEquals(
+                "${vector.name}: block tombstones on ${want.id}",
+                want.deletedBlocks.map { it.id to it.deletedAt },
+                made.page.deletedBlocks.map { it.id to it.deletedAt },
             )
         }
 

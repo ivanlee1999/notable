@@ -38,20 +38,26 @@ object MarkdownBlocks {
 
         // Front matter is one block. Splitting it would put an id on each key and let two devices
         // merge half of one document's front matter with half of another's. It only counts when the
-        // very first line opens it *and* a line closes it *before the first blank line*: three
+        // first non-blank line opens it *and* a line closes it *before the next blank line*: three
         // dashes on their own are a thematic break, and a document beginning with one must not be
         // swallowed whole.
         //
-        // The "before the first blank line" clause is what keeps the decision local. Without it,
+        // The "before the next blank line" clause is what keeps the decision local. Without it,
         // whether a document opens with front matter depends on whether a `---` turns up anywhere
         // later — so gluing two documents together could retroactively change the meaning of the
         // first one's opening, and the blocks would no longer split back into the blocks they were
         // built from.
-        if (lines.firstOrNull() == "---") {
-            val close = lines.drop(1).takeWhile { !isBlank(it) }.indexOf("---")
+        //
+        // The first *non-blank* line, not line 1, for the same reason: leading blank lines are
+        // separators and are dropped, so the first block always starts at the first non-blank line
+        // and `join` never puts anything in front of it. A test on line 1 would find front matter
+        // in `join(split(x))` that it had not found in `x`, and split the two differently.
+        val start = lines.indexOfFirst { !isBlank(it) }.let { if (it < 0) lines.size else it }
+        if (start < lines.size && lines[start] == "---") {
+            val close = lines.drop(start + 1).takeWhile { !isBlank(it) }.indexOf("---")
             if (close >= 0) {
-                val end = close + 1
-                blocks += lines.subList(0, end + 1).joinToString("\n")
+                val end = start + 1 + close
+                blocks += lines.subList(start, end + 1).joinToString("\n")
                 index = end + 1
             }
         }
