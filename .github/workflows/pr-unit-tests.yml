@@ -78,7 +78,9 @@ jobs:
             mine="app/src/test/resources/couch-sync-vectors/$name"
             theirs=".bopa/docs/couch-sync-vectors/$name"
             if [ ! -f "$theirs" ]; then
-              echo "::warning::bopa has no $name; parity for it not checked."
+              echo "::error::bopa has no $name, so its parity cannot be checked. Either the"
+              echo "::error::checkout above failed (rerun the job) or the twin file is missing there."
+              status=1
               continue
             fi
             if ! diff -u "$theirs" "$mine"; then

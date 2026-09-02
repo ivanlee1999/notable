@@ -595,10 +595,14 @@ class PageDataManager @Inject constructor(
         return result
     }
 
-    /** Pre-load resident estimate for [pageId] from the summed compressed stroke-blob byte size. */
+    /**
+     * Pre-load resident estimate for [pageId]: the summed compressed stroke-blob byte size plus
+     * the page's markdown, each a single aggregate query.
+     */
     private suspend fun estimatePageCostBytes(pageId: String): Long {
         val blobBytes = appRepository.strokeRepository.sumPointsLength(pageId)
-        return PageMemoryModel.estimateResidentBytes(blobBytes)
+        val markdownChars = appRepository.blockRepository.textLengthByPage(pageId)
+        return PageMemoryModel.estimateResidentBytes(blobBytes, markdownChars)
     }
 
     /**

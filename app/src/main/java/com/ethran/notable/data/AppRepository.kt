@@ -3,6 +3,7 @@ package com.ethran.notable.data
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import androidx.room.withTransaction
 import com.ethran.notable.data.db.AppDatabase
+import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.BlockRepository
 import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchDeletionRepository
@@ -182,9 +183,12 @@ class AppRepository @Inject constructor(
         // neither is — and so their outbox entries land with them rather than after them.
         db.withTransaction {
             pageRepository.create(duplicatedPage)
+            // The strokes' new names, so an ink block on the copy can be told which of them it
+            // groups — see [copyBlocks].
+            val strokeIds = pageWithData.strokes.associate { it.id to UUID.randomUUID().toString() }
             strokeRepository.create(pageWithData.strokes.map {
                 it.copy(
-                    id = UUID.randomUUID().toString(),
+                    id = strokeIds.getValue(it.id),
                     pageId = duplicatedPage.id,
                     updatedAt = SyncClock.nowDate(),
                     createdAt = SyncClock.nowDate()
@@ -198,6 +202,7 @@ class AppRepository @Inject constructor(
                     createdAt = SyncClock.nowDate()
                 )
             })
+            blockRepository.upsertAll(copyBlocks(pageWithData.blocks, duplicatedPage.id, strokeIds))
             val book = bookRepository.getById(pageWithData.page.notebookId)
                 ?: return@withTransaction
             val pageIndex = book.getPageIndex(pageWithData.page.id)
@@ -206,6 +211,28 @@ class AppRepository @Inject constructor(
             pageIds.add(pageIndex + 1, duplicatedPage.id)
             bookRepository.update(book.copy(pageIds = pageIds))
         }
+    }
+
+    /**
+     * The blocks of a page as they go onto its copy: fresh ids, the copy's page, and ink groupings
+     * renamed through [strokeIds] so they name the copy's strokes rather than the original's.
+     *
+     * Fresh ids for the same reason strokes and images get them — a block is keyed by id in the
+     * merge, so a copy that kept the id would be *the same block* on two pages, and an edit to
+     * one would be merged into the other. Tombstones are deliberately not copied: they name blocks
+     * that were on the original, none of which exist on the copy.
+     */
+    private fun copyBlocks(
+        blocks: List<Block>,
+        pageId: String,
+        strokeIds: Map<String, String>,
+    ): List<Block> = blocks.map {
+        it.withStrokeIdsRenamed(strokeIds).copy(
+            id = UUID.randomUUID().toString(),
+            pageId = pageId,
+            createdAt = SyncClock.nowDate(),
+            updatedAt = SyncClock.nowDate(),
+        )
     }
 
     /**
@@ -244,9 +271,10 @@ class AppRepository @Inject constructor(
                 updatedAt = SyncClock.nowDate(),
             )
             pageRepository.create(newPage)
+            val strokeIds = data.strokes.associate { it.id to UUID.randomUUID().toString() }
             strokeRepository.create(data.strokes.map {
                 it.copy(
-                    id = UUID.randomUUID().toString(), pageId = newPage.id,
+                    id = strokeIds.getValue(it.id), pageId = newPage.id,
                     createdAt = SyncClock.nowDate(), updatedAt = SyncClock.nowDate()
                 )
             })
@@ -256,6 +284,7 @@ class AppRepository @Inject constructor(
                     createdAt = SyncClock.nowDate(), updatedAt = SyncClock.nowDate()
                 )
             })
+            blockRepository.upsertAll(copyBlocks(data.blocks, newPage.id, strokeIds))
             newPageIds += newPage.id
         }
 

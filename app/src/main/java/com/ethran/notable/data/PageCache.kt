@@ -19,12 +19,11 @@ package com.ethran.notable.data
  *   header — [BYTES_PER_STROKE].
  * - An [com.ethran.notable.data.db.Image] row is metadata only (the bitmap is windowed separately),
  *   so [BYTES_PER_IMAGE] is small.
- * - A [com.ethran.notable.data.db.Block] row is metadata plus its markdown, and the markdown is the
- *   part that can actually be large — a page of prose is tens of kilobytes of `String`, which is
- *   two bytes a character on the JVM. [BYTES_PER_BLOCK] covers the row, and [BYTES_PER_MD_CHAR]
- *   the text. The *laid-out* text is deliberately not counted here: it is derived and evictable,
- *   which makes it the analogue of a cached background rather than of a stroke row, and it belongs
- *   on its own budget.
+ * - A [com.ethran.notable.data.db.Block]'s markdown is the part of it that can actually be large —
+ *   a page of prose is tens of kilobytes of `String`, which is two bytes a character on the JVM —
+ *   and [BYTES_PER_MD_CHAR] is what the admission estimate charges for it. The *laid-out* text is
+ *   deliberately not counted: it is derived and evictable, which makes it the analogue of a cached
+ *   background rather than of a stroke row, and it belongs on its own budget.
  *
  * These are counting constants, not a claim of exact heap layout; calibrate against the
  * estimate/actual telemetry (see [PageDataManager] admission logging).
@@ -33,25 +32,25 @@ object PageMemoryModel {
     const val BYTES_PER_STROKE = 160L
     const val BYTES_PER_POINT = 96L
     const val BYTES_PER_IMAGE = 256L
-    const val BYTES_PER_BLOCK = 512L
     const val BYTES_PER_MD_CHAR = 4L
 
     /**
      * Resident bytes for a loaded page, from cheap counts (all O(1)/O(strokes), never O(points)).
      * [totalPointCount] is the summed `points.size` across the page's strokes.
+     *
+     * No block term yet, on purpose: the editor does not load a page's blocks into its cache
+     * entry until it can draw them, and a term for content the entry does not hold would be a
+     * claim the telemetry could never check. The *admission* estimate does count them, because
+     * that is a query against the database, not the entry — see [estimateResidentBytes].
      */
     fun entryBytes(
         strokeCount: Int,
         totalPointCount: Long,
         imageCount: Int,
-        blockCount: Int = 0,
-        totalMarkdownChars: Long = 0,
     ): Long =
         strokeCount * BYTES_PER_STROKE +
             totalPointCount * BYTES_PER_POINT +
-            imageCount * BYTES_PER_IMAGE +
-            blockCount * BYTES_PER_BLOCK +
-            totalMarkdownChars * BYTES_PER_MD_CHAR
+            imageCount * BYTES_PER_IMAGE
 
     /**
      * Expansion constant K mapping a page's compressed on-disk blob size (`SUM(LENGTH(points))`,
@@ -60,19 +59,17 @@ object PageMemoryModel {
      */
     const val BLOB_EXPANSION_K = 20L
 
-    /** Pre-load resident estimate for admission, from the summed stroke-blob bytes of a page. */
-    fun estimateResidentBytes(sumBlobBytes: Long): Long = sumBlobBytes * BLOB_EXPANSION_K
-
     /**
-     * The same pre-load estimate, told about the page's markdown as well as its ink.
+     * Pre-load resident estimate for admission, from the summed stroke-blob bytes of a page and
+     * its markdown.
      *
-     * [sumMarkdownChars] is `SUM(LENGTH(text))` over the page's blocks — the second half of the
-     * cheap query the admission check already makes. Without it a page carrying two hundred
+     * [sumMarkdownChars] is `SUM(LENGTH(text))` over the page's blocks — a second aggregate query
+     * beside the one the admission check already makes. Without it a page carrying two hundred
      * kilobytes of prose and no strokes estimates as *nothing*, at exactly the moment the cache is
      * deciding whether it fits: the OOM guard would wave through the one page most able to trip it.
      */
-    fun estimateResidentBytes(sumBlobBytes: Long, sumMarkdownChars: Long): Long =
-        estimateResidentBytes(sumBlobBytes) + sumMarkdownChars * BYTES_PER_MD_CHAR
+    fun estimateResidentBytes(sumBlobBytes: Long, sumMarkdownChars: Long = 0L): Long =
+        sumBlobBytes * BLOB_EXPANSION_K + sumMarkdownChars * BYTES_PER_MD_CHAR
 }
 
 /**

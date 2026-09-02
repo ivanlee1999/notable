@@ -6,6 +6,7 @@ import com.ethran.notable.data.ensureBackgroundsFolder
 import com.ethran.notable.data.ensureAudioFolder
 import com.ethran.notable.data.ensureImagesFolder
 import com.ethran.notable.data.db.Block
+import com.ethran.notable.data.db.BlockPayload
 import com.ethran.notable.data.db.DeletedBlock
 import com.ethran.notable.data.db.DeletedImage
 import com.ethran.notable.data.db.DeletedPage
@@ -713,35 +714,8 @@ class RoomCouchStore(
         return hash
     }
 
-    /**
-     * The kind-specific half of a block, as one column rather than several.
-     *
-     * A store detail, not a wire one: the document carries these as typed fields, and this is only
-     * how they are folded into [Block.payload] so that a future block kind needs no schema bump.
-     * Decoded with [couchJson], which is lenient, so a column written by a build that has since
-     * gained a field still reads.
-     */
-    @kotlinx.serialization.Serializable
-    private data class BlockPayload(
-        val imageAssetId: String? = null,
-        val segments: List<CouchAudioSegment> = emptyList(),
-        val strokeIds: List<String> = emptyList(),
-    ) {
-        fun isEmpty(): Boolean =
-            imageAssetId == null && segments.isEmpty() && strokeIds.isEmpty()
-    }
-
-    private fun blockPayload(json: String): BlockPayload =
-        if (json.isBlank() || json == "{}") BlockPayload()
-        else runCatching { couchJson.decodeFromString<BlockPayload>(json) }.getOrElse {
-            // A payload this build cannot read is carried as nothing rather than throwing: one
-            // unreadable block must not make the whole page fail to load, and §6.5's conflict-copy
-            // path is for documents, not for a column this device wrote itself.
-            BlockPayload()
-        }
-
     private fun couchBlock(block: Block): CouchBlock {
-        val payload = blockPayload(block.payload)
+        val payload = block.decodedPayload
         return CouchBlock(
             id = block.id,
             kind = block.kind,
@@ -773,7 +747,7 @@ class RoomCouchStore(
             kind = block.kind,
             orderKey = block.orderKey,
             text = block.text,
-            payload = if (payload.isEmpty()) "{}" else couchJson.encodeToString(payload),
+            payload = payload.encode(),
             x = block.x,
             y = block.y,
             width = block.width,
@@ -1189,7 +1163,7 @@ class RoomCouchStore(
         // recording would merge, render as a pill, and never play: nothing would ever ask for it.
         val audio = runCatching { audioFolder() }.getOrNull()
         appRepository.blockRepository.getPayloads().forEach { json ->
-            val payload = blockPayload(json)
+            val payload = BlockPayload.decode(json)
             payload.imageAssetId?.let { assetId ->
                 pendingBlockAsset(assetId, images)?.let { pending += it }
             }
