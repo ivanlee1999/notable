@@ -82,6 +82,8 @@ class CouchOutboxTest {
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
         deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
+        blockRepository = BlockRepository(db.blockDao()),
+        deletedBlockRepository = DeletedBlockRepository(db.deletedBlockDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         trashRepository = trashRepositoryFor(db),
