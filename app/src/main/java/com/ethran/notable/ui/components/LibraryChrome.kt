@@ -137,6 +137,7 @@ fun ListRow(
     modifier: Modifier = Modifier,
     labelSize: TextUnit = 14.sp,
     secondary: String? = null,
+    secondaryMaxLines: Int = 1,
     trailing: String? = null,
     onLongClick: (() -> Unit)? = null,
     /** Off for rows that act rather than navigate — a chevron would promise a screen. */
@@ -170,7 +171,7 @@ fun ListRow(
                         text = secondary,
                         fontSize = 12.sp,
                         color = Kaleido.Muted,
-                        maxLines = 1,
+                        maxLines = secondaryMaxLines,
                         overflow = TextOverflow.Ellipsis
                     )
                 }

@@ -152,4 +152,27 @@ class LibrarySortTest {
         assertEquals(LibrarySortOrder.UPDATED, LibrarySortOrder.fromKeyOrDefault(null))
         assertEquals(LibrarySortOrder.TITLE, LibrarySortOrder.fromKeyOrDefault("TITLE"))
     }
+
+    @Test
+    fun searchLocationDistinguishesIdenticallyNamedFolders() {
+        val work = folder("work", "Work")
+        val home = folder("home", "Home")
+        val workNotes = folder("work-notes", "Notes").copy(parentFolderId = work.id)
+        val homeNotes = folder("home-notes", "Notes").copy(parentFolderId = home.id)
+        val folders = listOf(work, home, workNotes, homeNotes).associateBy { it.id }
+        assertEquals("Library", LibrarySort.folderPath(null, folders))
+        assertEquals("Library / Work / Notes", LibrarySort.folderPath(workNotes.id, folders))
+        assertEquals("Library / Home / Notes", LibrarySort.folderPath(homeNotes.id, folders))
+    }
+
+    @Test
+    fun searchLocationTerminatesWhenAParentIsMissingOrCyclic() {
+        val orphan = folder("orphan", "Notes").copy(parentFolderId = "missing")
+        assertEquals("Library / Unavailable folder / Notes",
+            LibrarySort.folderPath(orphan.id, mapOf(orphan.id to orphan)))
+        val first = folder("first", "One").copy(parentFolderId = "second")
+        val second = folder("second", "Two").copy(parentFolderId = "first")
+        assertEquals("Library / … / Two / One", LibrarySort.folderPath(first.id,
+            mapOf(first.id to first, second.id to second)))
+    }
 }

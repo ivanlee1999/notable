@@ -281,12 +281,8 @@ private fun inkOptions(uiState: ToolbarUiState): Pair<PenSetting, List<Int>>? {
 /**
  * One square of colour: what the pen is holding, and the way to change it.
  *
- * The vertical rail can afford to lay the inks out down its foot ([InkStrip]); across the
- * bottom of a horizontal one there is no room that is not already a tool, so the same choice
- * is spent on a single swatch and the alternatives open over the canvas. Which keeps the
- * one-handed arrangement honest: the ink in hand is visible at a glance without a menu, and
- * changing it is still one tap deeper than on the tablet rather than buried in the pen's
- * stroke menu.
+ * The current ink remains visible in the rail. Both orientations open the same palette,
+ * giving each alternative a full touch target without making the drawing exclusion band wider.
  */
 @Composable
 private fun InkSwatch(
@@ -322,9 +318,8 @@ private fun InkSwatch(
         properties = PopupProperties(focusable = true),
         alignment = placement.alignment,
     ) {
-        // Two columns, like the vertical rail's strip — a single row of twelve would be wider
-        // than the panel this arrangement exists for. Off the rail there is room for a proper
-        // 36dp target, so the popover's swatches are the ones a finger wants.
+        // Three columns keep every ink reachable with full-size targets in either orientation.
+        // The popup scrolls on short displays without changing the drawing exclusion band.
         Column(
             Modifier
                 .padding(placement.padding)

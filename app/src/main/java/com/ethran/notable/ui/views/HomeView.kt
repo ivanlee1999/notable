@@ -27,14 +27,12 @@ import java.util.Date
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -52,20 +50,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -85,7 +78,6 @@ import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.messageRes
 import com.ethran.notable.ui.rememberKvProxy
 import com.ethran.notable.ui.requestFullSync
-import com.ethran.notable.ui.components.CoverActionTile
 import com.ethran.notable.ui.components.FILE_BAR_WIDTH
 import com.ethran.notable.ui.components.Kicker
 import com.ethran.notable.ui.components.LibraryFileBar
@@ -93,7 +85,6 @@ import com.ethran.notable.ui.components.ListRow
 import com.ethran.notable.ui.components.NotebookCoverCard
 import com.ethran.notable.ui.components.NotebookListRow
 import com.ethran.notable.ui.components.SectionHeader
-import com.ethran.notable.ui.components.ShowPagesRow
 import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
@@ -106,7 +97,6 @@ import com.ethran.notable.ui.dialogs.TelemetryConsentDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.KaleidoMetrics
-import com.ethran.notable.ui.theme.coverColumnsForShelf
 import com.ethran.notable.ui.theme.kaleidoMetrics
 import com.ethran.notable.ui.viewmodels.LibrarySort
 import com.ethran.notable.ui.viewmodels.LibrarySortOrder
@@ -114,17 +104,12 @@ import com.ethran.notable.ui.viewmodels.LibraryUiState
 import com.ethran.notable.ui.viewmodels.LibraryViewModel
 import com.ethran.notable.sync.SyncBadge
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.MoreVertical
-import compose.icons.feathericons.Plus
-import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
-import compose.icons.feathericons.Upload
 import compose.icons.feathericons.X
-import compose.icons.feathericons.Zap
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.launch
 
@@ -344,6 +329,11 @@ fun LibraryContent(
             )
         }
 
+        val foldersById = remember(uiState.tree.folders) { uiState.tree.folders.associateBy { it.id } }
+        val locationFor: (String?) -> String? = { parentId ->
+            if (uiState.isSearching) LibrarySort.folderPath(parentId, foldersById) else null
+        }
+
         Row(Modifier.fillMaxSize()) {
             // Only on a screen with the room: a one-handed device has one column's worth and
             // spends it on the shelf.
@@ -362,95 +352,70 @@ fun LibraryContent(
                 onSyncNow = onSyncNow,
             )
 
-        Column(Modifier.fillMaxSize()) {
-            LibraryHeader(
-                metrics = metrics,
-                uiState = uiState,
-                onNavigateToFolder = onNavigateToFolder,
-                onNavigateToSettings = onNavigateToSettings,
-                onSyncNow = onSyncNow,
-                onCreateNewNotebook = onCreateNewNotebook,
-                onCreateNewNote = onCreateNewNote,
-                onImport = pickImportFile,
-                onQueryChanged = onQueryChanged,
-                onSortChanged = onSortChanged,
-                onCreateNewFolder = onCreateNewFolder,
-                onNavigateToTrash = onNavigateToTrash,
-                gridView = showGrid,
-                onGridChanged = { gridChoice = it },
-                onToggleSidebar = if (canShowSidebar) ({ sidebarRequested = !sidebarRequested }) else null,
-                sidebarVisible = showSidebar,
-            )
-
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .autoEInkAnimationOnScroll(),
-                contentPadding = PaddingValues(
-                    start = metrics.pad, end = metrics.pad,
-                    top = metrics.pad, bottom = metrics.pad * 2
+            Column(Modifier.fillMaxSize()) {
+                LibraryHeader(
+                    metrics = metrics,
+                    uiState = uiState,
+                    onNavigateToFolder = onNavigateToFolder,
+                    onNavigateToSettings = onNavigateToSettings,
+                    onSyncNow = onSyncNow,
+                    onCreateNewNotebook = onCreateNewNotebook,
+                    onCreateNewNote = onCreateNewNote,
+                    onImport = pickImportFile,
+                    onQueryChanged = onQueryChanged,
+                    onSortChanged = onSortChanged,
+                    onCreateNewFolder = onCreateNewFolder,
+                    onNavigateToTrash = onNavigateToTrash,
+                    gridView = showGrid,
+                    onGridChanged = { gridChoice = it },
+                    onToggleSidebar = if (canShowSidebar) ({ sidebarRequested = !sidebarRequested }) else null,
+                    sidebarVisible = showSidebar,
                 )
-            ) {
-                if (sortedFolders.isEmpty() && sortedBooks.isEmpty()) item(key = "empty-library") {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(if (uiState.isSearching) "No results for “${uiState.query}”" else if (uiState.folderId != null) "Empty folder" else "Your library starts here",
-                            color = Kaleido.Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(if (uiState.isSearching) "Try another notebook or folder name."
-                            else "Create a notebook or import your notes from More.", color = Kaleido.Muted)
-                        if (uiState.isSearching) TextAction("Clear search", { onQueryChanged("") })
-                    }
-                }
-                item(key = "folders-header") {
-                    SectionHeader(
-                        stringResource(
-                            if (uiState.isSearching) R.string.home_folders_found
-                            else R.string.home_folders
-                        )
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-                items(sortedFolders, key = { "folder-${it.id}" }) { folder ->
-                    FolderRow(
-                        appRepository = appRepository,
-                        folder = folder,
-                        metrics = metrics,
-                        bookCount = uiState.folderBookCounts[folder.id] ?: 0,
-                        onOpen = { onNavigateToFolder(folder.id) },
-                    )
-                }
-                if (!uiState.isSearching) item(key = "folder-add") {
-                    ListRow(
-                        hit = metrics.hit,
-                        label = stringResource(R.string.home_add_new_folder),
-                        onClick = onCreateNewFolder,
-                        showChevron = false,
-                        leading = {
-                            Box(
-                                Modifier
-                                    .size(22.dp)
-                                    .border(1.dp, Kaleido.Edge),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    FeatherIcons.FolderPlus, null,
-                                    tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    )
-                }
 
-                // Only once something is in it. A permanently visible Trash row is a permanent
-                // reminder of a screen almost nobody needs; a row that appears the moment
-                // something is deleted is how the user finds out deletion was recoverable at all.
-                if (uiState.trashedCount > 0 && !uiState.isSearching) {
-                    item(key = "trash-row") {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .autoEInkAnimationOnScroll(),
+                    contentPadding = PaddingValues(
+                        start = metrics.pad, end = metrics.pad,
+                        top = metrics.pad, bottom = metrics.pad * 2
+                    )
+                ) {
+                    if (sortedFolders.isEmpty() && sortedBooks.isEmpty()) item(key = "empty-library") {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(if (uiState.isSearching) "No results for “${uiState.query}”" else if (uiState.folderId != null) "Empty folder" else "Your library starts here",
+                                color = Kaleido.Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text(if (uiState.isSearching) "Try another notebook or folder name."
+                                else "Create a notebook or import your notes from More.", color = Kaleido.Muted)
+                            if (uiState.isSearching) TextAction("Clear search", { onQueryChanged("") })
+                        }
+                    }
+                    item(key = "folders-header") {
+                        SectionHeader(
+                            stringResource(
+                                if (uiState.isSearching) R.string.home_folders_found
+                                else R.string.home_folders
+                            )
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    items(sortedFolders, key = { "folder-${it.id}" }) { folder ->
+                        FolderRow(
+                            appRepository = appRepository,
+                            folder = folder,
+                            metrics = metrics,
+                            bookCount = uiState.folderBookCounts[folder.id] ?: 0,
+                            location = locationFor(folder.parentFolderId),
+                            onOpen = { onNavigateToFolder(folder.id) },
+                        )
+                    }
+                    if (!uiState.isSearching) item(key = "folder-add") {
                         ListRow(
                             hit = metrics.hit,
-                            label = stringResource(R.string.home_trash),
-                            trailing = uiState.trashedCount.toString(),
-                            onClick = onNavigateToTrash,
+                            label = stringResource(R.string.home_add_new_folder),
+                            onClick = onCreateNewFolder,
+                            showChevron = false,
                             leading = {
                                 Box(
                                     Modifier
@@ -459,81 +424,109 @@ fun LibraryContent(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        FeatherIcons.Trash2, null,
+                                        FeatherIcons.FolderPlus, null,
                                         tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
                         )
                     }
-                }
 
-                item(key = "books-header") {
-                    Spacer(Modifier.height(22.dp))
-                    SectionHeader(
-                        stringResource(
-                            if (uiState.isSearching) R.string.home_notebooks_found
-                            else R.string.home_notebooks
+                    // Only once something is in it. A permanently visible Trash row is a permanent
+                    // reminder of a screen almost nobody needs; a row that appears the moment
+                    // something is deleted is how the user finds out deletion was recoverable at all.
+                    if (uiState.trashedCount > 0 && !uiState.isSearching) {
+                        item(key = "trash-row") {
+                            ListRow(
+                                hit = metrics.hit,
+                                label = stringResource(R.string.home_trash),
+                                trailing = uiState.trashedCount.toString(),
+                                onClick = onNavigateToTrash,
+                                leading = {
+                                    Box(
+                                        Modifier
+                                            .size(22.dp)
+                                            .border(1.dp, Kaleido.Edge),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            FeatherIcons.Trash2, null,
+                                            tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    item(key = "books-header") {
+                        Spacer(Modifier.height(22.dp))
+                        SectionHeader(
+                            stringResource(
+                                if (uiState.isSearching) R.string.home_notebooks_found
+                                else R.string.home_notebooks
+                            )
                         )
-                    )
-                    Spacer(Modifier.height(14.dp))
-                }
+                        Spacer(Modifier.height(14.dp))
+                    }
 
-                // An empty notebook is a leftover from a failed import; warn once rather than
-                // drawing a cover for a book with no page to preview.
-                val (drawable, empty) = sortedBooks.partition { it.pageIds.isNotEmpty() }
+                    // An empty notebook is a leftover from a failed import; warn once rather than
+                    // drawing a cover for a book with no page to preview.
+                    val (drawable, empty) = sortedBooks.partition { it.pageIds.isNotEmpty() }
 
-                if (!uiState.isImporting) {
-                    items(empty, key = { "empty-${it.id}" }) { book ->
-                        EmptyBookWarningHandler(
-                            emptyBook = book,
-                            onDelete = { onDeleteEmptyBook(book.id) },
-                            onDismiss = { })
+                    if (!uiState.isImporting) {
+                        items(empty, key = { "empty-${it.id}" }) { book ->
+                            EmptyBookWarningHandler(
+                                emptyBook = book,
+                                onDelete = { onDeleteEmptyBook(book.id) },
+                                onDismiss = { })
+                        }
+                    }
+
+                    if (showGrid) {
+                        // Chunked into fixed-width rows rather than a nested lazy grid: the page is
+                        // one scroll region, and the covers per row is a design constant, not a
+                        // measured fit. The trailing null is the import tile, so it takes the next
+                        // free cell instead of needing a row of its own.
+                        // No trailing null any more: the import tile used to take the next free
+                        // cell, and a shelf's last row is not where a once-a-year action belongs.
+                        val rows = drawable.chunked(metrics.coverColumns)
+                        itemsIndexed(rows) { index, row ->
+                            NotebookRow(
+                                books = row,
+                                columns = metrics.coverColumns,
+                                appRepository = appRepository,
+                                exportEngine = exportEngine,
+                                syncScheduler = syncScheduler,
+                                syncBadges = uiState.syncBadges,
+                                lastEdited = uiState.lastEdited,
+                                locationFor = locationFor,
+                                onNavigateToPages = openPages,
+                                onNavigateToEditor = openNotebook,
+                                onPreviewNeeded = onPreviewNeeded,
+                            )
+                            if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
+                        }
+                    } else {
+                        items(drawable, key = { "book-${it.id}" }) { book ->
+                            NotebookEntry(
+                                book = book,
+                                compactHit = metrics.hit,
+                                appRepository = appRepository,
+                                exportEngine = exportEngine,
+                                syncScheduler = syncScheduler,
+                                syncBadge = uiState.syncBadges[book.id],
+                                editedAt = maxOf(book.updatedAt, uiState.lastEdited[book.id] ?: book.updatedAt),
+                                location = locationFor(book.parentFolderId),
+                                onNavigateToPages = openPages,
+                                onNavigateToEditor = openNotebook,
+                                onPreviewNeeded = onPreviewNeeded,
+                            )
+                        }
                     }
                 }
 
-                if (showGrid) {
-                    // Chunked into fixed-width rows rather than a nested lazy grid: the page is
-                    // one scroll region, and the covers per row is a design constant, not a
-                    // measured fit. The trailing null is the import tile, so it takes the next
-                    // free cell instead of needing a row of its own.
-                    // No trailing null any more: the import tile used to take the next free
-                    // cell, and a shelf's last row is not where a once-a-year action belongs.
-                    val rows = drawable.chunked(metrics.coverColumns)
-                    itemsIndexed(rows) { index, row ->
-                        NotebookRow(
-                            books = row,
-                            columns = metrics.coverColumns,
-                            appRepository = appRepository,
-                            exportEngine = exportEngine,
-                            syncScheduler = syncScheduler,
-                            syncBadges = uiState.syncBadges,
-                            lastEdited = uiState.lastEdited,
-                            onNavigateToPages = openPages,
-                            onNavigateToEditor = openNotebook,
-                            onPreviewNeeded = onPreviewNeeded,
-                        )
-                        if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
-                    }
-                } else {
-                    items(drawable, key = { "book-${it.id}" }) { book ->
-                        NotebookEntry(
-                            book = book,
-                            compactHit = metrics.hit,
-                            appRepository = appRepository,
-                            exportEngine = exportEngine,
-                            syncScheduler = syncScheduler,
-                            syncBadge = uiState.syncBadges[book.id],
-                            editedAt = maxOf(book.updatedAt, uiState.lastEdited[book.id] ?: book.updatedAt),
-                            onNavigateToPages = openPages,
-                            onNavigateToEditor = openNotebook,
-                            onPreviewNeeded = onPreviewNeeded,
-                        )
-                    }
-                }
             }
-
-        }
         }
     }
 }
@@ -667,14 +660,16 @@ private fun LibrarySearchRow(
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                     .semantics { contentDescription = "Search notebooks and folders" },
                 decorationBox = { inner ->
-                    if (query.isEmpty()) {
-                        Text(
-                            stringResource(R.string.home_search_hint),
-                            fontSize = 14.sp, color = Kaleido.Muted, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                stringResource(R.string.home_search_hint),
+                                fontSize = 14.sp, color = Kaleido.Muted, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        inner()
                     }
-                    inner()
                 }
             )
             if (query.isNotEmpty()) {
@@ -744,6 +739,7 @@ private fun FolderRow(
     folder: Folder,
     metrics: KaleidoMetrics,
     bookCount: Int,
+    location: String?,
     onOpen: () -> Unit,
 ) {
     var isFolderSettingsOpen by remember { mutableStateOf(false) }
@@ -760,6 +756,8 @@ private fun FolderRow(
         modifier = Modifier.weight(1f),
         hit = metrics.hit,
         label = folder.title,
+        secondary = location,
+        secondaryMaxLines = 2,
         trailing = bookCount.toString(),
         showChevron = false,
         onClick = onOpen,
@@ -791,6 +789,7 @@ private fun NotebookRow(
     syncScheduler: SyncScheduler,
     syncBadges: Map<String, SyncBadge>,
     lastEdited: Map<String, Date>,
+    locationFor: (String?) -> String?,
     onNavigateToPages: (String) -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
@@ -809,6 +808,7 @@ private fun NotebookRow(
                     syncScheduler = syncScheduler,
                     syncBadge = syncBadges[book.id],
                     editedAt = maxOf(book.updatedAt, lastEdited[book.id] ?: book.updatedAt),
+                    location = locationFor(book.parentFolderId),
                     onNavigateToPages = onNavigateToPages,
                     onNavigateToEditor = onNavigateToEditor,
                     onPreviewNeeded = onPreviewNeeded,
@@ -832,6 +832,7 @@ private fun NotebookEntry(
     syncScheduler: SyncScheduler,
     syncBadge: SyncBadge?,
     editedAt: Date,
+    location: String?,
     onNavigateToPages: (String) -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
@@ -856,14 +857,14 @@ private fun NotebookEntry(
     if (compactHit == null) {
         Column {
             NotebookCoverCard(notebook = book, onOpen = open,
-                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt,
+                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
                 syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded)
             Box(Modifier.align(Alignment.End)) { options() }
         }
     } else {
         Row(verticalAlignment = Alignment.CenterVertically) {
             NotebookListRow(notebook = book, hit = compactHit, onOpen = open,
-                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt,
+                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
                 syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded,
                 modifier = Modifier.weight(1f))
             options()

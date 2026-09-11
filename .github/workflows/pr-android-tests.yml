@@ -57,7 +57,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: |
-            test_status=0; ./gradlew connectedDebugAndroidTest || test_status=$?; adb pull /sdcard/Android/data/com.ethran.notable/files/ui-review ui-review || true; if [ "$test_status" -ne 0 ]; then adb logcat -d > android-instrumentation-logcat.txt; fi; exit "$test_status"
+            test_status=0; ./gradlew connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || test_status=$?; adb pull /sdcard/Android/data/com.ethran.notable/files/ui-review ui-review || true; if [ "$test_status" -ne 0 ]; then adb logcat -d > android-instrumentation-logcat.txt; fi; exit "$test_status"
 
       - name: Upload instrumentation results
         if: always()

@@ -65,6 +65,7 @@ fun NotebookCoverCard(
     syncBadge: SyncBadge? = null,
     onPreviewNeeded: (String) -> Unit = {},
     editedAt: Date = notebook.updatedAt,
+    location: String? = null,
 ) {
     Column(
         modifier
@@ -89,6 +90,8 @@ fun NotebookCoverCard(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 7.dp)
         )
+        if (location != null) Text(location, fontSize = 12.sp, color = Kaleido.Muted,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
             text = editedLabel(editedAt),
             fontSize = 12.sp,
@@ -109,11 +112,14 @@ fun NotebookListRow(
     syncBadge: SyncBadge? = null,
     onPreviewNeeded: (String) -> Unit = {},
     editedAt: Date = notebook.updatedAt,
+    location: String? = null,
 ) {
     ListRow(
         hit = hit + 22.dp, // the 46dp chip needs more room than a plain row
         label = notebook.title,
-        secondary = "${notebook.pageIds.size} pages · ${editedLabel(editedAt)}",
+        secondary = listOfNotNull(location, "${notebook.pageIds.size} pages · ${editedLabel(editedAt)}")
+            .joinToString("\n"),
+        secondaryMaxLines = if (location != null) 3 else 1,
         onClick = onOpen,
         onLongClick = onOpenSettings,
         modifier = modifier,

@@ -91,6 +91,28 @@ object LibrarySort {
         if (byName != 0) byName else id(a).compareTo(id(b))
     }
 
+    /** Parent context for global search results, including duplicate names in different folders. */
+    fun folderPath(folderId: String?, foldersById: Map<String, Folder>): String {
+        val names = ArrayDeque<String>()
+        val seen = mutableSetOf<String>()
+        var current = folderId
+        while (current != null) {
+            if (!seen.add(current)) {
+                names.addFirst("…")
+                break
+            }
+            val folder = foldersById[current]
+            if (folder == null) {
+                names.addFirst("Unavailable folder")
+                break
+            }
+            names.addFirst(folder.title)
+            current = folder.parentFolderId
+        }
+        names.addFirst("Library")
+        return names.joinToString(" / ")
+    }
+
     /**
      * Whether [title] answers [query].
      *

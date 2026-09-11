@@ -21,13 +21,18 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.ethran.notable.testing.ComposeUiSupportRule
+import com.ethran.notable.data.datastore.AppSettings
+import com.ethran.notable.sync.SyncBackend
+import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.ui.theme.InkaTheme
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.kaleidoMetrics
 import com.ethran.notable.ui.viewmodels.LibraryUiState
 import com.ethran.notable.ui.viewmodels.PagesUiState
+import com.ethran.notable.ui.viewmodels.SyncSettingsUiState
 import com.ethran.notable.ui.views.LibraryHeader
 import com.ethran.notable.ui.views.PagesContent
+import com.ethran.notable.ui.views.SettingsContent
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -119,6 +124,31 @@ class UiConsistencyComposeTests {
         compose.onNodeWithText("New notebook").assertIsDisplayed()
         screenshot("library-header-600")
     }
+
+    private fun checkSyncSettings(backend: SyncBackend, width: Int) {
+        var returned = false
+        content(width = width, fontScale = 1.5f) {
+            SettingsContent(
+                versionString = "0.50.0", settings = AppSettings(), isLatestVersion = true,
+                onBack = { returned = true }, goToWelcome = {}, goToSystemInfo = {},
+                onCheckUpdate = {}, onUpdateSettings = {}, selectedTabInitial = 3,
+                syncUiState = SyncSettingsUiState(syncSettings = SyncSettings(backend = backend)),
+            )
+        }
+        compose.onNodeWithText("Experimental Feature").assertDoesNotExist()
+        compose.onNodeWithText("Sync").assertIsSelected().assertIsDisplayed()
+        val back = compose.onNodeWithContentDescription("Back to library")
+        back.assertWidthIsAtLeast(44.dp).assertHeightIsAtLeast(44.dp).assertIsDisplayed()
+        screenshot("settings-${backend.name.lowercase()}-$width-large-text")
+        back.performClick()
+        assertEquals(true, returned)
+    }
+
+    @Test
+    fun disabledSyncHasNoWebDavWarningAndCanReturnToLibrary() = checkSyncSettings(SyncBackend.OFF, 320)
+
+    @Test
+    fun couchSyncHasNoWebDavWarningAndCanReturnToLibrary() = checkSyncSettings(SyncBackend.COUCHDB, 600)
 
     @Test
     fun loadingKeepsAnAccessibleWayBack() {
