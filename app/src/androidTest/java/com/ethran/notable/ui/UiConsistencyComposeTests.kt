@@ -37,6 +37,7 @@ import com.ethran.notable.ui.views.PagesContent
 import com.ethran.notable.ui.views.SettingsContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -151,11 +152,18 @@ class UiConsistencyComposeTests {
             option.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
             val layout = layouts.single()
-            assertFalse("$label must fit its control: size=${layout.size}, " +
+            val details = "$label must fit its control: size=${layout.size}, " +
                 "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, " +
                 "constraints=${layout.layoutInput.constraints}, " +
-                "overflowWidth=${layout.didOverflowWidth}, overflowHeight=${layout.didOverflowHeight}",
-                layout.hasVisualOverflow)
+                "line=${layout.getLineLeft(0)}..${layout.getLineRight(0)}, " +
+                "bottom=${layout.getLineBottom(0)}"
+            // GetTextLayoutResult can reconstruct a paragraph at the available maximum width
+            // while retaining the Text node's tight size. Check the actual line, not that blank
+            // paragraph area (hasVisualOverflow would report it as clipped text).
+            assertFalse(details, layout.isLineEllipsized(0))
+            assertTrue(details, layout.getLineLeft(0) >= 0f &&
+                layout.getLineRight(0) <= layout.size.width &&
+                layout.getLineBottom(0) <= layout.size.height)
         }
         val back = compose.onNodeWithContentDescription("Back to library")
         back.assertWidthIsAtLeast(44.dp).assertHeightIsAtLeast(44.dp).assertIsDisplayed()
