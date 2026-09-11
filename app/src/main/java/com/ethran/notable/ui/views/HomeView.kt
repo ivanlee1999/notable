@@ -585,11 +585,11 @@ internal fun LibraryHeader(
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             TextAction("New notebook", onCreateNewNotebook, filled = true)
             Box {
-                TextAction("More", { isMoreOpen = true })
+                TextAction(stringResource(R.string.home_more_actions), { isMoreOpen = true })
                 if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
                     MenuAction("New folder", { isMoreOpen = false; onCreateNewFolder() })
-                    MenuAction("Quick note", { isMoreOpen = false; onCreateNewNote() })
-                    MenuAction("Import notebook", { isMoreOpen = false; onImport() })
+                    MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
+                    MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
                     RowRule()
                     MenuAction("Sync now", { isMoreOpen = false; onSyncNow() })
                     MenuAction(if (uiState.isLatestVersion) "Settings" else "Settings · Update available",

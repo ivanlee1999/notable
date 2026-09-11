@@ -23,7 +23,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.focus.FocusRequester
@@ -85,7 +84,7 @@ fun NamePromptDialog(
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .heightIn(max = dialogMaxHeight())
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
                 .verticalScroll(rememberScrollState())

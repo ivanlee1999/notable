@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -133,7 +132,7 @@ fun ConflictResolutionDialog(
     Dialog(onDismissRequest = { if (!working) onClose() }) {
         Column(
             modifier = Modifier
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .heightIn(max = dialogMaxHeight())
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
                 .verticalScroll(rememberScrollState())

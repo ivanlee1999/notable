@@ -14,10 +14,12 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -28,6 +30,11 @@ import com.ethran.notable.io.ExportTarget
 import com.ethran.notable.ui.SnackState
 import com.ethran.notable.ui.rememberAppScope
 import kotlinx.coroutines.launch
+
+/** Keeps dialog content scrollable within the current window, including split-screen windows. */
+@Composable
+internal fun dialogMaxHeight(): Dp =
+    with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } * 0.85f
 
 @Composable
 fun ShowSimpleConfirmationDialog(
@@ -66,7 +73,7 @@ fun ShowConfirmationDialog(
     Dialog(onDismissRequest = { onDismiss() }) {
         Column(
             modifier = Modifier
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .heightIn(max = dialogMaxHeight())
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
                 .verticalScroll(rememberScrollState())
@@ -107,7 +114,7 @@ fun ShowExportDialog(
     Dialog(onDismissRequest = { onCancel() }) {
         Column(
             modifier = Modifier
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .heightIn(max = dialogMaxHeight())
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
                 .verticalScroll(rememberScrollState())

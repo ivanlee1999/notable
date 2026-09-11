@@ -43,7 +43,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -259,7 +258,7 @@ fun NotebookConfigDialog(
         }) {
         Column(
             modifier = Modifier
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .heightIn(max = dialogMaxHeight())
                 .background(Color.White)
                 .fillMaxWidth()
                 .border(2.dp, Color.Black, RectangleShape)

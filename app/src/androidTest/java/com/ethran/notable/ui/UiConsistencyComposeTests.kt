@@ -12,14 +12,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.Surface
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import com.ethran.notable.testing.ComposeUiSupportRule
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.sync.SyncBackend
@@ -34,6 +36,7 @@ import com.ethran.notable.ui.views.LibraryHeader
 import com.ethran.notable.ui.views.PagesContent
 import com.ethran.notable.ui.views.SettingsContent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,19 +66,20 @@ class UiConsistencyComposeTests {
         }
     }
 
-    private fun screenshot(name: String) {
+    private fun screenshot(name: String, dialog: Boolean = false) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val directory = File(context.getExternalFilesDir(null), "ui-review").apply { mkdirs() }
         compose.waitForIdle()
-        // Include modal windows, which are separate Compose roots from the underlying page.
-        val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+        // Capture the rendered Compose window, including a dialog's separate root when present.
+        val root = if (dialog) compose.onNode(isDialog()) else compose.onRoot()
+        val bitmap = root.captureToImage().asAndroidBitmap()
         File(directory, "$name.png").outputStream().use {
             check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
         }
     }
 
     @Composable
-    private fun pages(
+    private fun TestPages(
         state: PagesUiState,
         onBack: (String?) -> Unit = {},
         onOpen: (String) -> Unit = {},
@@ -137,6 +141,16 @@ class UiConsistencyComposeTests {
         }
         compose.onNodeWithText("Experimental Feature").assertDoesNotExist()
         compose.onNodeWithText("Sync").assertIsSelected().assertIsDisplayed()
+        listOf("Off" to SyncBackend.OFF, "WebDAV" to SyncBackend.WEBDAV,
+            "CouchDB" to SyncBackend.COUCHDB).forEach { (label, choice) ->
+            val option = compose.onNodeWithText(label)
+            option.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+            if (choice == backend) option.assertIsSelected() else option.assertIsNotSelected()
+            val layouts = mutableListOf<TextLayoutResult>()
+            option.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
+            assertFalse("$label must fit its control", layouts.single().hasVisualOverflow)
+        }
         val back = compose.onNodeWithContentDescription("Back to library")
         back.assertWidthIsAtLeast(44.dp).assertHeightIsAtLeast(44.dp).assertIsDisplayed()
         screenshot("settings-${backend.name.lowercase()}-$width-large-text")
@@ -153,7 +167,7 @@ class UiConsistencyComposeTests {
     @Test
     fun loadingKeepsAnAccessibleWayBack() {
         var returned = false
-        content { pages(PagesUiState(), onBack = { returned = true }) }
+        content { TestPages(PagesUiState(), onBack = { returned = true }) }
         compose.onNodeWithText("Loading pages…").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back to library").assertIsDisplayed().performClick()
         assertEquals(true, returned)
@@ -166,7 +180,7 @@ class UiConsistencyComposeTests {
         val duplicated = mutableListOf<String>()
         val opened = mutableListOf<String>()
         content {
-            pages(
+            TestPages(
                 PagesUiState(bookId = "ui-review", bookTitle = "Design notes", pageIds = listOf("p1"),
                     openPageId = "p1", isLoading = false),
                 onOpen = { opened += it }, onDelete = { deleted += it },
@@ -184,7 +198,7 @@ class UiConsistencyComposeTests {
         compose.onNodeWithText("Delete page").assertIsDisplayed().performClick()
         compose.onNodeWithText("Delete this page?").assertIsDisplayed()
         assertEquals(emptyList<String>(), deleted)
-        screenshot("page-delete-confirmation-320")
+        screenshot("page-delete-confirmation-320", dialog = true)
         compose.onNodeWithText("Cancel").performClick()
         assertEquals(emptyList<String>(), deleted)
         compose.onNodeWithContentDescription("Page 1 options").performClick()
@@ -197,7 +211,7 @@ class UiConsistencyComposeTests {
     fun largeTextKeepsCreationAndOrganizationReachable() {
         val added = mutableListOf<Int>()
         content(width = 600, fontScale = 1.5f) {
-            pages(PagesUiState(bookId = "ui-review", bookTitle = "Planning and handwritten meeting notes",
+            TestPages(PagesUiState(bookId = "ui-review", bookTitle = "Planning and handwritten meeting notes",
                 pageIds = listOf("p1", "p2", "p3"), openPageId = "p1", isLoading = false),
                 onAdd = { added += it })
         }
@@ -214,7 +228,7 @@ class UiConsistencyComposeTests {
     @Test
     fun tabletPageOverviewKeepsCurrentPageAndOptionsVisible() {
         content(width = 1200) {
-            pages(PagesUiState(bookId = "ui-review", bookTitle = "Field notebook",
+            TestPages(PagesUiState(bookId = "ui-review", bookTitle = "Field notebook",
                 pageIds = (1..8).map { "p$it" }, openPageId = "p1", isLoading = false))
         }
         compose.onNodeWithContentDescription("Open page 1").assertIsDisplayed().assertIsSelected()
