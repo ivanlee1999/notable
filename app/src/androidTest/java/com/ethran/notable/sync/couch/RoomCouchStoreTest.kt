@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.After
@@ -80,6 +81,7 @@ class RoomCouchStoreTest {
     private lateinit var db: AppDatabase
     private lateinit var repository: AppRepository
     private lateinit var store: RoomCouchStore
+    private val pageManagers = mutableListOf<PageDataManager>()
 
     /**
      * Stands in for the app's images folder. A test has no "All files access", so the real one
@@ -109,6 +111,9 @@ class RoomCouchStoreTest {
 
     @After
     fun tearDown() {
+        runBlocking {
+            withTimeout(10_000) { pageManagers.forEach { it.shutdownForTests() } }
+        }
         db.close()
         images.deleteRecursively()
         backgrounds.deleteRecursively()
@@ -1037,7 +1042,7 @@ class RoomCouchStoreTest {
             // behaviour is covered by CouchSyncControllerTest, so it is wired to a dead backend
             // here rather than allowed to reach for a server that is not part of this scenario.
             couchSync = inertCouchSync(),
-        )
+        ).also { pageManagers += it }
 
         runBlocking {
             repository.bookRepository.createEmpty(Notebook(id = "nb1", pageIds = listOf("p1")))
@@ -1073,7 +1078,7 @@ class RoomCouchStoreTest {
             backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
             viewport = PageViewportState(),
             couchSync = inertCouchSync(),
-        )
+        ).also { pageManagers += it }
 
         runBlocking {
             repository.bookRepository.createEmpty(Notebook(id = "nb1", pageIds = listOf("p1")))
@@ -1194,7 +1199,7 @@ class RoomCouchStoreTest {
         backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
         viewport = PageViewportState(),
         couchSync = inertCouchSync(),
-    )
+    ).also { pageManagers += it }
 
     private fun reportingStore() = RoomCouchStore(
         repository, db.kvDao(), deviceId = "boox", imagesFolder = { images },

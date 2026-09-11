@@ -37,6 +37,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -101,6 +102,7 @@ class PageDataManagerWriteOrderTest {
 
     @After
     fun tearDown() {
+        runBlocking { withTimeout(10_000) { manager.shutdownForTests() } }
         db.close()
     }
 

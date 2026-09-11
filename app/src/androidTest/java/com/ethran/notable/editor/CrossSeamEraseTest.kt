@@ -46,11 +46,12 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -102,14 +103,21 @@ class CrossSeamEraseTest {
 
     @After
     fun tearDown() {
-        GlobalAppSettings.update(settingsBefore)
         if (CanvasEventBus.drawingInProgress.isLocked) {
             runCatching { CanvasEventBus.drawingInProgress.unlock() }
         }
-        scope.cancel()
-        // Bounded: a page-load job on the same scope can outlive the test, and an unbounded join
-        // would hang the run rather than fail it.
-        runBlocking { withTimeoutOrNull(10_000) { manager.awaitPendingDbWrites() } }
+        // Cancelling does not wait for an in-flight Room query to unwind. Closing its pool
+        // before that completes crashes the next test, hiding the failure that triggered cleanup.
+        try {
+            runBlocking {
+                withTimeout(10_000) {
+                    scope.coroutineContext.job.cancelAndJoin()
+                    manager.shutdownForTests()
+                }
+            }
+        } finally {
+            GlobalAppSettings.update(settingsBefore)
+        }
         db.close()
     }
 
@@ -201,10 +209,9 @@ class CrossSeamEraseTest {
             viewHeight = 300,
             snackManager = SnackState(),
         )
-        assertTrue(
-            "the view must finish entering page A, with page B recorded behind it",
-            waitFor(5_000) { page.currentPageId == pageA && page.nextPageId == pageB },
-        )
+        withTimeout(5_000) { page.awaitInitialLoad() }
+        assertEquals("the view must finish entering page A", pageA, page.currentPageId)
+        assertEquals("page B must be recorded behind it", pageB, page.nextPageId)
         Seam(page, pageA, pageB)
     }
 

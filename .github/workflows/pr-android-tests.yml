@@ -7,9 +7,8 @@ on:
 jobs:
   android-tests:
     if: github.event.label.name == 'run-android-tests'
-    runs-on: macos-15-intel
-    # A hung instrumented test used to sit here for GitHub's six-hour default before being killed;
-    # a healthy run is 22-32 minutes, so anything past this is wedged, not slow.
+    runs-on: ubuntu-latest
+    # Keep a hard limit for a wedged emulator or instrumented test.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -28,6 +27,18 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Build before booting the emulator so Kotlin compilation and emulation do not
+      # compete for the runner's CPU and memory.
+      - name: Build instrumentation APKs
+        run: ./gradlew assembleDebug assembleDebugAndroidTest
+
+      # Recommended Linux setup from reactivecircus/android-emulator-runner.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Run Android Instrumentation Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -38,16 +49,30 @@ jobs:
           force-avd-creation: true
           emulator-options: >-
             -no-window
+            -gpu swiftshader_indirect
             -no-snapshot-save
             -noaudio
             -no-boot-anim
             -camera-back none
           disable-animations: true
-          boot-timeout: 600  
-          script: ./gradlew connectedDebugAndroidTest
+          emulator-boot-timeout: 600
+          script: >-
+            ./gradlew connectedDebugAndroidTest ||
+            { adb logcat -d > android-instrumentation-logcat.txt; exit 1; }
+
+      - name: Upload instrumentation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-results
+          path: |
+            app/build/reports/androidTests/connected
+            app/build/outputs/androidTest-results/connected
+            android-instrumentation-logcat.txt
+          if-no-files-found: warn
 
       - name: Remove Label
-        if: always() && github.event.pull_request.head.repo.fork == false
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
         uses: actions/github-script@v7
         with:

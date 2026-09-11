@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1355,6 +1356,17 @@ class PageDataManager @Inject constructor(
             .filter { it !== persistCollector }
             .toList()
             .joinAll()
+    }
+
+    /**
+     * Ends this test instance before its in-memory database is closed. The editor's own scope
+     * must be cancelled and joined first: it can still enqueue work on these independent scopes.
+     * Waiting for writes alone leaves page loads and the process-lifetime collectors running.
+     */
+    @VisibleForTesting
+    suspend fun shutdownForTests() {
+        dataLoadingScope.coroutineContext.job.cancelAndJoin()
+        dataScope.coroutineContext.job.cancelAndJoin()
     }
 
     /**
