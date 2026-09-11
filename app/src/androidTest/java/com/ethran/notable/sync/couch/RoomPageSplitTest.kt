@@ -11,6 +11,8 @@ import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.BlockRepository
+import com.ethran.notable.data.db.DeletedBlockRepository
 import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
@@ -95,6 +97,8 @@ class RoomPageSplitTest {
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
         deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
+        blockRepository = BlockRepository(db.blockDao()),
+        deletedBlockRepository = DeletedBlockRepository(db.deletedBlockDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         trashRepository = trashRepositoryFor(db),

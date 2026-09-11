@@ -256,6 +256,7 @@ class CanvasObserverRegistry(
                 .drop(1)
                 .collect {
                     log.v("isDrawing change to $it")
+                    if (!it) drawCanvas.cancelFallbackStroke()
                     // We need to close all menus
                     if (it) {
                         CanvasEventBus.closeMenusSignal.emit(Unit)

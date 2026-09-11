@@ -1,11 +1,14 @@
 package com.ethran.notable.sync.couch
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -13,6 +16,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The two pumps — the edit debounce and the change-feed loop — without a server.
@@ -42,6 +46,15 @@ class CouchSyncControllerTest {
         var pullError: Throwable? = null
 
         @Volatile
+        var beforeFlush: (suspend () -> Unit)? = null
+
+        @Volatile
+        var beforePull: (suspend () -> Unit)? = null
+
+        @Volatile
+        var onPendingRead: (() -> Unit)? = null
+
+        @Volatile
         var enabled = true
 
         val markedPages = mutableListOf<String>()
@@ -69,11 +82,13 @@ class CouchSyncControllerTest {
 
         override suspend fun flush(): CouchSyncEngine.FlushReport {
             synchronized(lock) { flushes += 1 }
+            beforeFlush?.invoke()
             return flushReport
         }
 
         override suspend fun pull(longpoll: Boolean): CouchSyncEngine.PullReport {
             synchronized(lock) { pulls += longpoll }
+            beforePull?.invoke()
             pullError?.let { throw it }
             return pullReport
         }
@@ -129,6 +144,7 @@ class CouchSyncControllerTest {
 
         override suspend fun pendingCount(): Int {
             pendingReads.incrementAndGet()
+            onPendingRead?.invoke()
             return pending
         }
     }
@@ -622,6 +638,11 @@ class CouchSyncControllerTest {
             1,
             backend.flushCount,
         )
+        assertEquals(
+            "successful reads must not hide the outstanding upload failure during backoff",
+            CouchSyncController.Status.Failed("conflict(page:a)"),
+            controller.status,
+        )
     }
 
     // region Backgrounding
@@ -679,6 +700,115 @@ class CouchSyncControllerTest {
     // endregion
 
     // region Push backoff
+
+    @Test
+    fun `recovered pull restores upload failure instead of keeping read failure`() {
+        val backend = BackendSpy()
+        backend.pending = 1
+        backend.flushReport = failingFlush(retriable = true)
+        val controller = CouchSyncController(
+            scope = scope,
+            backend = backend,
+            clock = CouchSyncClock(sleep = { ms ->
+                if (ms >= 800) kotlinx.coroutines.awaitCancellation() else delay(5)
+            }),
+        )
+
+        runBlocking { controller.pushNow() }
+        val uploadFailure = controller.status
+        backend.pullError = CouchError.Transport("download offline")
+        runBlocking { controller.syncNow() }
+        assertTrue("the pull failed independently", controller.status != uploadFailure)
+
+        backend.pullError = null
+        controller.start()
+        settle(200)
+
+        assertEquals("restore the queued write's failure", uploadFailure, controller.status)
+        assertEquals("reads must not preempt upload backoff", 1, backend.flushCount)
+
+        backend.pending = 0
+        backend.flushReport = CouchSyncEngine.FlushReport()
+        runBlocking { controller.pushNow() }
+        controller.stop()
+        assertEquals(CouchSyncController.Status.Idle, controller.status)
+        assertEquals(0, controller.pendingCount)
+    }
+
+    @Test
+    fun `recovered pull clears read failure when ordinary edits are still queued`() {
+        val backend = BackendSpy()
+        backend.pending = 1
+        // A newer edit can remain queued after an otherwise successful flush.
+        backend.flushReport = CouchSyncEngine.FlushReport(stillDirty = listOf("page:p1"))
+        val controller = controller(backend, FakeSleeper(Int.MAX_VALUE, pacingMs = 5))
+        val afterRead = AtomicReference<CouchSyncController.Status?>(null)
+        backend.onPendingRead = { afterRead.compareAndSet(null, controller.status) }
+
+        runBlocking { controller.pushNow() }
+        assertEquals(1, controller.pendingCount)
+        backend.pullError = CouchError.Transport("download offline")
+        runBlocking { controller.syncNow() }
+        assertTrue(controller.status is CouchSyncController.Status.Failed)
+
+        backend.pullError = null
+        controller.start()
+        settle(200)
+        controller.stop()
+
+        assertEquals(
+            "queued edits do not make a read error permanent",
+            CouchSyncController.Status.Idle,
+            afterRead.get(),
+        )
+    }
+
+    @Test
+    fun `cancelled syncNow clears syncing before the feed recovers`() = runBlocking {
+        val backend = BackendSpy()
+        val entered = CompletableDeferred<Unit>()
+        backend.beforePull = {
+            entered.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+        }
+        val controller = controller(backend, FakeSleeper(Int.MAX_VALUE, pacingMs = 5))
+        val request = launch { controller.syncNow() }
+        entered.await()
+        assertEquals(CouchSyncController.Status.Syncing, controller.status)
+
+        request.cancelAndJoin()
+        assertEquals(CouchSyncController.Status.Idle, controller.status)
+
+        backend.beforePull = null
+        controller.start()
+        delay(100)
+        controller.stop()
+        assertEquals(CouchSyncController.Status.Idle, controller.status)
+    }
+
+    @Test
+    fun `cancelled flush restores queued upload error and clears push activity`() = runBlocking {
+        val backend = BackendSpy()
+        backend.pending = 1
+        backend.flushReport = failingFlush(retriable = false)
+        val controller = controller(backend, FakeSleeper(10))
+        controller.pushNow()
+        val uploadFailure = controller.status
+        val entered = CompletableDeferred<Unit>()
+        backend.beforeFlush = {
+            entered.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+        }
+        val request = launch { controller.pushNow() }
+        entered.await()
+        assertEquals(CouchSyncController.Status.Syncing, controller.status)
+
+        request.cancelAndJoin()
+
+        assertEquals(uploadFailure, controller.status)
+        assertFalse(controller.state.value.isPushing)
+        assertEquals(1, controller.pendingCount)
+    }
 
     private fun failingFlush(retriable: Boolean, retryAfterMs: Long? = null) =
         CouchSyncEngine.FlushReport(

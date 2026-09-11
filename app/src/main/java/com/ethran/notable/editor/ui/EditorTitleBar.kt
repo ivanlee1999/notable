@@ -70,14 +70,11 @@ fun EditorTitleBar(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // Back goes one level out, not all the way home: out of a notebook is its page list.
-            val backTarget = ToolbarAction.NavigateToPages
-            Icon(
-                imageVector = FeatherIcons.ChevronLeft,
+            TitleBarButton(
+                icon = FeatherIcons.ChevronLeft,
                 contentDescription = stringResource(R.string.editor_title_bar_back),
-                tint = Kaleido.Ink,
-                modifier = Modifier
-                    .size(18.dp)
-                    .noRippleClickable { onAction(backTarget) },
+                hitSize = metrics.hit,
+                onClick = { onAction(ToolbarAction.NavigateToPages) },
             )
 
             Text(
@@ -101,11 +98,13 @@ fun EditorTitleBar(
             TitleBarButton(
                 icon = FeatherIcons.FileText,
                 contentDescription = stringResource(R.string.change_background),
+                hitSize = metrics.hit,
                 onClick = { onAction(ToolbarAction.ToggleBackgroundSelector(true)) },
             )
             TitleBarButton(
                 icon = FeatherIcons.MoreHorizontal,
                 contentDescription = stringResource(R.string.toolbar_element_menu),
+                hitSize = metrics.hit,
                 onClick = { onAction(ToolbarAction.ToggleMenu) },
             )
         }
@@ -126,16 +125,17 @@ fun EditorTitleBar(
 fun editorTitleBarHeight(screenWidthDp: Int): Dp =
     kaleidoMetrics(screenWidthDp.dp).hit + Kaleido.RowRule
 
-/** A 28dp icon action. Smaller than a rail button: it is chrome, not a tool. */
+/** The compact icon keeps the same finger-sized target as the rest of the chrome. */
 @Composable
 private fun TitleBarButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
+    hitSize: Dp,
     onClick: () -> Unit,
 ) {
     Box(
         Modifier
-            .size(28.dp)
+            .size(hitSize)
             .noRippleClickable(onClick),
         contentAlignment = Alignment.Center,
     ) {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.49.0
+
+- Discard fallback pen strokes canceled by Android palm rejection, and release the
+  held viewport when drawing stops or its surface disappears. A new pen gesture
+  also recovers if an earlier terminal event was lost.
+- Keep failed-upload status visible while queued edits wait to retry, even when
+  downloading other changes succeeds.
+- Make Back, paper settings, and the editor menu use the same 44/48dp touch targets
+  as the rest of the toolbar.
+- Restore the instrumented test fixtures after the block-storage change, exercise
+  Android 13 cancellation events, and run sync integration tests against a real,
+  isolated CouchDB in CI.
+
+No database or sync-format change. Compatible with Bopa 0.3.x.
+
 ## 0.48.0
 
 Still nothing you can see — but where 0.47.0 taught Notable to *recognise* typed

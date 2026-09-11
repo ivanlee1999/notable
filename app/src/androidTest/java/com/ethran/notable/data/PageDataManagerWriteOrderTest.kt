@@ -10,6 +10,8 @@ import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.BlockRepository
+import com.ethran.notable.data.db.DeletedBlockRepository
 import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
@@ -35,6 +37,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -99,6 +102,7 @@ class PageDataManagerWriteOrderTest {
 
     @After
     fun tearDown() {
+        runBlocking { withTimeout(10_000) { manager.shutdownForTests() } }
         db.close()
     }
 
@@ -119,6 +123,8 @@ class PageDataManagerWriteOrderTest {
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
         deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
+        blockRepository = BlockRepository(db.blockDao()),
+        deletedBlockRepository = DeletedBlockRepository(db.deletedBlockDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         trashRepository = trashRepositoryFor(db),

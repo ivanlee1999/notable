@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.unit.IntOffset
+import androidx.annotation.VisibleForTesting
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.toRect
 import com.ethran.notable.R
@@ -331,36 +332,41 @@ class PageView(
     }
 
 
-    init {
-        coroutineScope.launch(Dispatchers.IO) {
-            // set page, and retrieve page data from db
-            pageDataManager.setPage(initialPageId)
-            log.i("PageView init with initial pageId: $initialPageId" )
-            if(currentPageId.isEmpty())
-                log.e("Current page id is empty")
+    private val initializationJob: Job = coroutineScope.launch(Dispatchers.IO) {
+        // set page, and retrieve page data from db
+        pageDataManager.setPage(initialPageId)
+        log.i("PageView init with initial pageId: $initialPageId")
+        if (currentPageId.isEmpty())
+            log.e("Current page id is empty")
 
-            // The sheet is only known once the page row is loaded, so the fit is computed here
-            // rather than at construction: a page that has not been zoomed yet opens fitted.
-            zoomLevel.value = initialZoom()
-            clampScrollToBounds()
-            pageDataManager.getCachedBitmap(currentPageId)?.let { cached ->
-                log.i("PageView: using cached bitmap")
-                windowedBitmap = cached
-                windowedCanvas = Canvas(windowedBitmap)
-            } ?: run {
-                log.i("PageView.init: creating new bitmap")
-                recreateCanvas()
-                pageDataManager.cacheBitmap(currentPageId, windowedBitmap)
-            }
-
-            coroutineScope.launch(Dispatchers.Main) {
-                // If we do it with main.immediate then it wont work.
-                CanvasEventBus.refreshUiImmediately.emit(Unit)
-            }
-            loadPage()
-            log.d("Page loaded (Init with id: $currentPageId)")
-            pageDataManager.startPersistingBitmaps(context)
+        // The sheet is only known once the page row is loaded, so the fit is computed here
+        // rather than at construction: a page that has not been zoomed yet opens fitted.
+        zoomLevel.value = initialZoom()
+        clampScrollToBounds()
+        pageDataManager.getCachedBitmap(currentPageId)?.let { cached ->
+            log.i("PageView: using cached bitmap")
+            windowedBitmap = cached
+            windowedCanvas = Canvas(windowedBitmap)
+        } ?: run {
+            log.i("PageView.init: creating new bitmap")
+            recreateCanvas()
+            pageDataManager.cacheBitmap(currentPageId, windowedBitmap)
         }
+
+        coroutineScope.launch(Dispatchers.Main) {
+            // If we do it with main.immediate then it wont work.
+            CanvasEventBus.refreshUiImmediately.emit(Unit)
+        }
+        loadPage()
+        log.d("Page loaded (Init with id: $currentPageId)")
+        pageDataManager.startPersistingBitmaps(context)
+    }
+
+    /** Waits for page entry and its first content load, before a test begins editing the page. */
+    @VisibleForTesting
+    suspend fun awaitInitialLoad() {
+        initializationJob.join()
+        loadingJob?.join()
     }
 
     /**

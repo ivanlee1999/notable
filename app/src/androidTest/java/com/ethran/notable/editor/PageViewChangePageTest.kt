@@ -12,6 +12,8 @@ import com.ethran.notable.data.db.CouchDeletionRepository
 import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.CryptoHelper
 import com.ethran.notable.data.db.DeletedImageRepository
+import com.ethran.notable.data.db.BlockRepository
+import com.ethran.notable.data.db.DeletedBlockRepository
 import com.ethran.notable.data.db.DeletedPageRepository
 import com.ethran.notable.data.db.DeletedStrokeRepository
 import com.ethran.notable.data.db.FolderRepository
@@ -35,10 +37,11 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -90,10 +93,12 @@ class PageViewChangePageTest {
         if (CanvasEventBus.drawingInProgress.isLocked) {
             runCatching { CanvasEventBus.drawingInProgress.unlock() }
         }
-        scope.cancel()
-        // Bounded: a page-load job on the same scope can outlive the test, and an unbounded join
-        // would hang the run rather than fail it.
-        runBlocking { withTimeoutOrNull(10_000) { manager.awaitPendingDbWrites() } }
+        runBlocking {
+            withTimeout(10_000) {
+                scope.coroutineContext.job.cancelAndJoin()
+                manager.shutdownForTests()
+            }
+        }
         db.close()
     }
 
@@ -114,6 +119,8 @@ class PageViewChangePageTest {
         deletedStrokeRepository = DeletedStrokeRepository(db.deletedStrokeDao()),
         deletedPageRepository = DeletedPageRepository(db.deletedPageDao()),
         deletedImageRepository = DeletedImageRepository(db.deletedImageDao()),
+        blockRepository = BlockRepository(db.blockDao()),
+        deletedBlockRepository = DeletedBlockRepository(db.deletedBlockDao()),
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         trashRepository = trashRepositoryFor(db),
@@ -152,10 +159,8 @@ class PageViewChangePageTest {
             viewHeight = 300,
             snackManager = SnackState(),
         )
-        assertTrue(
-            "the view must finish entering page A first",
-            waitFor(5_000) { page.currentPageId == pageA },
-        )
+        withTimeout(5_000) { page.awaitInitialLoad() }
+        assertEquals("the view must finish entering page A first", pageA, page.currentPageId)
 
         // A stroke handler holds this for as long as it is turning pen-up points into ink.
         assertTrue(CanvasEventBus.drawingInProgress.tryLock())
