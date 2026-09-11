@@ -10,17 +10,29 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import com.ethran.notable.ui.components.ActionMenu
+import com.ethran.notable.ui.components.MenuAction
+import com.ethran.notable.ui.components.TextAction
+import com.ethran.notable.ui.components.RowRule
+import compose.icons.feathericons.ArrowLeft
+import java.util.Date
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,20 +50,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -71,7 +78,6 @@ import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.messageRes
 import com.ethran.notable.ui.rememberKvProxy
 import com.ethran.notable.ui.requestFullSync
-import com.ethran.notable.ui.components.CoverActionTile
 import com.ethran.notable.ui.components.FILE_BAR_WIDTH
 import com.ethran.notable.ui.components.Kicker
 import com.ethran.notable.ui.components.LibraryFileBar
@@ -79,7 +85,6 @@ import com.ethran.notable.ui.components.ListRow
 import com.ethran.notable.ui.components.NotebookCoverCard
 import com.ethran.notable.ui.components.NotebookListRow
 import com.ethran.notable.ui.components.SectionHeader
-import com.ethran.notable.ui.components.ShowPagesRow
 import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
@@ -92,7 +97,6 @@ import com.ethran.notable.ui.dialogs.TelemetryConsentDialog
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.KaleidoMetrics
-import com.ethran.notable.ui.theme.coverColumnsForShelf
 import com.ethran.notable.ui.theme.kaleidoMetrics
 import com.ethran.notable.ui.viewmodels.LibrarySort
 import com.ethran.notable.ui.viewmodels.LibrarySortOrder
@@ -100,17 +104,12 @@ import com.ethran.notable.ui.viewmodels.LibraryUiState
 import com.ethran.notable.ui.viewmodels.LibraryViewModel
 import com.ethran.notable.sync.SyncBadge
 import compose.icons.FeatherIcons
-import compose.icons.feathericons.FilePlus
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.MoreVertical
-import compose.icons.feathericons.Plus
-import compose.icons.feathericons.RefreshCw
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Settings
 import compose.icons.feathericons.Trash2
-import compose.icons.feathericons.Upload
 import compose.icons.feathericons.X
-import compose.icons.feathericons.Zap
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.launch
 
@@ -231,6 +230,7 @@ fun Library(
             navController.navigate(EditorDestination.createRoute(pageId, bookId))
         },
         goToPage = goToPage,
+        onNavigateToPages = { navController.navigate(PagesDestination.createRoute(it)) },
         onCreateNewNote = { onCreateNewNote(uiState.folderId) },
         // The prompt is a preference, not a requirement: with it off, creation stays a single tap
         // and the item is named from the long-press menu if and when the user cares.
@@ -279,25 +279,40 @@ fun LibraryContent(
     onCreateNewNotebook: () -> Unit,
     onImportPdf: (Uri, Boolean) -> Unit,
     onImportXopp: (Uri) -> Unit,
-    onPreviewNeeded: (String) -> Unit
+    onPreviewNeeded: (String) -> Unit,
+    onNavigateToPages: (String) -> Unit = {},
 ) {
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Kaleido.Paper)
     ) {
-        val screen = kaleidoMetrics(maxWidth)
         val pickImportFile = rememberImportPicker(onImportPdf, onImportXopp)
-
-        // The file bar takes its width off the shelf, so the covers have to be measured against
-        // what is left rather than against the panel. Sized against the panel they stayed at
-        // three columns and simply got narrower, which is the one thing the cover width is
-        // supposed to be fixed against.
-        val shelfWidth = if (screen.wide) maxWidth - FILE_BAR_WIDTH - Kaleido.SectionRule
-        else maxWidth
-        val metrics =
-            if (screen.wide) screen.copy(coverColumns = coverColumnsForShelf(shelfWidth))
-            else screen
+        var sidebarRequested by rememberSaveable { mutableStateOf(true) }
+        val canShowSidebar = maxWidth >= 900.dp
+        val showSidebar = canShowSidebar && sidebarRequested
+        val shelfWidth = if (showSidebar) maxWidth - FILE_BAR_WIDTH - Kaleido.SectionRule else maxWidth
+        val metrics = kaleidoMetrics(shelfWidth).copy(
+            coverColumns = ((shelfWidth - 40.dp) / 200.dp).toInt().coerceAtLeast(1))
+        var gridChoice by rememberSaveable { mutableStateOf<Boolean?>(null) }
+        val showGrid = gridChoice ?: (shelfWidth >= 500.dp)
+        var conflictedBook by remember { mutableStateOf<Notebook?>(null) }
+        conflictedBook?.let { book ->
+            ConflictResolutionDialog(bookId = book.id, title = book.title,
+                onClose = { conflictedBook = null })
+        }
+        val openPages: (String) -> Unit = { bookId ->
+            if (uiState.syncBadges[bookId] == SyncBadge.CONFLICT) {
+                conflictedBook = uiState.tree.books.firstOrNull { it.id == bookId }
+                    ?: uiState.books.firstOrNull { it.id == bookId }
+            } else onNavigateToPages(bookId)
+        }
+        val openNotebook: (String, String) -> Unit = { pageId, bookId ->
+            if (uiState.syncBadges[bookId] == SyncBadge.CONFLICT) {
+                conflictedBook = uiState.tree.books.firstOrNull { it.id == bookId }
+                    ?: uiState.books.firstOrNull { it.id == bookId }
+            } else onNavigateToEditor(pageId, bookId)
+        }
 
         // Sorted here rather than in the view model: the order is a snapshot-state setting, and
         // reading it during composition is what makes a change to it redraw the shelf.
@@ -314,10 +329,15 @@ fun LibraryContent(
             )
         }
 
+        val foldersById = remember(uiState.tree.folders) { uiState.tree.folders.associateBy { it.id } }
+        val locationFor: (String?) -> String? = { parentId ->
+            if (uiState.isSearching) LibrarySort.folderPath(parentId, foldersById) else null
+        }
+
         Row(Modifier.fillMaxSize()) {
             // Only on a screen with the room: a one-handed device has one column's worth and
             // spends it on the shelf.
-            if (screen.wide) LibraryFileBar(
+            if (showSidebar) LibraryFileBar(
                 tree = uiState.tree,
                 selectedFolderId = uiState.folderId,
                 syncBadges = uiState.syncBadges,
@@ -326,85 +346,76 @@ fun LibraryContent(
                 onOpenNotebook = { book ->
                     // A book with no page has nothing to open — the empty-import leftover the
                     // shelf warns about. Silently doing nothing beats crashing on `first()`.
-                    val page = book.openPageId ?: book.pageIds.firstOrNull()
-                    if (page != null) onNavigateToEditor(page, book.id)
+                    val page = book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
+                    if (page != null) openNotebook(page, book.id) else openPages(book.id)
                 },
                 onSyncNow = onSyncNow,
             )
 
-        Column(Modifier.fillMaxSize()) {
-            LibraryHeader(
-                metrics = metrics,
-                uiState = uiState,
-                onNavigateToFolder = onNavigateToFolder,
-                onNavigateToSettings = onNavigateToSettings,
-                onSyncNow = onSyncNow,
-                onCreateNewNotebook = onCreateNewNotebook,
-                onCreateNewNote = onCreateNewNote,
-                onImport = pickImportFile,
-                onQueryChanged = onQueryChanged,
-                onSortChanged = onSortChanged,
-            )
-
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .autoEInkAnimationOnScroll(),
-                contentPadding = PaddingValues(
-                    start = metrics.pad, end = metrics.pad,
-                    top = metrics.pad, bottom = metrics.pad * 2
+            Column(Modifier.fillMaxSize()) {
+                LibraryHeader(
+                    metrics = metrics,
+                    uiState = uiState,
+                    onNavigateToFolder = onNavigateToFolder,
+                    onNavigateToSettings = onNavigateToSettings,
+                    onSyncNow = onSyncNow,
+                    onCreateNewNotebook = onCreateNewNotebook,
+                    onCreateNewNote = onCreateNewNote,
+                    onImport = pickImportFile,
+                    onQueryChanged = onQueryChanged,
+                    onSortChanged = onSortChanged,
+                    onCreateNewFolder = onCreateNewFolder,
+                    onNavigateToTrash = onNavigateToTrash,
+                    gridView = showGrid,
+                    onGridChanged = { gridChoice = it },
+                    onToggleSidebar = if (canShowSidebar) ({ sidebarRequested = !sidebarRequested }) else null,
+                    sidebarVisible = showSidebar,
                 )
-            ) {
-                item(key = "folders-header") {
-                    SectionHeader(
-                        stringResource(
-                            if (uiState.isSearching) R.string.home_folders_found
-                            else R.string.home_folders
-                        )
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-                items(sortedFolders, key = { "folder-${it.id}" }) { folder ->
-                    FolderRow(
-                        appRepository = appRepository,
-                        folder = folder,
-                        metrics = metrics,
-                        bookCount = uiState.folderBookCounts[folder.id] ?: 0,
-                        onOpen = { onNavigateToFolder(folder.id) },
-                    )
-                }
-                if (!uiState.isSearching) item(key = "folder-add") {
-                    ListRow(
-                        hit = metrics.hit,
-                        label = stringResource(R.string.home_add_new_folder),
-                        onClick = onCreateNewFolder,
-                        showChevron = false,
-                        leading = {
-                            Box(
-                                Modifier
-                                    .size(22.dp)
-                                    .border(1.dp, Kaleido.Edge),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    FeatherIcons.FolderPlus, null,
-                                    tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    )
-                }
 
-                // Only once something is in it. A permanently visible Trash row is a permanent
-                // reminder of a screen almost nobody needs; a row that appears the moment
-                // something is deleted is how the user finds out deletion was recoverable at all.
-                if (uiState.trashedCount > 0 && !uiState.isSearching) {
-                    item(key = "trash-row") {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .autoEInkAnimationOnScroll(),
+                    contentPadding = PaddingValues(
+                        start = metrics.pad, end = metrics.pad,
+                        top = metrics.pad, bottom = metrics.pad * 2
+                    )
+                ) {
+                    if (sortedFolders.isEmpty() && sortedBooks.isEmpty()) item(key = "empty-library") {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(if (uiState.isSearching) "No results for “${uiState.query}”" else if (uiState.folderId != null) "Empty folder" else "Your library starts here",
+                                color = Kaleido.Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text(if (uiState.isSearching) "Try another notebook or folder name."
+                                else "Create a notebook or import your notes from More.", color = Kaleido.Muted)
+                            if (uiState.isSearching) TextAction("Clear search", { onQueryChanged("") })
+                        }
+                    }
+                    item(key = "folders-header") {
+                        SectionHeader(
+                            stringResource(
+                                if (uiState.isSearching) R.string.home_folders_found
+                                else R.string.home_folders
+                            )
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    items(sortedFolders, key = { "folder-${it.id}" }) { folder ->
+                        FolderRow(
+                            appRepository = appRepository,
+                            folder = folder,
+                            metrics = metrics,
+                            bookCount = uiState.folderBookCounts[folder.id] ?: 0,
+                            location = locationFor(folder.parentFolderId),
+                            onOpen = { onNavigateToFolder(folder.id) },
+                        )
+                    }
+                    if (!uiState.isSearching) item(key = "folder-add") {
                         ListRow(
                             hit = metrics.hit,
-                            label = stringResource(R.string.home_trash),
-                            trailing = uiState.trashedCount.toString(),
-                            onClick = onNavigateToTrash,
+                            label = stringResource(R.string.home_add_new_folder),
+                            onClick = onCreateNewFolder,
+                            showChevron = false,
                             leading = {
                                 Box(
                                     Modifier
@@ -413,83 +424,109 @@ fun LibraryContent(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        FeatherIcons.Trash2, null,
+                                        FeatherIcons.FolderPlus, null,
                                         tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
                         )
                     }
-                }
 
-                item(key = "books-header") {
-                    Spacer(Modifier.height(22.dp))
-                    SectionHeader(
-                        stringResource(
-                            if (uiState.isSearching) R.string.home_notebooks_found
-                            else R.string.home_notebooks
+                    // Only once something is in it. A permanently visible Trash row is a permanent
+                    // reminder of a screen almost nobody needs; a row that appears the moment
+                    // something is deleted is how the user finds out deletion was recoverable at all.
+                    if (uiState.trashedCount > 0 && !uiState.isSearching) {
+                        item(key = "trash-row") {
+                            ListRow(
+                                hit = metrics.hit,
+                                label = stringResource(R.string.home_trash),
+                                trailing = uiState.trashedCount.toString(),
+                                onClick = onNavigateToTrash,
+                                leading = {
+                                    Box(
+                                        Modifier
+                                            .size(22.dp)
+                                            .border(1.dp, Kaleido.Edge),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            FeatherIcons.Trash2, null,
+                                            tint = Kaleido.Ink, modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    item(key = "books-header") {
+                        Spacer(Modifier.height(22.dp))
+                        SectionHeader(
+                            stringResource(
+                                if (uiState.isSearching) R.string.home_notebooks_found
+                                else R.string.home_notebooks
+                            )
                         )
-                    )
-                    Spacer(Modifier.height(14.dp))
-                }
+                        Spacer(Modifier.height(14.dp))
+                    }
 
-                // An empty notebook is a leftover from a failed import; warn once rather than
-                // drawing a cover for a book with no page to preview.
-                val (drawable, empty) = sortedBooks.partition { it.pageIds.isNotEmpty() }
+                    // An empty notebook is a leftover from a failed import; warn once rather than
+                    // drawing a cover for a book with no page to preview.
+                    val (drawable, empty) = sortedBooks.partition { it.pageIds.isNotEmpty() }
 
-                if (!uiState.isImporting) {
-                    items(empty, key = { "empty-${it.id}" }) { book ->
-                        EmptyBookWarningHandler(
-                            emptyBook = book,
-                            onDelete = { onDeleteEmptyBook(book.id) },
-                            onDismiss = { })
+                    if (!uiState.isImporting) {
+                        items(empty, key = { "empty-${it.id}" }) { book ->
+                            EmptyBookWarningHandler(
+                                emptyBook = book,
+                                onDelete = { onDeleteEmptyBook(book.id) },
+                                onDismiss = { })
+                        }
+                    }
+
+                    if (showGrid) {
+                        // Chunked into fixed-width rows rather than a nested lazy grid: the page is
+                        // one scroll region, and the covers per row is a design constant, not a
+                        // measured fit. The trailing null is the import tile, so it takes the next
+                        // free cell instead of needing a row of its own.
+                        // No trailing null any more: the import tile used to take the next free
+                        // cell, and a shelf's last row is not where a once-a-year action belongs.
+                        val rows = drawable.chunked(metrics.coverColumns)
+                        itemsIndexed(rows) { index, row ->
+                            NotebookRow(
+                                books = row,
+                                columns = metrics.coverColumns,
+                                appRepository = appRepository,
+                                exportEngine = exportEngine,
+                                syncScheduler = syncScheduler,
+                                syncBadges = uiState.syncBadges,
+                                lastEdited = uiState.lastEdited,
+                                locationFor = locationFor,
+                                onNavigateToPages = openPages,
+                                onNavigateToEditor = openNotebook,
+                                onPreviewNeeded = onPreviewNeeded,
+                            )
+                            if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
+                        }
+                    } else {
+                        items(drawable, key = { "book-${it.id}" }) { book ->
+                            NotebookEntry(
+                                book = book,
+                                compactHit = metrics.hit,
+                                appRepository = appRepository,
+                                exportEngine = exportEngine,
+                                syncScheduler = syncScheduler,
+                                syncBadge = uiState.syncBadges[book.id],
+                                editedAt = maxOf(book.updatedAt, uiState.lastEdited[book.id] ?: book.updatedAt),
+                                location = locationFor(book.parentFolderId),
+                                onNavigateToPages = openPages,
+                                onNavigateToEditor = openNotebook,
+                                onPreviewNeeded = onPreviewNeeded,
+                            )
+                        }
                     }
                 }
 
-                if (metrics.wide) {
-                    // Chunked into fixed-width rows rather than a nested lazy grid: the page is
-                    // one scroll region, and the covers per row is a design constant, not a
-                    // measured fit. The trailing null is the import tile, so it takes the next
-                    // free cell instead of needing a row of its own.
-                    // No trailing null any more: the import tile used to take the next free
-                    // cell, and a shelf's last row is not where a once-a-year action belongs.
-                    val rows = drawable.chunked(metrics.coverColumns)
-                    itemsIndexed(rows) { index, row ->
-                        NotebookRow(
-                            books = row,
-                            columns = metrics.coverColumns,
-                            appRepository = appRepository,
-                            exportEngine = exportEngine,
-                            syncScheduler = syncScheduler,
-                            syncBadges = uiState.syncBadges,
-                            onNavigateToEditor = onNavigateToEditor,
-                            onPreviewNeeded = onPreviewNeeded,
-                        )
-                        if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
-                    }
-                } else {
-                    items(drawable, key = { "book-${it.id}" }) { book ->
-                        NotebookEntry(
-                            book = book,
-                            compactHit = metrics.hit,
-                            appRepository = appRepository,
-                            exportEngine = exportEngine,
-                            syncScheduler = syncScheduler,
-                            syncBadge = uiState.syncBadges[book.id],
-                            onNavigateToEditor = onNavigateToEditor,
-                            onPreviewNeeded = onPreviewNeeded,
-                        )
-                    }
-                }
             }
-
-            if (metrics.narrow) {
-                LibraryBottomBar(
-                    onCreateNewNotebook = onCreateNewNotebook,
-                    onCreateNewNote = onCreateNewNote,
-                )
-            }
-        }
         }
     }
 }
@@ -499,145 +536,86 @@ fun LibraryContent(
  * outlined, new notebook filled. Closed by the 2px rule that every section repeats.
  */
 @Composable
-private fun LibraryHeader(
+internal fun LibraryHeader(
     metrics: KaleidoMetrics,
     uiState: LibraryUiState,
-    onNavigateToFolder: (String?) -> Unit,
-    onNavigateToSettings: () -> Unit,
-    onSyncNow: () -> Unit,
-    onCreateNewNotebook: () -> Unit,
-    onCreateNewNote: () -> Unit,
-    onImport: () -> Unit,
+    onNavigateToFolder: (String?) -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
+    onSyncNow: () -> Unit = {},
+    onCreateNewNotebook: () -> Unit = {},
+    onCreateNewNote: () -> Unit = {},
+    onImport: () -> Unit = {},
     onQueryChanged: (String) -> Unit = {},
     onSortChanged: (LibrarySortOrder, Boolean) -> Unit = { _, _ -> },
+    onCreateNewFolder: () -> Unit = {},
+    onNavigateToTrash: () -> Unit = {},
+    gridView: Boolean = true,
+    onGridChanged: (Boolean) -> Unit = {},
+    onToggleSidebar: (() -> Unit)? = null,
+    sidebarVisible: Boolean = false,
 ) {
-    val root = stringResource(R.string.home_view_name)
-    var isOverflowOpen by remember { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = metrics.pad, end = metrics.pad, top = metrics.pad, bottom = 12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Kicker(root, Modifier.noRippleClickable { onNavigateToFolder(null) })
-                    // Every ancestor but the current folder stays reachable; the current one
-                    // is the title below.
-                    uiState.breadcrumbFolders.dropLast(1).forEach { folder ->
-                        Kicker("/")
-                        Kicker(
-                            folder.title,
-                            Modifier.noRippleClickable { onNavigateToFolder(folder.id) })
-                    }
+    var isMoreOpen by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(metrics.pad)) {
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (uiState.folderId != null) SquareButton(48.dp, {
+                onNavigateToFolder(uiState.breadcrumbFolders.dropLast(1).lastOrNull()?.id)
+            }) { Icon(FeatherIcons.ArrowLeft, "Parent folder", tint = Kaleido.Ink) }
+            Text(uiState.breadcrumbFolders.lastOrNull()?.title ?: "Library",
+                fontSize = metrics.titleSize, fontWeight = FontWeight.ExtraBold,
+                color = Kaleido.Ink, modifier = Modifier.weight(1f), maxLines = 2,
+                overflow = TextOverflow.Ellipsis)
+        }
+        if (uiState.folderId != null) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Library", color = Kaleido.Ink,
+                    modifier = Modifier.heightIn(min = 48.dp).noRippleClickable { onNavigateToFolder(null) }
+                        .padding(vertical = 14.dp, horizontal = 8.dp))
+                uiState.breadcrumbFolders.dropLast(1).forEach { folder ->
+                    Text("/", color = Kaleido.Muted)
+                    Text(folder.title, color = Kaleido.Ink,
+                        modifier = Modifier.heightIn(min = 48.dp).noRippleClickable { onNavigateToFolder(folder.id) }
+                            .padding(vertical = 14.dp, horizontal = 8.dp))
                 }
-                Text(
-                    text = uiState.breadcrumbFolders.lastOrNull()?.title
-                        ?: stringResource(R.string.home_all_notes),
-                    fontSize = metrics.titleSize,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.9).sp,
-                    color = Kaleido.Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            // Sync fills while a run is in flight — the header is where you look to ask "is my
-            // writing on the server yet?", and the per-notebook badges only answer it one book at
-            // a time. It stays tappable while filled: the scheduler replaces an in-flight run
-            // rather than dropping the tap, so asking again always carries the latest edit.
-            SquareButton(
-                hit = metrics.hit,
-                onClick = onSyncNow,
-                filled = uiState.isSyncing,
-            ) {
-                Icon(
-                    FeatherIcons.RefreshCw, stringResource(R.string.sync_now),
-                    tint = if (uiState.isSyncing) Kaleido.Paper else Kaleido.Ink,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Box {
-                SquareButton(hit = metrics.hit, onClick = onNavigateToSettings) {
-                    Icon(
-                        FeatherIcons.Settings, stringResource(R.string.settings_title),
-                        tint = Kaleido.Ink, modifier = Modifier.size(20.dp)
-                    )
-                }
-                // An update is worth a saturated fill: it is the one thing on this screen the
-                // user cannot discover any other way.
-                if (!uiState.isLatestVersion) {
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .size(10.dp)
-                            .background(Kaleido.Red)
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            // Import lives here rather than in the shelf. It was a permanent row above the first
-            // notebook — and a permanent tile in the last grid cell — for something a library
-            // does once or twice in its life; the shelf is for what you have, not for how it got
-            // there.
-            Box {
-                SquareButton(
-                    hit = metrics.hit,
-                    onClick = { isOverflowOpen = true },
-                    filled = isOverflowOpen,
-                ) {
-                    Icon(
-                        FeatherIcons.MoreVertical, stringResource(R.string.home_more_actions),
-                        tint = if (isOverflowOpen) Kaleido.Paper else Kaleido.Ink,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                if (isOverflowOpen) LibraryOverflowMenu(
-                    below = metrics.hit,
-                    onImport = {
-                        isOverflowOpen = false
-                        onImport()
-                    },
-                    onDismiss = { isOverflowOpen = false },
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            SquareButton(hit = metrics.hit, onClick = onCreateNewNotebook) {
-                Icon(
-                    FeatherIcons.Plus, stringResource(R.string.home_new_notebook),
-                    tint = Kaleido.Ink, modifier = Modifier.size(22.dp)
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            // The filled one, because capture is the action this screen exists to get out of the
-            // way. The bottom bar repeats it on a one-handed device for the same reason it repeats
-            // `+`: this corner is what a single hand cannot reach.
-            SquareButton(hit = metrics.hit, onClick = onCreateNewNote, filled = true) {
-                Icon(
-                    FeatherIcons.Zap, stringResource(R.string.home_new_note),
-                    tint = Kaleido.Paper, modifier = Modifier.size(22.dp)
-                )
             }
         }
-        Spacer(Modifier.height(10.dp))
-        LibrarySearchRow(
-            metrics = metrics,
-            query = uiState.query,
-            onQueryChanged = onQueryChanged,
-            onSortChanged = onSortChanged,
-        )
-        Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(Kaleido.SectionRule)
-                .background(Kaleido.Ink)
-        )
+        FlowRow(Modifier.padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextAction("New notebook", onCreateNewNotebook, filled = true)
+            Box {
+                TextAction(stringResource(R.string.home_more_actions), { isMoreOpen = true })
+                if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
+                    MenuAction("New folder", { isMoreOpen = false; onCreateNewFolder() })
+                    MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
+                    MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
+                    RowRule()
+                    MenuAction("Sync now", { isMoreOpen = false; onSyncNow() })
+                    MenuAction(if (uiState.isLatestVersion) "Settings" else "Settings · Update available",
+                        { isMoreOpen = false; onNavigateToSettings() })
+                    MenuAction("Trash", { isMoreOpen = false; onNavigateToTrash() })
+                    onToggleSidebar?.let { toggle ->
+                        MenuAction(if (sidebarVisible) "Hide folders" else "Show folders",
+                            { isMoreOpen = false; toggle() })
+                    }
+                }
+            }
+            if (uiState.isSyncing) Text("Syncing…", color = Kaleido.Ink,
+                modifier = Modifier.padding(vertical = 14.dp))
+        }
+        Spacer(Modifier.height(12.dp))
+        LibrarySearchRow(metrics, uiState.query, onQueryChanged, onSortChanged)
+        FlowRow(Modifier.padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextAction("Grid", { onGridChanged(true) },
+                modifier = Modifier.semantics { selected = gridView }, filled = gridView)
+            TextAction("List", { onGridChanged(false) },
+                modifier = Modifier.semantics { selected = !gridView }, filled = !gridView)
+        }
+        Spacer(Modifier.height(12.dp))
+        RowRule()
     }
 }
 
@@ -679,16 +657,19 @@ private fun LibrarySearchRow(
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 14.sp, color = Kaleido.Ink),
                 cursorBrush = SolidColor(Kaleido.Ink),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Search notebooks and folders" },
                 decorationBox = { inner ->
-                    if (query.isEmpty()) {
-                        Text(
-                            stringResource(R.string.home_search_hint),
-                            fontSize = 14.sp, color = Kaleido.Muted, maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                stringResource(R.string.home_search_hint),
+                                fontSize = 14.sp, color = Kaleido.Muted, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        inner()
                     }
-                    inner()
                 }
             )
             if (query.isNotEmpty()) {
@@ -696,8 +677,9 @@ private fun LibrarySearchRow(
                     FeatherIcons.X, stringResource(R.string.home_search_clear),
                     tint = Kaleido.Ink,
                     modifier = Modifier
-                        .size(18.dp)
+                        .size(48.dp)
                         .noRippleClickable { onQueryChanged("") }
+                        .padding(15.dp)
                 )
             }
         }
@@ -707,11 +689,11 @@ private fun LibrarySearchRow(
                 Modifier
                     .height(metrics.hit)
                     .border(1.dp, Kaleido.Ink)
-                    .padding(horizontal = 10.dp)
-                    .noRippleClickable { isSortMenuOpen = true },
+                    .noRippleClickable { isSortMenuOpen = true }
+                    .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(order.label, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                Text("Sort", fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     color = Kaleido.Ink, maxLines = 1)
             }
             if (isSortMenuOpen) {
@@ -729,59 +711,6 @@ private fun LibrarySearchRow(
     }
 }
 
-/**
- * The header's overflow: what the library can do that is not about a particular notebook.
- *
- * One entry today. It is a menu rather than a fifth square because the header is already four
- * squares wide and a one-handed panel has no room for a fifth beside a title.
- */
-@Composable
-private fun LibraryOverflowMenu(
-    below: Dp,
-    onImport: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    // A Popup's alignment is relative to its parent — here the button's own box — so TopEnd
-    // alone drops the menu straight on top of the header, covering sync and settings with it.
-    // Offsetting by the button's height puts it under the button that opened it, which is where
-    // a menu is expected to come from.
-    val drop = with(LocalDensity.current) { below.roundToPx() }
-    Popup(
-        alignment = Alignment.TopEnd,
-        offset = IntOffset(0, drop),
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
-    ) {
-        Column(
-            Modifier
-                .border(Kaleido.SectionRule, Kaleido.Ink)
-                .background(Kaleido.Paper)
-                .width(IntrinsicSize.Max)
-        ) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .noRippleClickable(onImport)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    FeatherIcons.Upload, null,
-                    tint = Kaleido.Ink, modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = stringResource(R.string.home_import_notebook),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Kaleido.Ink,
-                    maxLines = 1,
-                )
-            }
-        }
-    }
-}
-
 /** The sort choices, as a popup rather than a screen: it is one decision with six answers. */
 @Composable
 private fun LibrarySortMenu(
@@ -790,41 +719,19 @@ private fun LibrarySortMenu(
     onPick: (LibrarySortOrder, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Popup(
-        alignment = Alignment.TopEnd,
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
-    ) {
-        Column(
-            Modifier
-                .border(1.dp, Kaleido.Ink)
-                .background(Kaleido.Paper)
-                .width(IntrinsicSize.Max)
-        ) {
-            LibrarySortOrder.entries.forEach { candidate ->
-                // Picking the order you are already on flips the direction, which is the one
-                // gesture every list in every app has agreed on.
-                val selected = candidate == order
-                Text(
-                    text = buildString {
-                        append(if (selected) "• " else "  ")
-                        append(candidate.label)
-                        if (selected) append(if (descending) "  ↓" else "  ↑")
-                    },
-                    fontSize = 14.sp,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = Kaleido.Ink,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .noRippleClickable {
-                            onPick(candidate, if (selected) !descending else true)
-                        }
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                )
-            }
+    ActionMenu(onDismiss = onDismiss) {
+        LibrarySortOrder.entries.forEach { candidate ->
+            MenuAction(candidate.label, { onPick(candidate, descending) }, candidate == order)
         }
+        RowRule()
+        val firstLabel = if (order == LibrarySortOrder.TITLE) "A to Z" else "Newest first"
+        val secondLabel = if (order == LibrarySortOrder.TITLE) "Z to A" else "Oldest first"
+        val firstDescending = order != LibrarySortOrder.TITLE
+        MenuAction(firstLabel, { onPick(order, firstDescending) }, descending == firstDescending)
+        MenuAction(secondLabel, { onPick(order, !firstDescending) }, descending != firstDescending)
     }
 }
+
 
 @Composable
 private fun FolderRow(
@@ -832,6 +739,7 @@ private fun FolderRow(
     folder: Folder,
     metrics: KaleidoMetrics,
     bookCount: Int,
+    location: String?,
     onOpen: () -> Unit,
 ) {
     var isFolderSettingsOpen by remember { mutableStateOf(false) }
@@ -843,10 +751,15 @@ private fun FolderRow(
             isFolderSettingsOpen = false
         })
 
+    Row(verticalAlignment = Alignment.CenterVertically) {
     ListRow(
+        modifier = Modifier.weight(1f),
         hit = metrics.hit,
         label = folder.title,
+        secondary = location,
+        secondaryMaxLines = 2,
         trailing = bookCount.toString(),
+        showChevron = false,
         onClick = onOpen,
         onLongClick = { isFolderSettingsOpen = true },
         leading = {
@@ -857,6 +770,10 @@ private fun FolderRow(
             )
         }
     )
+        SquareButton(48.dp, { isFolderSettingsOpen = true }) {
+            Icon(FeatherIcons.MoreVertical, "${folder.title} options", tint = Kaleido.Ink)
+        }
+    }
 }
 
 /**
@@ -871,6 +788,9 @@ private fun NotebookRow(
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
     syncBadges: Map<String, SyncBadge>,
+    lastEdited: Map<String, Date>,
+    locationFor: (String?) -> String?,
+    onNavigateToPages: (String) -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
 ) {
@@ -887,6 +807,9 @@ private fun NotebookRow(
                     exportEngine = exportEngine,
                     syncScheduler = syncScheduler,
                     syncBadge = syncBadges[book.id],
+                    editedAt = maxOf(book.updatedAt, lastEdited[book.id] ?: book.updatedAt),
+                    location = locationFor(book.parentFolderId),
+                    onNavigateToPages = onNavigateToPages,
                     onNavigateToEditor = onNavigateToEditor,
                     onPreviewNeeded = onPreviewNeeded,
                 )
@@ -908,36 +831,44 @@ private fun NotebookEntry(
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
     syncBadge: SyncBadge?,
+    editedAt: Date,
+    location: String?,
+    onNavigateToPages: (String) -> Unit,
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
 ) {
-    var isSettingsOpen by remember { mutableStateOf(false) }
-    var isConflictOpen by remember { mutableStateOf(false) }
-
-    // A conflicted notebook opens the resolution dialog on tap — the reachable entry point
-    // for the CONFLICT badge — instead of the editor.
+    var isMoreOpen by remember(book.id) { mutableStateOf(false) }
+    var isSettingsOpen by remember(book.id) { mutableStateOf(false) }
     val open = {
-        if (syncBadge == SyncBadge.CONFLICT) isConflictOpen = true
-        else onNavigateToEditor(book.openPageId ?: book.pageIds.first(), book.id)
+        val page = book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
+        if (page == null) onNavigateToPages(book.id) else onNavigateToEditor(page, book.id)
     }
-
+    val options: @Composable () -> Unit = {
+        Box {
+            SquareButton(48.dp, { isMoreOpen = true }) {
+                Icon(FeatherIcons.MoreVertical, "${book.title} options", tint = Kaleido.Ink)
+            }
+            if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
+                MenuAction("Pages", { isMoreOpen = false; onNavigateToPages(book.id) })
+                MenuAction("Notebook details", { isMoreOpen = false; isSettingsOpen = true })
+            }
+        }
+    }
     if (compactHit == null) {
-        NotebookCoverCard(
-            notebook = book,
-            onOpen = open,
-            onOpenSettings = { isSettingsOpen = true },
-            syncBadge = syncBadge,
-            onPreviewNeeded = onPreviewNeeded,
-        )
+        Column {
+            NotebookCoverCard(notebook = book, onOpen = open,
+                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
+                syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded)
+            Box(Modifier.align(Alignment.End)) { options() }
+        }
     } else {
-        NotebookListRow(
-            notebook = book,
-            hit = compactHit,
-            onOpen = open,
-            onOpenSettings = { isSettingsOpen = true },
-            syncBadge = syncBadge,
-            onPreviewNeeded = onPreviewNeeded,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NotebookListRow(notebook = book, hit = compactHit, onOpen = open,
+                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
+                syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded,
+                modifier = Modifier.weight(1f))
+            options()
+        }
     }
 
     if (isSettingsOpen) {
@@ -947,86 +878,7 @@ private fun NotebookEntry(
             syncScheduler = syncScheduler,
             bookId = book.id, onClose = { isSettingsOpen = false })
     }
-    if (isConflictOpen) {
-        ConflictResolutionDialog(
-            bookId = book.id,
-            title = book.title,
-            onClose = { isConflictOpen = false })
-    }
-}
 
-/**
- * Fixed bar for the one-handed build: the two creating actions, in thumb reach. New
- * notebook repeats the header's `+` on purpose — that corner is exactly what a single hand
- * cannot get to. Adding a folder stays a row, being the rarer of the three.
- */
-@Composable
-private fun LibraryBottomBar(
-    onCreateNewNotebook: () -> Unit,
-    onCreateNewNote: () -> Unit,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(Kaleido.SectionRule)
-                .background(Kaleido.Ink)
-        )
-        Row(Modifier.height(64.dp)) {
-            BottomBarAction(
-                label = stringResource(R.string.home_new_notebook),
-                icon = FeatherIcons.FilePlus,
-                filled = false,
-                onClick = onCreateNewNotebook,
-                modifier = Modifier.weight(1f)
-            )
-            Box(
-                Modifier
-                    .width(Kaleido.RowRule)
-                    .fillMaxHeight()
-                    .background(Kaleido.Rule)
-            )
-            BottomBarAction(
-                label = stringResource(R.string.home_new_note),
-                icon = FeatherIcons.Zap,
-                filled = true,
-                onClick = onCreateNewNote,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun BottomBarAction(
-    label: String,
-    icon: ImageVector,
-    filled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier
-            .fillMaxHeight()
-            .background(if (filled) Kaleido.Ink else Kaleido.Paper)
-            .noRippleClickable(onClick),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
-    ) {
-        Icon(
-            icon, null,
-            tint = if (filled) Kaleido.Paper else Kaleido.Ink,
-            modifier = Modifier.size(18.dp)
-        )
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = if (filled) FontWeight.ExtraBold else FontWeight.Bold,
-            color = if (filled) Kaleido.Paper else Kaleido.Ink,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
 
 /**

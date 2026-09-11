@@ -1,6 +1,13 @@
 package com.ethran.notable.ui.components
 
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.remember
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import com.ethran.notable.ui.theme.Kaleido
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.MaterialTheme
@@ -52,7 +59,10 @@ fun SettingToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 2.dp, start = 4.dp, end = 4.dp, bottom = 0.dp),
+            .heightIn(min = 48.dp)
+            .toggleable(value = value, role = Role.Switch, onValueChange = onToggle,
+                interactionSource = remember { MutableInteractionSource() }, indication = null)
+            .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -64,8 +74,8 @@ fun SettingToggleRow(
         )
         OnOffSwitch(
             checked = value,
-            onCheckedChange = onToggle,
-            modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 12.dp),
+            onCheckedChange = null,
+            modifier = Modifier.padding(start = 12.dp).clearAndSetSemantics { },
         )
     }
     SettingsDivider()
@@ -74,7 +84,7 @@ fun SettingToggleRow(
 @Composable
 fun SettingsDivider() {
     Divider(
-        color = MaterialTheme.colors.onSurface.copy(alpha = 0.12f),
+        color = Kaleido.Edge,
         thickness = 1.dp,
         modifier = Modifier.padding(top = 0.dp, bottom = 4.dp)
     )

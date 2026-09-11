@@ -25,6 +25,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -111,7 +114,7 @@ fun LibraryFileBar(
             ) {
                 item(key = "all-notes") {
                     AllNotesRow(
-                        count = tree.books.size,
+                        count = tree.books.count { it.parentFolderId == null },
                         selected = selectedFolderId == null,
                         onClick = { onSelectFolder(null) },
                     )
@@ -184,6 +187,7 @@ private fun AllNotesRow(count: Int, selected: Boolean, onClick: () -> Unit) {
             .fillMaxWidth()
             .height(ROW_HEIGHT)
             .background(if (selected) Kaleido.Ink else Color.Transparent)
+            .semantics { this.selected = selected }
             .noRippleClickable(onClick)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -192,7 +196,7 @@ private fun AllNotesRow(count: Int, selected: Boolean, onClick: () -> Unit) {
         val tint = if (selected) Kaleido.Paper else Kaleido.Ink
         Icon(FeatherIcons.Inbox, null, tint = tint, modifier = Modifier.size(GLYPH))
         Text(
-            text = stringResource(R.string.home_all_notes),
+            text = stringResource(R.string.home_view_name),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = tint,
@@ -224,6 +228,7 @@ private fun FolderTreeRow(
             .fillMaxWidth()
             .height(ROW_HEIGHT)
             .background(if (selected) Kaleido.Ink else Color.Transparent)
+            .semantics { this.selected = selected }
             .padding(start = indent(row.depth), end = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -231,12 +236,14 @@ private fun FolderTreeRow(
         if (row.hasChildren) Box(
             Modifier
                 .size(DISCLOSURE, ROW_HEIGHT)
+                .semantics { stateDescription = if (shut) "Collapsed" else "Expanded" }
                 .noRippleClickable(onToggle),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 if (shut) FeatherIcons.ChevronRight else FeatherIcons.ChevronDown,
-                null, tint = tint, modifier = Modifier.size(13.dp)
+                if (shut) "Expand ${row.title}" else "Collapse ${row.title}",
+                tint = tint, modifier = Modifier.size(13.dp)
             )
         } else Spacer(Modifier.width(DISCLOSURE))
 
@@ -292,7 +299,7 @@ private fun NotebookTreeRow(row: FileBarRow, onClick: () -> Unit) {
         // The same glyph the cover carries, so a note means the same thing in both columns.
         row.badge?.iconOrNull()?.let { icon ->
             Icon(
-                icon, "Sync status: ${row.badge.name}",
+                icon, row.badge.label(),
                 tint = Kaleido.Muted, modifier = Modifier.size(12.dp)
             )
         }
@@ -320,7 +327,7 @@ private fun Footer(isSyncing: Boolean, onSyncNow: () -> Unit) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(36.dp)
+                .height(48.dp)
                 .then(
                     if (isSyncing) Modifier.background(Kaleido.Ink)
                     else Modifier.border(1.dp, Kaleido.Ink)
@@ -343,15 +350,16 @@ private fun Footer(isSyncing: Boolean, onSyncNow: () -> Unit) {
     }
 }
 
-private val ROW_HEIGHT = 40.dp
+private val ROW_HEIGHT = 48.dp
 private val GLYPH = 16.dp
-private val DISCLOSURE = 18.dp
+private val DISCLOSURE = 44.dp
 
 /**
  * Where a row at [depth] starts. The triangle sits in the 20dp gutter the rest of the panel
  * keeps clear, so the tree's glyph column stays put whether or not a row can be opened.
  */
-private fun indent(depth: Int): Dp = 10.dp + (16 * depth).dp
+// Keep titles and their actions visible even in deeply nested imported folders, as in Bopa.
+private fun indent(depth: Int): Dp = minOf(10 + 12 * depth, 46).dp
 
 /**
  * The tree as the flat row list the bar draws.

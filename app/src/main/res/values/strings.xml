@@ -3,7 +3,6 @@
     <string name="home_notebooks">Notebooks</string>
     <string name="home_folders">Folders</string>
     <string name="file_bar_library">Library</string>
-    <string name="home_all_notes">All notes</string>
     <string name="home_add_new_folder">Add new folder</string>
     <string name="home_trash">Trash</string>
     <string name="home_search_hint">Search notebooks and folders</string>
@@ -36,16 +35,16 @@
     <string name="trash_back">Back</string>
     <string name="home_new_folder">New Folder</string>
     <string name="home_new_notebook">New notebook</string>
-    <string name="home_more_actions">More actions</string>
+    <string name="home_more_actions">More</string>
     <string name="home_import_notebook">Import notebook</string>
-    <string name="home_new_note">New note</string>
+    <string name="home_new_note">Quick note</string>
     <string name="home_view_name">Library</string>
     <string name="settings_title">Settings</string>
     <string name="settings_tab_general_name">General</string>
     <string name="settings_tab_gestures_name">Gestures</string>
     <string name="settings_tab_debug_name" translatable="false">Debug</string>
-    <string name="default_page_background_template">Default Page Background Template</string>
-    <string name="default_page_size">Default Page Size</string>
+    <string name="default_page_background_template">Default paper</string>
+    <string name="default_page_size">Default page size</string>
     <string name="blank_page">Blank page</string>
     <string name="dot_grid">Dot grid</string>
     <string name="lines">Lines</string>
@@ -56,9 +55,9 @@
     <string name="vertical_navigation">Page navigation</string>
     <string name="vertical_navigation_continuous">Continuous scrolling</string>
     <string name="vertical_navigation_paged">One page at a time</string>
-    <string name="continuous_zoom">Continuous Zoom</string>
+    <string name="continuous_zoom">Smooth zoom</string>
     <string name="fit_page_width">Fit page width to screen width</string>
-    <string name="continuous_stroke_slider">Continuous Stroke Slider</string>
+    <string name="continuous_stroke_slider">Smooth stroke width adjustment</string>
     <string name="rename_on_create">Ask for a name when creating</string>
     <string name="name_prompt_save">Save</string>
     <string name="name_prompt_cancel">Cancel</string>
@@ -97,16 +96,16 @@
     <string name="gesture_action_toggle_pen_eraser">Toggle Pen / Eraser</string>
     <string name="gesture_action_toggle_zen_mode">Toggle Zen Mode</string>
     <string name="gesture_action_select">Select</string>
-    <string name="details_notebook_title">Title:</string>
-    <string name="details_notebook_default_background_template">Default Background Template</string>
+    <string name="details_notebook_title">Name</string>
+    <string name="details_notebook_default_background_template">Default paper</string>
     <string name="details_notebook_pages">Pages: %1$d</string>
-    <string name="details_notebook_in_folder">"In Folder: "</string>
+    <string name="details_notebook_in_folder">"In folder: "</string>
     <string name="details_notebook_created">Created: %1$s</string>
-    <string name="details_notebook_last_updated">Last Updated: %1$s</string>
-    <string name="details_notebook_buttons_delete">Delete</string>
-    <string name="details_notebook_buttons_move">Move</string>
+    <string name="details_notebook_last_updated">Last updated: %1$s</string>
+    <string name="details_notebook_buttons_delete">Move to Trash</string>
+    <string name="details_notebook_buttons_move">Move to folder</string>
     <string name="details_notebook_buttons_export">Export</string>
-    <string name="details_notebook_buttons_copy">Copy</string>
+    <string name="details_notebook_buttons_copy">Duplicate</string>
     <string name="details_notebook_linked_to">Linked to: %1$s</string>
     <string name="welcome_view_title">Welcome to Notable</string>
     <string name="welcome_view_subtitle">For optimal experience, please complete these setup steps:</string>
@@ -186,8 +185,8 @@
     <string name="sync_couch_device_id_hint">Identifies this device\'s edits. It must differ from your other device\'s name.</string>
     <string name="sync_couch_save_button">Save CouchDB settings</string>
     <string name="sync_couch_sync_now_button">Sync now</string>
-    <string name="sync_couch_upload_all_button">Upload everything on this BOOX</string>
-    <string name="sync_couch_upload_all_hint">Queues every notebook, page and folder held here. Needed once, the first time you point at a new server.</string>
+    <string name="sync_couch_upload_all_button">Upload all notebooks</string>
+    <string name="sync_couch_upload_all_hint">Sends the notebooks, pages and folders on this device to a new server. After that, changes sync automatically when connected.</string>
     <string name="sync_couch_missing_config_hint">Enter a CouchDB URL to start syncing.</string>
     <string name="sync_couch_idle">Up to date</string>
 
@@ -233,14 +232,14 @@
     <string name="sync_interval_value">%1$dm</string>
 
     <!-- Sync Button Labels -->
-    <string name="sync_save_credentials">Save Credentials</string>
-    <string name="sync_test_connection">Test Connection</string>
+    <string name="sync_save_credentials">Save credentials</string>
+    <string name="sync_test_connection">Test connection</string>
     <string name="sync_testing_connection">Testing connection…</string>
-    <string name="sync_now">Sync Now</string>
+    <string name="sync_now">Sync now</string>
     <string name="sync_synced">Synced</string>
     <string name="sync_failed">Failed</string>
     <string name="sync_clear_log">Clear Log</string>
-    <string name="sync_copy_log">Copy Log</string>
+    <string name="sync_copy_log">Copy log</string>
     <string name="sync_log_copied">Log copied to clipboard</string>
     <string name="sync_retry_button">Retry</string>
     <string name="sync_cancel_button">Cancel sync</string>
@@ -260,7 +259,7 @@
     <string name="sync_last_synced_never">Never</string>
     <string name="sync_scheduled_started">Starting scheduled sync…</string>
     <string name="sync_scheduled_completed">Scheduled sync completed</string>
-    <string name="sync_connection_setup">Connection Setup</string>
+    <string name="sync_connection_setup">Connection setup</string>
     <string name="sync_server_configured">Server: %1$s…</string>
     <string name="sync_missing_config_hint">Complete the connection setup above to enable sync features.</string>
     <string name="sync_clock_skew_short">Connected (skew: %1$ds)</string>
@@ -302,20 +301,20 @@
     <string name="sync_step_finalizing">Finalizing</string>
 
     <!-- Sync Force Operations -->
-    <string name="sync_force_operations_title">DANGER ZONE</string>
-    <string name="sync_force_operations_warning">Use these only when setting up a new device or resetting sync. These operations will delete data!</string>
-    <string name="sync_force_upload_button">Upload All</string>
-    <string name="sync_force_download_button">Download All</string>
+    <string name="sync_force_operations_title">Replace library</string>
+    <string name="sync_force_operations_warning">These actions replace an entire library and cannot be undone. Choose which copy to keep.</string>
+    <string name="sync_force_upload_button">Replace server library</string>
+    <string name="sync_force_download_button">Replace this device’s library</string>
     <string name="sync_force_upload_success">Server replaced with local data</string>
     <string name="sync_force_upload_failed">Force upload failed</string>
     <string name="sync_force_download_success">Local data replaced with server data</string>
     <string name="sync_force_download_failed">Force download failed</string>
 
     <!-- Sync Confirmation Dialogs -->
-    <string name="sync_confirm_force_upload_title">Replace Server Data?</string>
-    <string name="sync_confirm_force_upload_message">This will DELETE all notebooks on the server and replace them with your local data. This cannot be undone.</string>
-    <string name="sync_confirm_force_download_title">Replace Local Data?</string>
-    <string name="sync_confirm_force_download_message">This will DELETE all local notebooks and replace them with data from the server. This cannot be undone.</string>
+    <string name="sync_confirm_force_upload_title">Replace server library?</string>
+    <string name="sync_confirm_force_upload_message">Delete all notebooks on the server and replace them with the notebooks on this device? This cannot be undone.</string>
+    <string name="sync_confirm_force_download_title">Replace this device’s library?</string>
+    <string name="sync_confirm_force_download_message">Delete all notebooks on this device and replace them with the notebooks on the server? This cannot be undone.</string>
     <string name="sync_dialog_cancel">Cancel</string>
     <string name="sync_dialog_confirm">Confirm</string>
 
@@ -329,7 +328,7 @@
     <string name="sync_wifi_required_message">Not syncing: WiFi-only sync is enabled and you\'re on mobile data. Connect to WiFi or disable the WiFi-only setting.</string>
 
     <!-- Sync Log -->
-    <string name="sync_log_title">Activity Log</string>
+    <string name="sync_log_title">Activity log</string>
     <string name="sync_log_empty">No recent activity.</string>
     <string name="sync_verbose_log_label">Detailed logging</string>
     <!-- Manual per-notebook sync -->

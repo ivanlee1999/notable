@@ -8,6 +8,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -152,8 +156,8 @@ class ToolRailTest {
     fun erasingKeepsTheNibsAndAddsTheErasersTwoKinds() {
         val actions = rail(state(mode = Mode.Erase))
 
-        composeRule.onNodeWithContentDescription("rub out").assertExists()
-        composeRule.onNodeWithContentDescription("erase whole strokes").assertExists()
+        composeRule.onNodeWithContentDescription("rub out").assertIsSelected()
+        composeRule.onNodeWithContentDescription("erase whole strokes").assertIsNotSelected()
         NibWidth.entries.forEach { width ->
             composeRule.onNodeWithContentDescription("nib ${width.label}").assertExists()
         }
@@ -252,19 +256,21 @@ class ToolRailTest {
     @Test
     fun theVerticalRailCarriesEveryInkThePenOffers() {
         rail(state(), position = AppSettings.Position.Left)
+        composeRule.onNodeWithContentDescription("Choose ink").performScrollTo().performClick()
         Kaleido.Inks.forEach { ink ->
             composeRule.onNodeWithContentDescription(inkDescription(ink)).assertExists()
         }
-        assertEquals(Kaleido.Inks.size, countMatching { it.startsWith("ink #") })
+        assertEquals(Kaleido.Inks.size, countMatching { it.startsWith("Ink:") })
     }
 
     @Test
     fun tappingAnInkWritesItToThePenInHand() {
         val actions = rail(state(), position = AppSettings.Position.Left)
         val target = Kaleido.Inks.last()
+        composeRule.onNodeWithContentDescription("Choose ink").performScrollTo().performClick()
 
         composeRule.onNodeWithContentDescription(inkDescription(target))
-            .performScrollTo().performClick()
+            .performScrollTo().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
         composeRule.waitForIdle()
 
         val change = actions.filterIsInstance<ToolbarAction.ChangePenSetting>().single()
@@ -295,6 +301,7 @@ class ToolRailTest {
     @Test
     fun theInksAreScrollableToOnARailTooShortToHoldThem() {
         rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Left)
+        composeRule.onNodeWithContentDescription("Choose ink").performScrollTo().performClick()
         composeRule.onNodeWithContentDescription(inkDescription(Kaleido.Inks.last()))
             .performScrollTo()
             .assertIsDisplayed()

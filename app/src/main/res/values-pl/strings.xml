@@ -2,7 +2,6 @@
 <resources>
     <string name="home_notebooks">Zeszyty</string>
     <string name="home_folders">Foldery</string>
-    <string name="home_all_notes">Wszystkie notatki</string>
     <string name="home_add_new_folder">Dodaj nowy folder</string>
     <string name="home_new_folder">Nowy folder</string>
     <string name="home_new_notebook">Nowy zeszyt</string>

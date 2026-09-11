@@ -41,7 +41,7 @@ fun PagePreview(
      * What shows through until the thumbnail loads. Transparent lets a caller draw its own
      * placeholder underneath — the notebook cover paints the book's paper template there.
      */
-    background: Color = Color.LightGray,
+    background: Color = com.ethran.notable.ui.theme.Kaleido.Canvas,
 ) {
     val isPreview = LocalInspectionMode.current
     val context = LocalContext.current
@@ -93,8 +93,8 @@ fun PagePreview(
 
     Image(
         painter = painter,
-        contentDescription = "Page Preview",
-        contentScale = ContentScale.FillWidth,
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
         modifier = modifier.background(background)
     )
 }

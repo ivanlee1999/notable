@@ -163,8 +163,8 @@ private fun TrashContent(
                             color = Kaleido.Ink,
                             modifier = Modifier
                                 .border(1.dp, Kaleido.Ink)
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
                                 .noRippleClickable { confirmingEmpty = true }
+                                .padding(horizontal = 12.dp, vertical = 14.dp)
                         )
                     }
                 }

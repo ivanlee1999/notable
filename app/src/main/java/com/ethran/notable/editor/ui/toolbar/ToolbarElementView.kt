@@ -20,6 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -100,14 +103,18 @@ fun ToolbarElementView(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(35.dp)
+                        .height(BUTTON_SIZE.dp)
+                        .semantics {
+                            contentDescription = "Pages"
+                            stateDescription = "Page ${uiState.pageNumberInfo.replace("/", " of ")}"
+                        }
+                        .noRippleClickable { onAction(ToolbarAction.NavigateToPages) }
                         .padding(horizontal = if (vertical) 0.dp else 10.dp)
                 ) {
                     Text(
                         text = uiState.pageNumberInfo,
                         fontWeight = FontWeight.Light,
                         fontSize = if (vertical) 11.sp else TextUnit.Unspecified,
-                        modifier = Modifier.noRippleClickable { onAction(ToolbarAction.NavigateToPages) },
                         textAlign = TextAlign.Center
                     )
                 }
