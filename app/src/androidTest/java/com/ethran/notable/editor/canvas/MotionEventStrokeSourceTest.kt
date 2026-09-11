@@ -239,6 +239,62 @@ class MotionEventStrokeSourceTest {
     }
 
     @Test
+    fun a_replacement_pen_recovers_after_a_lost_up_while_the_palm_stays_down() {
+        assertReplacementPenRecovers(replacementPointerId = 4)
+    }
+
+    @Test
+    fun a_replacement_pen_recovers_when_android_reuses_its_previous_pointer_id() {
+        assertReplacementPenRecovers(replacementPointerId = 3)
+    }
+
+    private fun assertReplacementPenRecovers(replacementPointerId: Int) {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(palm, pen(10f, 10f)), actionIndex = 1),
+            canvas,
+        )
+        // The first pen disappears without UP/CANCEL; the hand keeps the gesture alive.
+        val replacement = pen(100f, 100f).copy(id = replacementPointerId)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(palm, replacement), actionIndex = 1),
+            canvas,
+        )
+        source.onTouchEvent(
+            event(
+                MotionEvent.ACTION_POINTER_UP,
+                listOf(palm, replacement.copy(x = 120f, y = 120f)),
+                actionIndex = 1,
+            ),
+            canvas,
+        )
+
+        assertEquals(listOf("started", "ended", "started", "finished", "ended"), bracket)
+        assertEquals(100f, collected!!.points.first().x, 0.01f)
+        assertEquals(120f, collected!!.points.last().x, 0.01f)
+    }
+
+    @Test
+    fun a_second_pen_does_not_replace_the_pen_that_is_still_writing() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f))), canvas)
+        val secondPen = pen(500f, 500f).copy(id = 4)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(pen(20f, 20f), secondPen), actionIndex = 1),
+            canvas,
+        )
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_UP, listOf(pen(30f, 30f), secondPen), actionIndex = 1),
+            canvas,
+        )
+        assertEquals(listOf("started"), bracket)
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, listOf(pen(40f, 40f))), canvas)
+
+        assertEquals(listOf("started", "finished", "ended"), bracket)
+        assertEquals(10f, collected!!.points.first().x, 0.01f)
+        assertEquals(40f, collected!!.points.last().x, 0.01f)
+    }
+
+    @Test
     fun a_failed_stroke_handler_still_releases_the_held_view() {
         val failure = IllegalStateException("stroke processing failed")
         var ended = 0

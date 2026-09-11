@@ -62,6 +62,14 @@ class MotionEventStrokeSource(
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 // A pen landing beside a hand already on the glass arrives as POINTER_DOWN, so
                 // both openings are the same event as far as a stroke is concerned.
+                // If its predecessor disappeared without a terminal event, a resting palm
+                // keeps this gesture alive and Android sends no new DOWN to clear it above.
+                // Android can also reuse that predecessor's ID for the new pointer; an
+                // existing active pointer cannot itself be the subject of POINTER_DOWN.
+                if (pending != null &&
+                    (event.findPointerIndex(penPointerId) < 0 ||
+                        event.getPointerId(event.actionIndex) == penPointerId)
+                ) cancel()
                 if (pending != null) return false
                 val index = event.actionIndex
                 if (!event.isPen(index)) return false

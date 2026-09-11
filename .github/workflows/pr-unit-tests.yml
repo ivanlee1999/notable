@@ -53,7 +53,11 @@ jobs:
           curl --fail --silent --show-error --user ci:ci-test-only \
             -X PUT http://127.0.0.1:5984/notable_ci
           ./gradlew :app:testDebugUnitTest --rerun \
-            --tests 'com.ethran.notable.sync.couch.CouchIntegrationTest'
+            --tests 'com.ethran.notable.sync.couch.CouchIntegrationTest' \
+            -PNOTABLE_COUCH_URL="$NOTABLE_COUCH_URL" \
+            -PNOTABLE_COUCH_USER="$NOTABLE_COUCH_USER" \
+            -PNOTABLE_COUCH_PASSWORD="$NOTABLE_COUCH_PASSWORD" \
+            -PNOTABLE_COUCH_DATABASE="$NOTABLE_COUCH_DATABASE"
           report=app/build/test-results/testDebugUnitTest/TEST-com.ethran.notable.sync.couch.CouchIntegrationTest.xml
           test -s "$report"
           if grep -q '<skipped' "$report"; then

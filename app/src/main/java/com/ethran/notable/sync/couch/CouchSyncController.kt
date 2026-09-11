@@ -201,6 +201,10 @@ class CouchSyncController @Inject constructor(
          * observable before it is switched on, and what [identityWarning] is read from.
          */
         val databaseIdentity: CouchSyncEngine.DatabaseIdentity? = null,
+        /** Kept separately from read failures; updated atomically with the outbox count. */
+        val uploadFailure: String? = null,
+        /** Actual flush activity, so a cancelled request cannot leave a sticky Syncing label. */
+        val isPushing: Boolean = false,
     ) {
         val lastError: String? get() = (status as? Status.Failed)?.message
 
@@ -541,17 +545,21 @@ class CouchSyncController @Inject constructor(
             return@withLock
         }
         flushedGeneration.set(editGeneration.get())
-        _state.update { it.copy(status = Status.Syncing) }
+        _state.update { it.copy(status = Status.Syncing, isPushing = true) }
         // A flush reports per-document failures rather than throwing, so anything that *does*
         // escape is the stack itself failing to assemble (unreadable settings, say). That is
         // reported state, not an exception to unwind through a drawing callback.
         val report = try {
             backend.flush()
         } catch (e: CancellationException) {
+            _state.update { it.copy(isPushing = false).afterCancelledRequest() }
             throw e
         } catch (e: Exception) {
             SyncLogger.w("CouchSync", "flush failed: $e")
-            _state.update { it.copy(status = Status.Failed(describe(e))) }
+            val message = describe(e)
+            _state.update {
+                it.copy(status = Status.Failed(message), uploadFailure = message, isPushing = false)
+            }
             return@withLock
         }
         logFlush(report)
@@ -576,46 +584,32 @@ class CouchSyncController @Inject constructor(
                 wasRetry -> pushBackoffMs = clock.retryFloorMs
             }
         }
-        _state.update { current ->
-            val pending = report.stillDirty.size
-            val held = report.heldDeletions
-            when {
-                // What the guard actually does — it holds the tombstones back and lets everything
-                // else through — and, now that the two answers exist, where to give one. Naming the
-                // buttons rather than the screen alone matters: "confirm in settings" sends someone
-                // hunting, while the words on the buttons are the words they will read there.
-                report.blockedByDeletionGuard -> current.copy(
-                    pendingCount = pending,
-                    heldDeletions = held,
-                    status = Status.Failed(
-                        "Holding back ${report.deletionsHeldBack} notebook deletions — that is " +
-                            "most of this library, and a wiped device looks the same. Everything " +
-                            "else still syncs. In Settings → Sync, choose “Delete them on the " +
-                            "server too” or “Keep them on the server”."
-                    ),
-                )
+        val failure = when {
+            // The guard holds the tombstones back and lets everything else through. Name
+            // both answers so the caption tells the user how to resolve the held uploads.
+            report.blockedByDeletionGuard ->
+                "Holding back ${report.deletionsHeldBack} notebook deletions — that is " +
+                    "most of this library, and a wiped device looks the same. Everything " +
+                    "else still syncs. In Settings → Sync, choose “Delete them on the " +
+                    "server too” or “Keep them on the server”."
 
-                report.failures.isNotEmpty() -> {
-                    // The caption gets the friendly wording; `logFlush` above already kept the raw
-                    // detail. Straight `failures` values are engine strings ("unauthorized",
-                    // "server(413, …)") and used to reach the screen verbatim, leaving describe()'s
-                    // sentences dead code on the commonest failure path of all.
-                    val first = report.failures.entries.sortedBy { it.value }.first()
-                    val message = report.failureCauses[first.key]?.let(::describe) ?: first.value
-                    current.copy(
-                        pendingCount = pending,
-                        heldDeletions = held,
-                        status = Status.Failed(message),
-                    )
-                }
-
-                else -> current.copy(
-                    pendingCount = pending,
-                    heldDeletions = held,
-                    status = Status.Idle,
-                    lastSyncedAt = clock.nowMs(),
-                )
+            report.failures.isNotEmpty() -> {
+                // The caption gets the friendly wording; logFlush kept the raw detail.
+                val first = report.failures.entries.sortedBy { it.value }.first()
+                report.failureCauses[first.key]?.let(::describe) ?: first.value
             }
+
+            else -> null
+        }
+        _state.update { current ->
+            current.copy(
+                pendingCount = report.stillDirty.size,
+                heldDeletions = report.heldDeletions,
+                uploadFailure = failure,
+                isPushing = false,
+                status = failure?.let { Status.Failed(it) } ?: Status.Idle,
+                lastSyncedAt = if (failure == null) clock.nowMs() else current.lastSyncedAt,
+            )
         }
     }
 
@@ -666,6 +660,7 @@ class CouchSyncController @Inject constructor(
             it.copy(
                 heldDeletions = emptyList(),
                 pendingCount = pending ?: it.pendingCount,
+                uploadFailure = null,
                 status = Status.Idle,
             )
         }
@@ -789,15 +784,21 @@ class CouchSyncController @Inject constructor(
         // has to be the thing that actually retries an upload a proxy refused (§7.2). Nothing else
         // would: those uploads are held on the server's configuration, not on the document, so no
         // edit is ever coming to release them.
-        backend.rearmRefusedRequests()
-        // Before pulling: queue anything created here that no edit ever queued. Without this a
-        // notebook made and left alone is never sent, however many times sync runs.
-        runCatching { backend.markUnsentDirty() }
-            .onFailure { SyncLogger.w(TAG, "Could not scan for unsent documents: ${it.message}") }
         try {
+            backend.rearmRefusedRequests()
+            // Cancellation must cover preparation too; swallowing it could leave Syncing set
+            // after the request's coroutine has already ended.
+            try {
+                backend.markUnsentDirty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SyncLogger.w(TAG, "Could not scan for unsent documents: ${e.message}")
+            }
             SyncLogger.i(TAG, "Pulling changes from the server…")
             apply(backend.pull(false))
         } catch (e: CancellationException) {
+            _state.update { it.afterCancelledRequest() }
             throw e
         } catch (e: Exception) {
             // A read failure also skips the push below, so say so — otherwise the outbox appears
@@ -830,6 +831,14 @@ class CouchSyncController @Inject constructor(
 
     // region Plumbing
 
+    private fun UiState.afterCancelledRequest(): UiState = copy(
+        status = when {
+            isPushing -> Status.Syncing
+            pendingCount > 0 && uploadFailure != null -> Status.Failed(uploadFailure)
+            else -> Status.Idle
+        },
+    )
+
     private fun apply(report: CouchSyncEngine.PullReport) {
         logPull(report)
         noteClockSkew(report.clockSkewSeconds)
@@ -839,11 +848,12 @@ class CouchSyncController @Inject constructor(
         }
         _state.update { current ->
             current.copy(
-                // A successful read proves reachability, but cannot clear a rejected upload
-                // while work is queued or mark an upload in progress as finished.
+                // Clear the read error, restoring only a failure from a queued upload. The
+                // visible failure may have been overwritten by an unrelated read failure.
                 status = when {
-                    current.status is Status.Syncing -> current.status
-                    current.status is Status.Failed && current.pendingCount > 0 -> current.status
+                    current.isPushing -> Status.Syncing
+                    current.pendingCount > 0 && current.uploadFailure != null ->
+                        Status.Failed(current.uploadFailure)
                     else -> Status.Idle
                 },
                 lastSyncedAt =
