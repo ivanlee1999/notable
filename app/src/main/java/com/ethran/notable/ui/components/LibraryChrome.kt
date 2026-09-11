@@ -9,6 +9,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +35,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 
@@ -135,7 +147,7 @@ fun ListRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(hit)
+                .heightIn(min = hit)
                 .then(
                     if (onLongClick != null) Modifier.combinedNoRippleClickable(onClick, onLongClick)
                     else Modifier.noRippleClickable(onClick)
@@ -150,13 +162,13 @@ fun ListRow(
                     fontSize = labelSize,
                     fontWeight = FontWeight.SemiBold,
                     color = Kaleido.Ink,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 if (secondary != null) {
                     Text(
                         text = secondary,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         color = Kaleido.Muted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -196,5 +208,55 @@ fun Modifier.combinedNoRippleClickable(
         interactionSource = remember { MutableInteractionSource() },
         onClick = onClick,
         onLongClick = onLongClick,
+        onLongClickLabel = "More options",
+        role = Role.Button,
+    )
+}
+
+/** Shared flat controls keep their whole padded surface interactive. */
+@Composable
+fun TextAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    filled: Boolean = false,
+) {
+    Box(
+        modifier.heightIn(min = 48.dp)
+            .background(if (filled) Kaleido.Ink else Kaleido.Paper)
+            .border(1.dp, Kaleido.Ink)
+            .noRippleClickable(onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (filled) Kaleido.Paper else Kaleido.Ink,
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+fun ActionMenu(
+    onDismiss: () -> Unit,
+    below: Dp = 48.dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val offset = with(LocalDensity.current) { below.roundToPx() }
+    Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, offset),
+        onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+        Column(Modifier.widthIn(min = 180.dp, max = 280.dp).heightIn(max = 420.dp)
+            .background(Kaleido.Paper).border(1.dp, Kaleido.Ink)
+            .verticalScroll(rememberScrollState()), content = content)
+    }
+}
+
+@Composable
+fun MenuAction(label: String, onClick: () -> Unit, isSelected: Boolean = false) {
+    Text(
+        text = if (isSelected) "✓ $label" else label,
+        fontSize = 14.sp, color = Kaleido.Ink,
+        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .semantics { selected = isSelected }
+            .noRippleClickable(onClick).padding(horizontal = 16.dp, vertical = 14.dp),
     )
 }

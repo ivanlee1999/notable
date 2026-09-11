@@ -10,6 +10,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +28,20 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Text
+import androidx.compose.material.Icon
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import com.ethran.notable.ui.components.ActionMenu
+import com.ethran.notable.ui.components.MenuAction
+import com.ethran.notable.ui.components.SquareButton
+import com.ethran.notable.ui.components.TextAction
+import com.ethran.notable.ui.components.SectionHeader
+import com.ethran.notable.ui.theme.Kaleido
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.ArrowLeft
+import compose.icons.feathericons.MoreVertical
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -120,13 +136,12 @@ fun PagesContent(
     onDuplicatePage: (String) -> Unit,
     onAddPageAfter: (Int) -> Unit
 ) {
-    if (state.isLoading) return
 
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
 
     // --- 1. State for Edit Mode ---
-    var isEditMode by rememberSaveable { mutableStateOf(false) }
+    var isEditMode by rememberSaveable(state.bookId) { mutableStateOf(false) }
 
     val reorderState = rememberReorderableGridState()
     val density = LocalDensity.current
@@ -141,12 +156,13 @@ fun PagesContent(
     }
 
 
-    var pendingDeletePageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDeletePageId by rememberSaveable(state.bookId) { mutableStateOf<String?>(null) }
 
     pendingDeletePageId?.let { id ->
         ShowSimpleConfirmationDialog(
-            title = "Confirm Deletion",
-            message = "Are you sure you want to delete this page?",
+            title = "Delete this page?",
+            message = "This page will be deleted here and on every device that syncs this notebook. This cannot be undone.",
+            confirmButtonText = "Delete page",
             onConfirm = {
                 onDeletePage(id)
                 pendingDeletePageId = null
@@ -156,34 +172,58 @@ fun PagesContent(
             })
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Topbar {
-            Row(
-                Modifier
-                    .padding(10.dp)
-                    .fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(Modifier.weight(1f)) {
-                    BreadCrumb(folders = state.folderList) { onBack(it) }
+    var isMoreOpen by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().background(Kaleido.Paper)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SquareButton(48.dp, { onBack(state.folderList.lastOrNull()?.id) }) {
+                    Icon(FeatherIcons.ArrowLeft, "Back to library", tint = Kaleido.Ink)
                 }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    GenerateThumbsSwitch(onClick = onGenerateThumbnails)
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    EditModeSwitch(isEditMode = isEditMode, onToggle = { isEditMode = it })
-
-                    if (state.openPageId != null) {
-                        Spacer(modifier = Modifier.width(12.dp))
-                        JumpToCurrentPill {
-                            val idx = state.pageIds.indexOf(state.openPageId)
-                            if (idx >= 0) scope.launch { gridState.scrollToItem(idx) }
-                        }
+                Text(state.bookTitle.ifBlank { "Notebook" }, fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold, color = Kaleido.Ink,
+                    modifier = Modifier.weight(1f), maxLines = 2)
+                Box {
+                    SquareButton(48.dp, { isMoreOpen = true }) {
+                        Icon(FeatherIcons.MoreVertical, "More page actions", tint = Kaleido.Ink)
+                    }
+                    if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
+                        MenuAction("Generate previews", {
+                            isMoreOpen = false
+                            onGenerateThumbnails()
+                        })
                     }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            SectionHeader("Pages · ${state.pageIds.size}")
+            if (!state.isLoading) {
+                FlowRow(Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextAction("Add page", { onAddPageAfter(state.pageIds.size) }, filled = true)
+                    if (state.pageIds.isNotEmpty()) {
+                        TextAction(if (isEditMode) "Done organizing" else "Organize pages",
+                            { isEditMode = !isEditMode },
+                            modifier = Modifier.semantics { selected = isEditMode })
+                    }
+                    if (state.openPageId != null && state.openPageId in state.pageIds) {
+                        TextAction("Current page", {
+                            val idx = state.pageIds.indexOf(state.openPageId)
+                            if (idx >= 0) scope.launch { gridState.scrollToItem(idx) }
+                        })
+                    }
+                }
+                if (isEditMode) Text("Hold and drag a page to reorder it.",
+                    color = Kaleido.Muted, modifier = Modifier.padding(top = 12.dp))
+            }
+        }
+        if (state.isLoading || state.pageIds.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text(if (state.isLoading) "Loading pages…" else "No pages yet. Add a page to start writing.",
+                    color = Kaleido.Ink)
+            }
+            return@Column
         }
 
         Box(
@@ -197,10 +237,10 @@ fun PagesContent(
                 }) {
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(120.dp),
+                columns = GridCells.Adaptive(150.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(end = 40.dp),
+                contentPadding = PaddingValues(end = if (state.pageIds.size > 30) 40.dp else 0.dp, bottom = 16.dp),
                 modifier = Modifier
                     .onGloballyPositioned { coords ->
                         val r = coords.boundsInRoot()
@@ -333,66 +373,6 @@ fun PagesContent(
         }
     }
 }
-
-@Composable
-private fun GenerateThumbsSwitch(onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color.White)
-            .border(1.dp, Color.Black, RoundedCornerShape(16.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)) {
-        Text("Generate previews", color = Color.Black)
-    }
-}
-
-/**
- * Top-right persistent jump pill.
- */
-@Composable
-private fun JumpToCurrentPill(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF111111))
-            .border(1.dp, Color.Black, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null
-            ) { onClick() }) {
-        Text("Jump to current", color = Color.White)
-    }
-}
-
-/**
- * A simple switch for toggling edit mode.
- */
-@Composable
-private fun EditModeSwitch(
-    isEditMode: Boolean, onToggle: (Boolean) -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (isEditMode) Color.Black else Color.White)
-            .border(1.dp, Color.Black, RoundedCornerShape(16.dp))
-            .clickable { onToggle(!isEditMode) }
-            .padding(horizontal = 14.dp, vertical = 8.dp)) {
-        Text("Edit Mode", color = if (isEditMode) Color.White else Color.Black)
-        Spacer(Modifier.width(8.dp))
-        // Simple visual indicator for the switch state
-        Box(
-            Modifier
-                .size(16.dp)
-                .background(if (isEditMode) Color.Green else Color.White, CircleShape)
-                .border(1.dp, Color.Black, CircleShape)
-        )
-    }
-}
-
 
 @Preview(showBackground = true)
 @Composable

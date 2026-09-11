@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.sp
 fun OnOffSwitch(
     modifier: Modifier = Modifier,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
+    onCheckedChange: ((Boolean) -> Unit)?,
     enabled: Boolean = true,
     animateTransition: Boolean = false,
 ) {
@@ -105,14 +105,14 @@ fun OnOffSwitch(
         modifier = modifier
             .size(trackWidth, trackHeight)
             .background(trackColor)
-            .toggleable(
+            .then(if (onCheckedChange != null) Modifier.toggleable(
                 value = checked,
                 enabled = enabled,
                 role = Role.Switch,
                 onValueChange = onCheckedChange,
                 interactionSource = interactionSource,
                 indication = null
-            )
+            ) else Modifier)
             .border(BorderStroke(1.dp, MaterialTheme.colors.onSurface)),
         contentAlignment = Alignment.CenterStart
     ) {

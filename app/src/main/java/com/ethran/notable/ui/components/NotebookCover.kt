@@ -64,6 +64,7 @@ fun NotebookCoverCard(
     modifier: Modifier = Modifier,
     syncBadge: SyncBadge? = null,
     onPreviewNeeded: (String) -> Unit = {},
+    editedAt: Date = notebook.updatedAt,
 ) {
     Column(
         modifier
@@ -81,16 +82,16 @@ fun NotebookCoverCard(
         )
         Text(
             text = notebook.title,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = Kaleido.Ink,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 7.dp)
         )
         Text(
-            text = editedLabel(notebook.updatedAt),
-            fontSize = 10.sp,
+            text = editedLabel(editedAt),
+            fontSize = 12.sp,
             color = Kaleido.Muted,
             maxLines = 1
         )
@@ -107,11 +108,12 @@ fun NotebookListRow(
     modifier: Modifier = Modifier,
     syncBadge: SyncBadge? = null,
     onPreviewNeeded: (String) -> Unit = {},
+    editedAt: Date = notebook.updatedAt,
 ) {
     ListRow(
         hit = hit + 22.dp, // the 46dp chip needs more room than a plain row
         label = notebook.title,
-        secondary = "${notebook.pageIds.size} p · ${editedLabel(notebook.updatedAt)}",
+        secondary = "${notebook.pageIds.size} pages · ${editedLabel(editedAt)}",
         onClick = onOpen,
         onLongClick = onOpenSettings,
         modifier = modifier,
@@ -149,7 +151,7 @@ private fun NotebookCoverFace(
         notebook.pageIds.firstOrNull()?.let { firstPage ->
             PagePreview(
                 modifier = Modifier.fillMaxSize(),
-                pageId = notebook.openPageId ?: firstPage,
+                pageId = firstPage,
                 onPreviewNeeded = onPreviewNeeded,
                 background = Color.Transparent,
             )
@@ -164,8 +166,8 @@ private fun NotebookCoverFace(
 
         if (showPageCount) {
             Text(
-                text = "${notebook.pageIds.size} p",
-                fontSize = 9.sp,
+                text = "${notebook.pageIds.size} pages",
+                fontSize = 12.sp,
                 letterSpacing = 1.3.sp,
                 color = Kaleido.Ink,
                 modifier = Modifier
@@ -184,7 +186,7 @@ private fun NotebookCoverFace(
 private fun BoxScope.SyncCorner(icon: ImageVector, badge: SyncBadge) {
     Icon(
         imageVector = icon,
-        contentDescription = "Sync status: ${badge.name}",
+        contentDescription = badge.label(),
         tint = Kaleido.Ink,
         modifier = Modifier
             .align(Alignment.TopEnd)
@@ -316,10 +318,10 @@ fun CoverActionTile(
         ) { icon() }
         Text(
             text = label,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = Kaleido.Ink,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 7.dp)
         )
@@ -327,4 +329,15 @@ fun CoverActionTile(
         // edited stamp.
         Box(Modifier.height(14.dp))
     }
+}
+
+/** Human-readable states shared by covers and the folder tree. */
+fun SyncBadge.label(): String = when (this) {
+    SyncBadge.NOT_SYNCED -> "Changes waiting to sync"
+    SyncBadge.SCHEDULED -> "Sync queued"
+    SyncBadge.SYNCING -> "Syncing"
+    SyncBadge.SYNCED -> "Synced"
+    SyncBadge.REMOTE_AHEAD -> "Newer version on server"
+    SyncBadge.CONFLICT -> "Conflicting changes — review versions"
+    SyncBadge.ERROR -> "Sync failed"
 }

@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import com.ethran.notable.ui.components.ActionMenu
+import com.ethran.notable.ui.components.MenuAction
+import com.ethran.notable.ui.components.RowRule
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,7 +71,7 @@ fun PageMenu(
                 }
             },
             onCancel = { onClose() },
-            confirmButtonText = "Delete"
+            confirmButtonText = "Delete page"
         )
         return
     }
@@ -92,90 +95,41 @@ fun PageMenu(
     }
 
 
-    Popup(
-        alignment = Alignment.TopStart,
-        onDismissRequest = { onClose() },
-        properties = PopupProperties(focusable = true)
-    ) {
-        Column(
-            Modifier
-                .border(1.dp, Color.Black, RectangleShape)
-                .background(Color.White)
-                .width(IntrinsicSize.Max)
-        ) {
-            if (notebookId != null && index != null) {
-                Box(
-                    Modifier
-                        .padding(10.dp)
-                        .noRippleClickable {
-                            scope.launch {
-                                appRepository.bookRepository.changePageIndex(
-                                    notebookId,
-                                    pageId,
-                                    index - 1
-                                )
-                            }
-                        }
-                ) {
-                    Text("Move Left")
+    ActionMenu(onDismiss = onClose, below = 0.dp) {
+        if (notebookId != null && index != null) {
+            if (index > 0) MenuAction("Move page earlier", {
+                scope.launch {
+                    appRepository.bookRepository.changePageIndex(notebookId, pageId, index - 1)
+                    onClose()
                 }
-
-                Box(
-                    Modifier
-                        .padding(10.dp)
-                        .noRippleClickable {
-                            scope.launch {
-                                appRepository.bookRepository.changePageIndex(
-                                    notebookId,
-                                    pageId,
-                                    index + 1
-                                )
-                            }
-                        }) {
-                    Text("Move right")
+            })
+            MenuAction("Move page later", {
+                scope.launch {
+                    appRepository.bookRepository.changePageIndex(notebookId, pageId, index + 1)
+                    onClose()
                 }
-                Box(
-                    Modifier
-                        .padding(10.dp)
-                        .noRippleClickable {
-                            scope.launch {
-                                appRepository.newPageInBook(notebookId, index + 1)
-                            }
-                        }) {
-                    Text("Insert after")
+            })
+            MenuAction("Add page after", {
+                scope.launch {
+                    appRepository.newPageInBook(notebookId, index + 1)
+                    onClose()
                 }
+            })
+        }
+        MenuAction("Rename page", {
+            scope.launch {
+                renameInitialValue = appRepository.pageRepository.getById(pageId)?.title.orEmpty()
             }
-
-            Box(
-                Modifier
-                    .padding(10.dp)
-                    .noRippleClickable {
-                        scope.launch {
-                            renameInitialValue =
-                                appRepository.pageRepository.getById(pageId)?.title.orEmpty()
-                        }
-                    }) {
-                Text(stringResource(R.string.rename))
+        })
+        MenuAction("Duplicate page", {
+            scope.launch {
+                appRepository.duplicatePage(pageId)
+                onClose()
             }
-
-            Box(
-                Modifier
-                    .padding(10.dp)
-                    .noRippleClickable {
-                        scope.launch {
-                            appRepository.duplicatePage(pageId)
-                        }
-                    }) {
-                Text("Duplicate")
-            }
-            if (canDelete) {
-                Box(
-                    Modifier
-                        .padding(10.dp)
-                        .noRippleClickable { isConfirmingDelete = true }) {
-                    Text("Delete")
-                }
-            }
+        })
+        if (canDelete) {
+            RowRule()
+            MenuAction("Delete page", { isConfirmingDelete = true })
         }
     }
 }

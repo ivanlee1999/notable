@@ -4,12 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,14 +19,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -36,7 +36,6 @@ import com.ethran.notable.data.db.Folder
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.SnackConf
-import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberCouchSyncController
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.launch
@@ -158,14 +157,16 @@ fun FolderConfigDialog(appRepository: AppRepository,
     ) {
         Column(
             modifier = Modifier
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
                 .background(Color.White)
                 .fillMaxWidth()
                 .border(2.dp, Color.Black, RectangleShape)
+                .verticalScroll(rememberScrollState())
         ) {
             Column(
                 Modifier.padding(20.dp, 10.dp)
             ) {
-                Text(text = "Folder Setting", fontWeight = FontWeight.Bold)
+                Text(text = "Folder details", fontWeight = FontWeight.Bold)
             }
             Box(
                 Modifier
@@ -178,25 +179,23 @@ fun FolderConfigDialog(appRepository: AppRepository,
                 Modifier.padding(20.dp, 10.dp)
             ) {
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column {
                     Text(
-                        text = "Folder Title",
+                        text = "Name",
                         fontWeight = FontWeight.Bold
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = folderTitle,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Light,
                         fontSize = 16.sp,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
+                    Spacer(Modifier.height(8.dp))
+                    ActionButton(
                         text = stringResource(R.string.rename),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        modifier = Modifier.noRippleClickable { isRenaming = true }
+                        onClick = { isRenaming = true }
                     )
                 }
             }
@@ -212,15 +211,9 @@ fun FolderConfigDialog(appRepository: AppRepository,
             Column(
                 Modifier.padding(20.dp, 10.dp)
             ) {
-                Text(
-                    text = "Move Folder…",
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.noRippleClickable { isMoving = true })
+                ActionButton(text = "Move to folder", onClick = { isMoving = true })
                 Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "Move Folder to Trash",
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.noRippleClickable { isConfirmingDelete = true })
+                ActionButton(text = "Move to Trash", onClick = { isConfirmingDelete = true })
             }
         }
 
@@ -264,10 +257,9 @@ private fun ConfirmFolderDeletionDialog(
         title = "Move \"$title\" to Trash?",
         message = "$contents Everything inside goes with it — on your other devices as well — " +
             "and stays recoverable from the Trash until you empty it.",
-        // Disabled-looking rather than disabled: the scope is one query and lands immediately, but
-        // confirming before it arrives would delete without having shown what.
         onConfirm = { if (scope != null) onConfirm() },
         onCancel = onCancel,
         confirmButtonText = "Move to Trash",
+        confirmEnabled = scope != null,
     )
 }

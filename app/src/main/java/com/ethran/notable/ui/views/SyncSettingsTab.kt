@@ -114,8 +114,8 @@ data class CouchSyncCallbacks(
     val onDiscardHeldDeletions: () -> Unit = {},
 )
 
-private val EInkFieldShape = RoundedCornerShape(4.dp)
-private val EInkButtonShape = RoundedCornerShape(8.dp)
+private val EInkFieldShape = RectangleShape
+private val EInkButtonShape = RectangleShape
 private val EInkFieldBorderWidth = 1.dp
 
 @Composable
@@ -137,11 +137,11 @@ fun SyncSettings(
     }
     var showServerConfig by remember { mutableStateOf(!isConfigured) }
 
-    // 2. The Blocking Dialog — only warn before the user has opted in (sync disabled) (8i-2).
-    if (showWarningDialog && !state.syncSettings.syncEnabled) {
+    // The experimental notice belongs to WebDAV opt-in, not CouchDB or the Off screen.
+    if (showWarningDialog && state.syncSettings.backend == SyncBackend.WEBDAV && !state.syncSettings.syncEnabled) {
         AlertDialog(
-            // Passing an empty lambda prevents dismissing by clicking outside the dialog
-            onDismissRequest = { },
+            // The user can return to backend settings without acknowledging an unrelated action.
+            onDismissRequest = { showWarningDialog = false },
             title = {
                 Text(
                     text = stringResource(R.string.sync_experimental_title),
@@ -848,7 +848,7 @@ private fun ClockSkewPanel(warning: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+            .border(2.dp, MaterialTheme.colors.onSurface, RectangleShape)
             .padding(12.dp)
     ) {
         Row(
@@ -894,7 +894,7 @@ private fun HeldDeletionsPanel(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+            .border(2.dp, MaterialTheme.colors.onSurface, RectangleShape)
             .padding(12.dp)
     ) {
         Row(
@@ -1266,7 +1266,7 @@ fun ManualSyncButton(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, MaterialTheme.colors.onSurface, RoundedCornerShape(8.dp))
+                    .border(2.dp, MaterialTheme.colors.onSurface, RectangleShape)
                     .padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.Top
@@ -1442,6 +1442,7 @@ fun ForceOperationsSection(
         ConfirmationDialog(
             title = stringResource(R.string.sync_confirm_force_upload_title),
             message = stringResource(R.string.sync_confirm_force_upload_message),
+            confirmButtonText = stringResource(R.string.sync_force_upload_button),
             onConfirm = onConfirmForceUpload,
             onDismiss = { onForceUploadRequested(false) }
         )
@@ -1450,6 +1451,7 @@ fun ForceOperationsSection(
         ConfirmationDialog(
             title = stringResource(R.string.sync_confirm_force_download_title),
             message = stringResource(R.string.sync_confirm_force_download_message),
+            confirmButtonText = stringResource(R.string.sync_force_download_button),
             onConfirm = onConfirmForceDownload,
             onDismiss = { onForceDownloadRequested(false) }
         )
@@ -1561,49 +1563,13 @@ private fun SyncLogLine(log: SyncLogger.LogEntry) {
 
 @Composable
 fun ConfirmationDialog(
-    title: String, message: String, onConfirm: () -> Unit, onDismiss: () -> Unit
+    title: String, message: String, onConfirm: () -> Unit, onDismiss: () -> Unit,
+    confirmButtonText: String = stringResource(R.string.sync_dialog_confirm),
 ) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            color = MaterialTheme.colors.surface,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    title,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.h6,
-                    color = MaterialTheme.colors.onSurface
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    message,
-                    style = MaterialTheme.typography.body2,
-                    color = MaterialTheme.colors.onSurface
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
-                        shape = EInkButtonShape,
-                        colors = eInkButtonColors(isSecondary = true)
-                    ) {
-                        Text(stringResource(R.string.sync_dialog_cancel))
-                    }
-                    Button(
-                        onClick = onConfirm,
-                        modifier = Modifier.weight(1f),
-                        shape = EInkButtonShape,
-                        colors = eInkButtonColors()
-                    ) {
-                        Text(stringResource(R.string.sync_dialog_confirm))
-                    }
-                }
-            }
-        }
-    }
+    com.ethran.notable.ui.dialogs.ShowSimpleConfirmationDialog(
+        title = title, message = message, onConfirm = onConfirm, onCancel = onDismiss,
+        confirmButtonText = confirmButtonText,
+        cancelButtonText = stringResource(R.string.sync_dialog_cancel))
 }
 
 @Composable

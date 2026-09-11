@@ -8,11 +8,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.semantics.Role
 
 fun Modifier.noRippleClickable(
     onClick: () -> Unit
 ): Modifier = composed {
-    clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+    clickable(role = Role.Button, indication = null, interactionSource = remember { MutableInteractionSource() }) {
         onClick()
     }
 }
@@ -27,4 +28,3 @@ fun convertDpToPixel(dp: Dp, context: Context): Float {
         context.resources.displayMetrics
     )
 }
-

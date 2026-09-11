@@ -15,9 +15,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
@@ -39,10 +43,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -58,7 +65,6 @@ import com.ethran.notable.sync.SyncScheduler
 import com.ethran.notable.sync.couch.CouchDocId
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.messageRes
-import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.rememberAppScope
 import com.ethran.notable.ui.rememberCouchSyncController
 import com.ethran.notable.ui.rememberKvProxy
@@ -253,68 +259,69 @@ fun NotebookConfigDialog(
         }) {
         Column(
             modifier = Modifier
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
                 .background(Color.White)
                 .fillMaxWidth()
                 .border(2.dp, Color.Black, RectangleShape)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
                 .padding(top = 24.dp, bottom = 16.dp)
         ) {
             // Header Section
-            Row(Modifier.padding(bottom = 16.dp)) {
+            Column(
+                Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 Box(
                     modifier = Modifier
-                        .size(200.dp, 250.dp)
+                        .size(120.dp, 160.dp)
                         .background(Color.Gray),
                     contentAlignment = Alignment.Center
                 ) {
-                    val pageId = book!!.pageIds[0]
-                    PagePreview(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(3f / 4f)
-                            .border(1.dp, Color.Black, RectangleShape), pageId
-                    )
+                    book!!.pageIds.firstOrNull()?.let { pageId ->
+                        PagePreview(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(3f / 4f)
+                                .border(1.dp, Color.Black, RectangleShape), pageId
+                        )
+                    }
                 }
-                Spacer(Modifier.width(16.dp))
                 Column(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
 
                     /* -------------- Title Field -----------*/
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = stringResource(R.string.details_notebook_title),
                             fontWeight = FontWeight.Bold,
-                            fontSize = 24.sp
+                            fontSize = 16.sp
                         )
-                        Spacer(Modifier.width(20.dp))
                         Text(
                             text = book!!.title,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Light,
                             fontSize = 24.sp,
-                            modifier = Modifier.weight(1f, fill = false)
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(Modifier.width(20.dp))
-                        Text(
+                        ActionButton(
                             text = stringResource(R.string.rename),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            modifier = Modifier.noRippleClickable { isRenaming = true }
+                            onClick = { isRenaming = true }
                         )
                     }
 
                     /* -------------- Template selection -----------*/
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = stringResource(R.string.details_notebook_default_background_template),
                         )
-                        Spacer(modifier = Modifier.width(40.dp))
                         Button(
                             onClick = { showBackgroundSelector = !showBackgroundSelector },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             colors = ButtonDefaults.buttonColors(
                                 backgroundColor = Color(Color.White.toArgb()),
                                 contentColor = Color.Black
@@ -324,12 +331,12 @@ fun NotebookConfigDialog(
                         ) {
                             val typeName =
                                 when (BackgroundType.fromKey(book?.defaultBackgroundType ?: "")) {
-                                    BackgroundType.AutoPdf -> "Observe Pdf"
-                                    BackgroundType.CoverImage -> "Cover Image"
+                                    BackgroundType.AutoPdf -> "Linked PDF"
+                                    BackgroundType.CoverImage -> "Cover image"
                                     BackgroundType.Image -> "Image"
-                                    BackgroundType.ImageRepeating -> "Repeating Image"
-                                    BackgroundType.Native -> "Native"
-                                    is BackgroundType.Pdf -> "Static pdf Page"
+                                    BackgroundType.ImageRepeating -> "Repeating image"
+                                    BackgroundType.Native -> "Built-in paper"
+                                    is BackgroundType.Pdf -> "PDF page"
                                 }
                             Text(
                                 text = typeName,
@@ -365,7 +372,6 @@ fun NotebookConfigDialog(
 
                     /* -------------- Other book info -----------*/
                     Text(stringResource(R.string.details_notebook_pages, book!!.pageIds.size))
-                    Text("Size: TODO!")
                     Row {
                         Text(stringResource(R.string.details_notebook_in_folder))
                         BreadCrumb(folders = breadcrumbFolders, fontSize = 16)  { }
@@ -377,17 +383,12 @@ fun NotebookConfigDialog(
 
             Spacer(Modifier.height(16.dp))
 
-            // Grid Actions Section. FlowRow, not Row: the actions are fixed-width and there are now
-            // enough of them to overflow a narrow dialog, where a Row would clip the last one
-            // off-screen rather than wrap it.
+            // Actions wrap on narrow screens and with larger text. The destructive action is last.
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ActionButton(stringResource(R.string.details_notebook_buttons_delete)) {
-                    showDeleteDialog = true
-                }
                 ActionButton(stringResource(R.string.details_notebook_buttons_move)) {
                     showMoveDialog = true
                 }
@@ -400,14 +401,14 @@ fun NotebookConfigDialog(
                     // longest of these writes — a whole notebook's pages — so it is also the one
                     // the dialog's scope was most likely to cut short, snack and all.
                     appScope.launch {
-                        snackManager.runWithSnack("Copying notebook…", 3000) {
+                        snackManager.runWithSnack("Duplicating notebook…", 3000) {
                             val copyId = appRepository.duplicateNotebook(bookId)
-                            if (copyId == null) "Could not copy this notebook"
+                            if (copyId == null) "Could not duplicate this notebook"
                             else {
                                 // Queued explicitly: the outbox is fed by ink edits, and a copy
                                 // nobody has drawn in yet is not one of those.
                                 couchSync.noteDocumentChanged(CouchDocId.notebook(copyId))
-                                "Notebook copied"
+                                "Notebook duplicated"
                             }
                         }
                     }
@@ -424,6 +425,9 @@ fun NotebookConfigDialog(
                         )
                     }
                 }
+                ActionButton(stringResource(R.string.details_notebook_buttons_delete)) {
+                    showDeleteDialog = true
+                }
             }
         }
 
@@ -432,16 +436,24 @@ fun NotebookConfigDialog(
 }
 
 @Composable
-fun ActionButton(text: String, onClick: () -> Unit) {
+fun ActionButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     Box(
-        modifier = Modifier
-            .size(100.dp, 40.dp)
+        modifier = modifier
+            .widthIn(min = 100.dp)
+            .heightIn(min = 48.dp)
             .background(Color.LightGray, RectangleShape)
             .border(1.dp, Color.Black, RectangleShape)
-            .clickable { onClick() },
+            .clickable(enabled = enabled, role = Role.Button) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(text, fontWeight = FontWeight.Bold)
+        Text(text, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+            color = if (enabled) Color.Black else Color.DarkGray)
     }
 }
 
@@ -463,38 +475,34 @@ fun NotebookLinkRow(
         "$folder/$bookTitle"
     } ?: "none"
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             text = stringResource(R.string.details_notebook_linked_to, linkText),
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis
         )
         if (isLinked) {
-            Button(
+            ActionButton(
+                text = "Unlink",
                 onClick = {
                     isLinked = false
                     onLinkChanged(null)
-                },
-                modifier = Modifier.weight(0.3f, fill = false)
-            ) {
-                Text("Unlink")
-            }
+                }
+            )
         } else {
-            Button(
+            ActionButton(
+                text = "Link",
                 onClick = {
                     isLinked = true
                     onLinkChanged(defaultPath)
-                },
-                modifier = Modifier.weight(0.3f, fill = false)
-            ) {
-                Text("Link")
-            }
+                }
+            )
         }
     }
 }

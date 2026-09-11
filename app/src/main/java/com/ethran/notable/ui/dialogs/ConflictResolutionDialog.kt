@@ -10,10 +10,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +30,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -73,6 +78,7 @@ fun ConflictResolutionDialog(
 
     suspend fun refresh() {
         loading = true
+        error = null
         when (val result = orchestrator.notebookConflict(bookId)) {
             is AppResult.Success -> {
                 conflict = result.data
@@ -127,8 +133,10 @@ fun ConflictResolutionDialog(
     Dialog(onDismissRequest = { if (!working) onClose() }) {
         Column(
             modifier = Modifier
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp)
                 .widthIn(max = 360.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -140,10 +148,10 @@ fun ConflictResolutionDialog(
             when {
                 loading -> Text("Checking the server…", fontSize = 14.sp)
 
-                current == null -> Text(
-                    "Could not read the conflict. Check your connection and try again.",
-                    fontSize = 14.sp
-                )
+                current == null -> {
+                    Text("Could not read the conflict. Check your connection and retry.", fontSize = 14.sp)
+                    ActionButton(text = "Retry", onClick = { scope.launch { refresh() } })
+                }
 
                 current.structural -> {
                     Text(
@@ -153,10 +161,10 @@ fun ConflictResolutionDialog(
                         fontSize = 14.sp
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ChoiceButton(Modifier.weight(1f), "Keep mine", !working) {
+                        ChoiceButton(Modifier.weight(1f), "Keep this device’s version", !working) {
                             applyNotebook(NotebookConflictResolution.KEEP_LOCAL)
                         }
-                        ChoiceButton(Modifier.weight(1f), "Use server", !working) {
+                        ChoiceButton(Modifier.weight(1f), "Use server version", !working) {
                             applyNotebook(NotebookConflictResolution.TAKE_SERVER)
                         }
                     }
@@ -165,7 +173,8 @@ fun ConflictResolutionDialog(
                 else -> {
                     Text(
                         "${current.pageConflicts.size} page(s) were edited on both sides. " +
-                            "The thumbnail shows your local version. Choose for each:",
+                            "The thumbnail shows this device’s version. Choose for each. " +
+                            "Decide later leaves the conflict for the next sync.",
                         fontSize = 14.sp
                     )
                     current.pageConflicts.forEach { page ->
@@ -185,14 +194,14 @@ fun ConflictResolutionDialog(
                                     fontWeight = FontWeight.Medium
                                 )
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ChoiceButton(Modifier.weight(1f), "Keep mine", !working) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ChoiceButton(Modifier.fillMaxWidth(), "Keep this device’s version", !working) {
                                     applyPage(page.pageId, PageConflictResolution.UPLOAD_DB)
                                 }
-                                ChoiceButton(Modifier.weight(1f), "Use server", !working) {
+                                ChoiceButton(Modifier.fillMaxWidth(), "Use server version", !working) {
                                     applyPage(page.pageId, PageConflictResolution.REPLACE_WITH_SERVER)
                                 }
-                                ChoiceButton(Modifier.weight(1f), "Skip", !working) {
+                                ChoiceButton(Modifier.fillMaxWidth(), "Decide later", !working) {
                                     applyPage(page.pageId, PageConflictResolution.SKIP)
                                 }
                             }
@@ -208,7 +217,7 @@ fun ConflictResolutionDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
-                ActionButton(text = "Close", onClick = { if (!working) onClose() })
+                ActionButton(text = "Close", enabled = !working, onClick = onClose)
             }
         }
     }
@@ -223,10 +232,11 @@ private fun ChoiceButton(
 ) {
     Box(
         modifier = modifier
+            .heightIn(min = 48.dp)
             .background(if (enabled) Color.LightGray else Color(0xFFE0E0E0), RectangleShape)
             .border(1.dp, Color.Black, RectangleShape)
-            .clickable(enabled = enabled) { onClick() }
-            .padding(vertical = 8.dp),
+            .clickable(enabled = enabled, role = Role.Button) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(text, fontWeight = FontWeight.Bold, fontSize = 13.sp, textAlign = TextAlign.Center)

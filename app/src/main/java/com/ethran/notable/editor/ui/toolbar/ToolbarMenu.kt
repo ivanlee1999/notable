@@ -9,10 +9,22 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import com.ethran.notable.ui.components.MenuAction
+import com.ethran.notable.ui.components.RowRule
+import com.ethran.notable.ui.components.Kicker
+import com.ethran.notable.ui.theme.Kaleido
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -66,114 +78,42 @@ private fun ToolbarMenuContent(
     onAction: (ToolbarAction) -> Unit,
     padding: PaddingValues = PaddingValues(bottom = (BUTTON_SIZE + 5).dp),
 ) {
-    Column(
-        Modifier
-            .padding(padding) // keeps the menu on screen against the docked edge
-            .border(1.dp, Color.Black, RectangleShape)
-            .background(Color.White)
-            .width(IntrinsicSize.Max)
-    ) {
-        // Home / Library
-        MenuItem(stringResource(R.string.home_view_name)) {
-            onAction(ToolbarAction.NavigateToLibrary)
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        DividerCentered()
-
-        // Page exports
-        MenuItem(stringResource(R.string.export_page_to, "PDF")) {
-            onAction(ToolbarAction.ExportPage(ExportFormat.PDF))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        MenuItem(stringResource(R.string.export_page_to, "PNG")) {
-            onAction(ToolbarAction.ExportPage(ExportFormat.PNG))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        MenuItem(stringResource(R.string.export_page_to, "JPEG")) {
-            onAction(ToolbarAction.ExportPage(ExportFormat.JPEG))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        MenuItem(stringResource(R.string.export_page_to, "xopp")) {
-            onAction(ToolbarAction.ExportPage(ExportFormat.XOPP))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        DividerCentered()
-
-        // Book exports
-        if (uiState.notebookId != null) {
-            MenuItem(stringResource(R.string.export_book_to, "PDF")) {
-                onAction(ToolbarAction.ExportBook(ExportFormat.PDF))
-                onAction(ToolbarAction.ToggleMenu)
+    var exporting by remember { mutableStateOf(false) }
+    fun run(action: ToolbarAction) {
+        onAction(action)
+        onAction(ToolbarAction.ToggleMenu)
+    }
+    Column(Modifier.padding(padding).widthIn(min = 200.dp, max = 280.dp)
+        .heightIn(max = 420.dp).border(1.dp, Kaleido.Ink).background(Kaleido.Paper)
+        .verticalScroll(rememberScrollState())) {
+        if (exporting) {
+            MenuAction("Back to menu", { exporting = false })
+            RowRule()
+            Kicker("This page", Modifier.padding(12.dp))
+            listOf(ExportFormat.PDF, ExportFormat.PNG, ExportFormat.JPEG, ExportFormat.XOPP).forEach { format ->
+                MenuAction(stringResource(R.string.export_page_to, format.name), { run(ToolbarAction.ExportPage(format)) })
             }
-            MenuItem(stringResource(R.string.export_book_to, "PNG")) {
-                onAction(ToolbarAction.ExportBook(ExportFormat.PNG))
-                onAction(ToolbarAction.ToggleMenu)
+            if (uiState.notebookId != null) {
+                RowRule()
+                Kicker("Notebook", Modifier.padding(12.dp))
+                listOf(ExportFormat.PDF, ExportFormat.PNG, ExportFormat.XOPP).forEach { format ->
+                    MenuAction(stringResource(R.string.export_book_to, format.name), { run(ToolbarAction.ExportBook(format)) })
+                }
             }
-            MenuItem(stringResource(R.string.export_book_to, "xopp")) {
-                onAction(ToolbarAction.ExportBook(ExportFormat.XOPP))
-                onAction(ToolbarAction.ToggleMenu)
-            }
-            DividerCentered()
-        }
-
-        MenuItem(stringResource(R.string.clean_all_strokes)) {
-            onAction(ToolbarAction.ClearAllStrokes)
-            onAction(ToolbarAction.ToggleMenu)
-        }
-        DividerCentered()
-
-        MenuItem(stringResource(R.string.change_background)) {
-            onAction(ToolbarAction.ToggleBackgroundSelector(true))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-
-        // Reads as the action it performs rather than as a state: "Lock canvas" while it is
-        // free, "Unlock canvas" while it is pinned.
-        val locked = GlobalAppSettings.current.canvasLocked
-        MenuItem(
-            stringResource(
-                if (locked) R.string.toolbar_menu_unlock_canvas
-                else R.string.toolbar_menu_lock_canvas
-            )
-        ) {
-            onAction(ToolbarAction.ToggleCanvasLock(!locked))
-            onAction(ToolbarAction.ToggleMenu)
-        }
-
-        MenuItem(stringResource(R.string.bug_report)) {
-            onAction(ToolbarAction.NavigateToBugReport)
-            onAction(ToolbarAction.ToggleMenu)
+        } else {
+            MenuAction("Library", { run(ToolbarAction.NavigateToLibrary) })
+            if (uiState.notebookId != null) MenuAction("Pages", { run(ToolbarAction.NavigateToPages) })
+            MenuAction(stringResource(R.string.change_background), { run(ToolbarAction.ToggleBackgroundSelector(true)) })
+            val locked = GlobalAppSettings.current.canvasLocked
+            MenuAction(stringResource(if (locked) R.string.toolbar_menu_unlock_canvas else R.string.toolbar_menu_lock_canvas),
+                { run(ToolbarAction.ToggleCanvasLock(!locked)) })
+            MenuAction("Export", { exporting = true })
+            RowRule()
+            MenuAction(stringResource(R.string.bug_report), { run(ToolbarAction.NavigateToBugReport) })
+            RowRule()
+            MenuAction(stringResource(R.string.clean_all_strokes), { run(ToolbarAction.ClearAllStrokes) })
         }
     }
-}
-
-@Composable
-private fun MenuItem(
-    label: String,
-    onClick: () -> Unit
-) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .noRippleClickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 8.dp)
-    ) {
-        Text(
-            text = label,
-            color = Color.Black
-        )
-    }
-}
-
-@Composable
-private fun ColumnScope.DividerCentered() {
-    Box(
-        Modifier
-            .fillMaxWidth(1f / 2f)
-            .align(Alignment.CenterHorizontally)
-            .height(0.5.dp)
-            .background(Color(0xFF777777))
-    )
 }
 
 @Composable

@@ -8,6 +8,8 @@ import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -38,6 +40,7 @@ fun ToolbarButton(
     Box(
         Modifier
             .then(modifier)
+            .semantics { selected = isSelected }
             .noRippleClickable { onSelect() }
             .background(
                 color = bgColor, shape = if (!isSelected) CircleShape else RectangleShape

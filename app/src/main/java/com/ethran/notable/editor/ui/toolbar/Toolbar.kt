@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -298,6 +301,10 @@ private fun InkSwatch(
     Box(
         Modifier
             .size(BUTTON_SIZE.dp)
+            .semantics {
+                contentDescription = "Choose ink"
+                stateDescription = inkDescription(current.color)
+            }
             .noRippleClickable { isOpen = !isOpen },
         contentAlignment = Alignment.Center,
     ) {
@@ -323,16 +330,18 @@ private fun InkSwatch(
                 .padding(placement.padding)
                 .background(Kaleido.Rail)
                 .border(Kaleido.SectionRule, Kaleido.Ink)
+                .heightIn(max = 320.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(5.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            inks.chunked(2).forEach { row ->
+            inks.chunked(3).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     row.forEach { ink ->
                         val selected = ink == current.color
                         Box(
                             Modifier
-                                .size(36.dp)
+                                .size(48.dp)
                                 .background(Color(ink))
                                 .border(
                                     width = if (selected) 2.dp else 1.dp,
@@ -347,10 +356,10 @@ private fun InkSwatch(
                                     )
                                     isOpen = false
                                 }
-                                .semantics { contentDescription = inkDescription(ink) }
+                                .semantics { contentDescription = inkDescription(ink); this.selected = selected }
                         )
                     }
-                    if (row.size == 1) Spacer(Modifier.size(36.dp))
+                    if (row.size == 1) Spacer(Modifier.size(48.dp))
                 }
             }
         }
@@ -492,7 +501,7 @@ private fun NibCell(
             .size(BUTTON_SIZE.dp)
             .background(if (selected) Kaleido.Ink else Color.Transparent)
             .noRippleClickable(onSelect)
-            .semantics { contentDescription = label },
+            .semantics { contentDescription = label; this.selected = selected },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -503,108 +512,31 @@ private fun NibCell(
     }
 }
 
-/**
- * The inks the pen in hand can take, at the foot of the rail.
- *
- * Saturated squares are the one thing a Kaleido panel prints cleanly, and this is the only
- * place in the editor colour is spent. Tapping one writes to the active preset — the same
- * edit the pen's stroke menu makes, one tap deep instead of two.
- *
- * Two columns, not one. A single file of twelve swatches would be longer than the rest of the
- * rail put together, and the point of showing the palette at all is that a colour is one tap
- * away rather than one tap and a menu. Two columns is also what fits: the rail is
- * [BUTTON_SIZE] across, so the swatches are [SWATCH] rather than the 25dp a single file could
- * afford — narrower than the iPad's, which has 60pt of rail to spend.
- *
- * A ring rather than a fill marks the current one: the swatch itself has to stay pure colour,
- * or the ink you chose is the one you cannot see. A horizontal rail has no room for a grid and
- * spends the same choice on [InkSwatch].
- */
+/** Both rail orientations use the same full-size palette, preserving the canvas geometry. */
 @Composable
-private fun InkStrip(
-    uiState: ToolbarUiState,
-    onAction: (ToolbarAction) -> Unit,
-) {
-    val (current, inks) = inkOptions(uiState) ?: return
-    val presetId = uiState.penPresetId
-
-    ToolbarDivider()
-    // A plain Column of Rows rather than a LazyVerticalGrid: the rail is already inside a
-    // scrolling parent on the horizontal arrangement, and a lazy grid nested in a scroller
-    // measures at infinite height.
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(SWATCH_GAP)
-    ) {
-        inks.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(SWATCH_GAP)) {
-                row.forEach { ink ->
-                    InkSquare(ink = ink, selected = ink == current.color) {
-                        onAction(
-                            ToolbarAction.ChangePenSetting(
-                                presetId, PenSetting(current.strokeSize, ink)
-                            )
-                        )
-                    }
-                }
-                // An odd palette leaves a hole rather than centring its last swatch: the
-                // columns have to stay columns.
-                if (row.size == 1) Spacer(Modifier.size(SWATCH_CELL))
-            }
-        }
-    }
+private fun InkStrip(uiState: ToolbarUiState, onAction: (ToolbarAction) -> Unit) {
+    InkSwatch(uiState, onAction)
 }
 
-/**
- * The swatch cell in the vertical rail: two of them and the gap between are exactly
- * [BUTTON_SIZE] across (18 + 1 + 18 = 37), which is what fixes the grid at two columns.
- * [SWATCH] is the colour inside it; the 2dp left over is where a selection ring goes.
- */
-private val SWATCH_CELL = 18.dp
-private val SWATCH = 14.dp
-private val SWATCH_GAP = 1.dp
-
-/**
- * One ink, as a cell holding a square of colour.
- *
- * The selection ring is drawn on the *cell*, around the colour, rather than as a border on the
- * swatch itself: at this size a 2dp border would eat a quarter of the square, so the ink you
- * chose would be the one you could see least. The swatch keeps its own hairline edge in both
- * states, because a pale ink against the rail needs one to read as a square at all.
- */
-@Composable
-private fun InkSquare(
-    ink: Int,
-    selected: Boolean,
-    onSelect: () -> Unit,
-) {
-    Box(
-        Modifier
-            .size(SWATCH_CELL)
-            .then(if (selected) Modifier.border(2.dp, Kaleido.Ink) else Modifier)
-            .noRippleClickable(onSelect)
-            .semantics { contentDescription = inkDescription(ink) },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .size(SWATCH)
-                .background(Color(ink))
-                .border(1.dp, Kaleido.Edge)
-        )
+internal fun inkDescription(ink: Int): String {
+    val name = when (ink and 0xFFFFFF) {
+        0x201E1D, 0x000000 -> "Black"
+        0xFFFFFF -> "White"
+        0xAE1800 -> "Red"
+        0xDD2B0F -> "Coral"
+        0x888888 -> "Grey"
+        0xC2610A -> "Orange"
+        0x96700A -> "Gold"
+        0x2E7D32 -> "Green"
+        0x0F6E78 -> "Teal"
+        0x1B4FA0 -> "Blue"
+        0x4B3A9B -> "Violet"
+        0x8E2166 -> "Plum"
+        0x6B4423 -> "Brown"
+        else -> "#%06X".format(ink and 0xFFFFFF)
     }
+    return "Ink: $name"
 }
-
-/**
- * What an ink swatch is called to a screen reader and to a test — the colour as #RRGGBB.
- *
- * By value rather than by a name, because a pen narrowed in settings may carry an ink that is
- * no longer in the palette, and every swatch still has to be addressable.
- */
-internal fun inkDescription(ink: Int): String = "ink #%06X".format(ink and 0xFFFFFF)
 
 @Composable
 private fun CollapsedToolbarButton(

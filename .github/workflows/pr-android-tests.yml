@@ -56,9 +56,8 @@ jobs:
             -camera-back none
           disable-animations: true
           emulator-boot-timeout: 600
-          script: >-
-            ./gradlew connectedDebugAndroidTest ||
-            { adb logcat -d > android-instrumentation-logcat.txt; exit 1; }
+          script: |
+            test_status=0; ./gradlew connectedDebugAndroidTest || test_status=$?; adb pull /sdcard/Android/data/com.ethran.notable/files/ui-review ui-review || true; if [ "$test_status" -ne 0 ]; then adb logcat -d > android-instrumentation-logcat.txt; fi; exit "$test_status"
 
       - name: Upload instrumentation results
         if: always()
@@ -69,6 +68,7 @@ jobs:
             app/build/reports/androidTests/connected
             app/build/outputs/androidTest-results/connected
             android-instrumentation-logcat.txt
+            ui-review
           if-no-files-found: warn
 
       - name: Remove Label

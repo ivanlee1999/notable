@@ -4,13 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +36,8 @@ fun ShowSimpleConfirmationDialog(
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
     confirmButtonText: String = "Confirm",
-    cancelButtonText: String = "Cancel"
+    cancelButtonText: String = "Cancel",
+    confirmEnabled: Boolean = true
 ) {
     ShowConfirmationDialog(
         title = title,
@@ -41,7 +46,8 @@ fun ShowSimpleConfirmationDialog(
         onCancel = onCancel,
         onDismiss = onCancel,
         confirmButtonText = confirmButtonText,
-        cancelButtonText = cancelButtonText
+        cancelButtonText = cancelButtonText,
+        confirmEnabled = confirmEnabled
     )
 }
 
@@ -54,27 +60,31 @@ fun ShowConfirmationDialog(
     onCancel: () -> Unit,
     onDismiss: () -> Unit = onCancel,
     confirmButtonText: String = "Confirm",
-    cancelButtonText: String = "Cancel"
+    cancelButtonText: String = "Cancel",
+    confirmEnabled: Boolean = true
 ) {
     Dialog(onDismissRequest = { onDismiss() }) {
         Column(
             modifier = Modifier
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(text = title, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             content()
-            Row(
-                horizontalArrangement = Arrangement.SpaceAround,
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp)
+                    .padding(top = 8.dp)
             ) {
                 ActionButton(text = cancelButtonText, onClick = onCancel)
-                ActionButton(text = confirmButtonText, onClick = onConfirm)
+                ActionButton(text = confirmButtonText, enabled = confirmEnabled, onClick = onConfirm)
             }
         }
     }
@@ -97,22 +107,27 @@ fun ShowExportDialog(
     Dialog(onDismissRequest = { onCancel() }) {
         Column(
             modifier = Modifier
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
                 .background(Color.White)
                 .border(1.dp, Color.Black, RectangleShape)
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = "Choose Export Format", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text(text = "Export notebook", fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Text(
-                text = "Select the format in which you want to export the book:\n" + "- Xopp: Preserves all data and can be imported. " + "However, if opened and saved by Xournal++, tool-specific information will be lost, " + "and all strokes will be interpreted as ballpoint pen.\n" + "- PDF: A standard format for document sharing.",
+                text = "PDF creates a document you can share.\n\n" +
+                    "XOPP preserves editable notes for importing. Saving it in Xournal++ changes " +
+                    "pen-specific strokes to ballpoint pen strokes.",
                 fontSize = 16.sp
             )
-            Row(
-                horizontalArrangement = Arrangement.SpaceAround,
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp)
+                    .padding(top = 8.dp)
             ) {
                 ActionButton(
                     text = "Cancel", onClick = onCancel
@@ -121,7 +136,7 @@ fun ShowExportDialog(
                     text = "Export as PDF", onClick = {
                         scope.launch {
                             snackManager.runWithSnack(
-                                "Exporting book to PDF.."
+                                "Exporting notebook to PDF…"
                             ) {
                                 exportEngine.export(
                                     target = ExportTarget.Book(bookId = bookId),
@@ -137,10 +152,10 @@ fun ShowExportDialog(
                         onConfirm()
                     })
                 ActionButton(
-                    text = "Export as Xopp", onClick = {
+                    text = "Export as XOPP", onClick = {
                         scope.launch {
                             snackManager.runWithSnack(
-                                "Exporting the book to xopp..."
+                                "Exporting notebook to XOPP…"
                             ) {
                                exportEngine.export(
                                     target = ExportTarget.Book(bookId = bookId),
