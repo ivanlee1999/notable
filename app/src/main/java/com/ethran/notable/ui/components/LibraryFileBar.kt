@@ -358,7 +358,8 @@ private val DISCLOSURE = 44.dp
  * Where a row at [depth] starts. The triangle sits in the 20dp gutter the rest of the panel
  * keeps clear, so the tree's glyph column stays put whether or not a row can be opened.
  */
-private fun indent(depth: Int): Dp = 10.dp + (16 * depth).dp
+// Keep titles and their actions visible even in deeply nested imported folders, as in Bopa.
+private fun indent(depth: Int): Dp = minOf(10 + 12 * depth, 46).dp
 
 /**
  * The tree as the flat row list the bar draws.

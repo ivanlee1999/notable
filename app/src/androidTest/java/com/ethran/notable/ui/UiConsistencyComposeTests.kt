@@ -129,7 +129,7 @@ class UiConsistencyComposeTests {
         var returned = false
         content(width = width, fontScale = 1.5f) {
             SettingsContent(
-                versionString = "0.50.0", settings = AppSettings(), isLatestVersion = true,
+                versionString = "0.50.0", settings = AppSettings(version = 1), isLatestVersion = true,
                 onBack = { returned = true }, goToWelcome = {}, goToSystemInfo = {},
                 onCheckUpdate = {}, onUpdateSettings = {}, selectedTabInitial = 3,
                 syncUiState = SyncSettingsUiState(syncSettings = SyncSettings(backend = backend)),
