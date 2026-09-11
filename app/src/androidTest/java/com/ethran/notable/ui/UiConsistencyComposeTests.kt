@@ -141,6 +141,7 @@ class UiConsistencyComposeTests {
         }
         compose.onNodeWithText("Experimental Feature").assertDoesNotExist()
         compose.onNodeWithText("Sync").assertIsSelected().assertIsDisplayed()
+        screenshot("settings-${backend.name.lowercase()}-$width-large-text")
         listOf("Off" to SyncBackend.OFF, "WebDAV" to SyncBackend.WEBDAV,
             "CouchDB" to SyncBackend.COUCHDB).forEach { (label, choice) ->
             val option = compose.onNodeWithText(label)
@@ -149,11 +150,15 @@ class UiConsistencyComposeTests {
             val layouts = mutableListOf<TextLayoutResult>()
             option.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
-            assertFalse("$label must fit its control", layouts.single().hasVisualOverflow)
+            val layout = layouts.single()
+            assertFalse("$label must fit its control: size=${layout.size}, " +
+                "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, " +
+                "constraints=${layout.layoutInput.constraints}, " +
+                "overflowWidth=${layout.didOverflowWidth}, overflowHeight=${layout.didOverflowHeight}",
+                layout.hasVisualOverflow)
         }
         val back = compose.onNodeWithContentDescription("Back to library")
         back.assertWidthIsAtLeast(44.dp).assertHeightIsAtLeast(44.dp).assertIsDisplayed()
-        screenshot("settings-${backend.name.lowercase()}-$width-large-text")
         back.performClick()
         assertEquals(true, returned)
     }
