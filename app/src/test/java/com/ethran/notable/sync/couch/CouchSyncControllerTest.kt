@@ -622,6 +622,11 @@ class CouchSyncControllerTest {
             1,
             backend.flushCount,
         )
+        assertEquals(
+            "successful reads must not hide the outstanding upload failure during backoff",
+            CouchSyncController.Status.Failed("conflict(page:a)"),
+            controller.status,
+        )
     }
 
     // region Backgrounding

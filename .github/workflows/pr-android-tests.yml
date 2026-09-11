@@ -31,8 +31,9 @@ jobs:
       - name: Run Android Instrumentation Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
-          target: default    
+          # FLAG_CANCELED palm-rejection events were introduced in Android 13.
+          api-level: 33
+          target: google_apis
           arch: x86_64
           force-avd-creation: true
           emulator-options: >-

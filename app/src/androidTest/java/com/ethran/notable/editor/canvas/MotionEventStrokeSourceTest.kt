@@ -3,9 +3,11 @@ package com.ethran.notable.editor.canvas
 import android.graphics.Rect
 import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import com.ethran.notable.editor.utils.rawInputMaxPressure
 import com.onyx.android.sdk.pen.data.TouchPointList
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,7 +18,7 @@ import org.junit.runner.RunWith
  * such a device here, so what is pinned instead is the contract it has to meet for the
  * editor downstream to treat it like a firmware stroke: the points the pen actually visited,
  * pressure on the digitizer's scale, and the two things the firmware would otherwise be
- * enforcing — the rail's band, and that a tap is not a stroke.
+ * enforcing — the rail's band and cancellation of interrupted strokes.
  */
 @RunWith(AndroidJUnit4::class)
 class MotionEventStrokeSourceTest {
@@ -54,7 +56,12 @@ class MotionEventStrokeSourceTest {
     )
 
     /** [actionIndex] names which pointer the action is about, for the POINTER_ variants. */
-    private fun event(action: Int, pointers: List<Pointer>, actionIndex: Int = 0): MotionEvent {
+    private fun event(
+        action: Int,
+        pointers: List<Pointer>,
+        actionIndex: Int = 0,
+        flags: Int = 0,
+    ): MotionEvent {
         val properties = pointers.map {
             MotionEvent.PointerProperties().apply {
                 id = it.id
@@ -73,7 +80,7 @@ class MotionEventStrokeSourceTest {
             0L, 0L,
             action or (actionIndex shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
             pointers.size, properties.toTypedArray(), coords.toTypedArray(),
-            0, 0, 1f, 1f, 0, 0, 0, 0
+            0, 0, 1f, 1f, 0, 0, 0, flags
         )
     }
 
@@ -114,12 +121,11 @@ class MotionEventStrokeSourceTest {
     }
 
     @Test
-    fun a_tap_is_not_a_stroke() {
+    fun a_tap_preserves_a_dot_as_a_down_up_pair() {
         source.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
         source.onTouchEvent(event(MotionEvent.ACTION_UP, 10f, 10f), canvas)
 
-        // Two points arrive — down and up — but they are the same place, and the handlers
-        // downstream would take a zero-area bounding box from it.
+        // A dot still needs the down/up pair for the downstream stroke renderer.
         assertEquals(2, collected?.points?.size)
         assertEquals(10f, collected!!.points[0].x, 0.01f)
     }
@@ -153,6 +159,102 @@ class MotionEventStrokeSourceTest {
         source.onTouchEvent(event(MotionEvent.ACTION_CANCEL, 30f, 30f), canvas)
 
         assertNull(collected)
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 33)
+    fun a_cancelled_pen_up_discards_ink_and_releases_the_held_view() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f))), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, listOf(pen(20f, 20f))), canvas)
+        source.onTouchEvent(
+            event(
+                MotionEvent.ACTION_UP,
+                listOf(pen(30f, 30f)),
+                flags = MotionEvent.FLAG_CANCELED,
+            ),
+            canvas,
+        )
+
+        assertNull(collected)
+        assertEquals(listOf("started", "ended"), bracket)
+        assertFalse(source.onTouchEvent(event(MotionEvent.ACTION_MOVE, 40f, 40f), canvas))
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 33)
+    fun a_cancelled_pen_pointer_up_does_not_save_a_palm_rejected_stroke() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(palm, pen(10f, 10f)), actionIndex = 1),
+            canvas,
+        )
+        source.onTouchEvent(
+            event(
+                MotionEvent.ACTION_POINTER_UP,
+                listOf(palm, pen(20f, 20f)),
+                actionIndex = 1,
+                flags = MotionEvent.FLAG_CANCELED,
+            ),
+            canvas,
+        )
+
+        assertNull(collected)
+        assertEquals(listOf("started", "ended"), bracket)
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 33)
+    fun cancelling_a_palm_pointer_does_not_cancel_the_pen() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(pen(10f, 10f))), canvas)
+        source.onTouchEvent(
+            event(MotionEvent.ACTION_POINTER_DOWN, listOf(pen(20f, 20f), palm), actionIndex = 1),
+            canvas,
+        )
+        source.onTouchEvent(
+            event(
+                MotionEvent.ACTION_POINTER_UP,
+                listOf(pen(30f, 30f), palm),
+                actionIndex = 1,
+                flags = MotionEvent.FLAG_CANCELED,
+            ),
+            canvas,
+        )
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, listOf(pen(40f, 40f))), canvas)
+
+        assertEquals(listOf("started", "finished", "ended"), bracket)
+        assertEquals(40f, collected!!.points.last().x, 0.01f)
+    }
+
+    @Test
+    fun a_new_gesture_recovers_after_a_missing_terminal_event() {
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_MOVE, 20f, 20f), canvas)
+        // The old gesture was interrupted. DOWN is unambiguously a new gesture.
+        source.onTouchEvent(event(MotionEvent.ACTION_DOWN, 100f, 100f), canvas)
+        source.onTouchEvent(event(MotionEvent.ACTION_UP, 120f, 120f), canvas)
+
+        assertEquals(listOf("started", "ended", "started", "finished", "ended"), bracket)
+        assertEquals(100f, collected!!.points.first().x, 0.01f)
+        assertEquals(120f, collected!!.points.last().x, 0.01f)
+    }
+
+    @Test
+    fun a_failed_stroke_handler_still_releases_the_held_view() {
+        val failure = IllegalStateException("stroke processing failed")
+        var ended = 0
+        val throwingSource = MotionEventStrokeSource(
+            onStrokeFinished = { throw failure },
+            onStrokeEnded = { ended++ },
+        )
+        throwingSource.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
+        val result = runCatching {
+            throwingSource.onTouchEvent(event(MotionEvent.ACTION_UP, 20f, 20f), canvas)
+        }
+
+        assertEquals(failure, result.exceptionOrNull())
+        assertEquals(1, ended)
+        throwingSource.cancel()
+        assertEquals("a finished bracket must not close twice", 1, ended)
     }
 
     @Test

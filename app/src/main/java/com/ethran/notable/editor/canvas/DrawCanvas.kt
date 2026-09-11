@@ -40,6 +40,16 @@ class DrawCanvas(
     // Overriding dispatchTouchEvent catches the event BEFORE it is routed
     // to onTouchEvent or sent down to nested Android components.
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // A cancelled gesture need not retain its stylus pointer. Handle it before testing
+        // tool types so a palm-only CANCEL cannot leave the old stroke and viewport held.
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            cancelFallbackStroke()
+            if (!DeviceCompat.isOnyxDevice) {
+                glRenderer.frontBufferRenderer?.cancel()
+            }
+            parent?.requestDisallowInterceptTouchEvent(false)
+            return super.dispatchTouchEvent(event)
+        }
         // 1. Accessibility & Clicks
         if (event.actionMasked == MotionEvent.ACTION_UP && !hasAnyStylusPointer(event)) {
             performClick()
@@ -88,6 +98,8 @@ class DrawCanvas(
         // view is the limit.
         fallbackStrokeSource.onTouchEvent(event, Rect(0, 0, width, height))
     }
+
+    internal fun cancelFallbackStroke() = fallbackStrokeSource.cancel()
 
     @Suppress("RedundantOverride")
     override fun performClick(): Boolean {
@@ -161,6 +173,7 @@ class DrawCanvas(
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
+                cancelFallbackStroke()
                 log.i(
                     "surface destroyed ${
                         this@DrawCanvas.hashCode()

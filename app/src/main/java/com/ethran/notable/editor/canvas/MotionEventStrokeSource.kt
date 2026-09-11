@@ -1,6 +1,7 @@
 package com.ethran.notable.editor.canvas
 
 import android.graphics.Rect
+import android.os.Build
 import android.view.MotionEvent
 import com.ethran.notable.editor.utils.rawInputMaxPressure
 import com.onyx.android.sdk.data.note.TouchPoint
@@ -54,6 +55,9 @@ class MotionEventStrokeSource(
      * because it clipped the rail on the way past.
      */
     fun onTouchEvent(event: MotionEvent, limitRect: Rect): Boolean {
+        // DOWN starts a new gesture even if Android dropped the previous terminal event.
+        // Otherwise an interrupted stroke would swallow every later pen-down.
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) cancel()
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 // A pen landing beside a hand already on the glass arrives as POINTER_DOWN, so
@@ -86,14 +90,24 @@ class MotionEventStrokeSource(
                 // not cut the line short, and its position must never be appended to it.
                 val index = event.actionIndex
                 if (event.getPointerId(index) != penPointerId) return false
+                // Palm rejection can cancel an individual pointer via POINTER_UP/UP rather
+                // than cancelling the whole gesture. Its samples must never become stored ink.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    (event.flags and MotionEvent.FLAG_CANCELED) != 0
+                ) {
+                    cancel()
+                    return true
+                }
                 pending = null
                 penPointerId = MotionEvent.INVALID_POINTER_ID
                 stroke.add(event.toTouchPoint(index))
-                // A tap is not a stroke: two points are the minimum the handlers can take a
-                // bounding box from.
-                if (stroke.size() >= 2) onStrokeFinished(stroke)
-                // After the handler, which is where the held view is read.
-                onStrokeEnded()
+                try {
+                    // A down/up pair also preserves a dot made by tapping the pen.
+                    if (stroke.size() >= 2) onStrokeFinished(stroke)
+                } finally {
+                    // The handler reads the held view; always release it afterwards.
+                    onStrokeEnded()
+                }
             }
 
             MotionEvent.ACTION_CANCEL -> cancel()

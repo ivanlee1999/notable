@@ -839,9 +839,13 @@ class CouchSyncController @Inject constructor(
         }
         _state.update { current ->
             current.copy(
-                // A pull that returned at all clears any previous failure: the server is
-                // demonstrably reachable again, whether or not it had anything to say.
-                status = Status.Idle,
+                // A successful read proves reachability, but cannot clear a rejected upload
+                // while work is queued or mark an upload in progress as finished.
+                status = when {
+                    current.status is Status.Syncing -> current.status
+                    current.status is Status.Failed && current.pendingCount > 0 -> current.status
+                    else -> Status.Idle
+                },
                 lastSyncedAt =
                     if (report.applied.isNotEmpty()) clock.nowMs() else current.lastSyncedAt,
                 conflictCopies =

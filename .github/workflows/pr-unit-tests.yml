@@ -12,6 +12,19 @@ permissions:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    services:
+      couchdb:
+        image: couchdb:3.5
+        env:
+          COUCHDB_USER: ci
+          COUCHDB_PASSWORD: ci-test-only
+        ports:
+          - 5984:5984
+        options: >-
+          --health-cmd "curl -fsS http://localhost:5984/_up"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - name: Checkout code
@@ -29,6 +42,24 @@ jobs:
       - name: Run Unit Tests
         # Replace with your specific unit test task if different
         run: ./gradlew testDebugUnitTest
+
+      - name: Exercise sync against an isolated CouchDB
+        env:
+          NOTABLE_COUCH_URL: http://127.0.0.1:5984
+          NOTABLE_COUCH_USER: ci
+          NOTABLE_COUCH_PASSWORD: ci-test-only
+          NOTABLE_COUCH_DATABASE: notable_ci
+        run: |
+          curl --fail --silent --show-error --user ci:ci-test-only \
+            -X PUT http://127.0.0.1:5984/notable_ci
+          ./gradlew :app:testDebugUnitTest --rerun \
+            --tests 'com.ethran.notable.sync.couch.CouchIntegrationTest'
+          report=app/build/test-results/testDebugUnitTest/TEST-com.ethran.notable.sync.couch.CouchIntegrationTest.xml
+          test -s "$report"
+          if grep -q '<skipped' "$report"; then
+            echo '::error::The CouchDB integration suite must run, not skip.'
+            exit 1
+          fi
 
       # The merge vectors are a contract between two codebases, and the only thing that checks
       # the two implementations agree. They are duplicated by design — each suite reads its own
