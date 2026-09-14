@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.51.0
+
+- Navigate folders in the file bar — it lists folders only now, so a notebook appears
+  once, on its cover on the shelf, instead of also as a row that could only repeat its
+  title. Each folder still counts everything filed directly inside it, and its
+  disclosure triangle now tracks subfolders, so a folder holding only notebooks no
+  longer offers to open onto nothing.
+- Reach the library's actions from two squares at the top right: a filled + for a new
+  notebook, and a gear holding Grid/List, New folder, Quick note, Import, Sync now,
+  Trash and Settings. That takes two rows off the header.
+- Show and hide the folder column from its own button rather than from inside a menu.
+- A folder synced from another device can no longer collide with the file bar's own
+  list keys, which could crash the sidebar as it drew.
+
+No database or sync-format change. Matches the same rearrangement in Bopa 0.5.0.
+
+## 0.50.0
+
+Written after the fact — 0.50.0 shipped without an entry.
+
+- Align the library, page navigation, editor toolbar and menus, dialogs and settings on
+  one set of controls shared with Bopa, so the same action looks and sits the same way
+  on both devices.
+- See which folder a search result lives in, rather than a bare list of names.
+- Keep sort order stable and predictable instead of following the database's own.
+- Keep nested folder controls reachable, and sync choices readable at large text sizes.
+- Keep rendered interface screenshots from CI for review.
+
+No database or sync-format change.
+
 ## 0.49.0
 
 - Discard fallback pen strokes canceled by Android palm rejection, and release the
