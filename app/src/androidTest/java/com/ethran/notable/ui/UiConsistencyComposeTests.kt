@@ -115,8 +115,10 @@ class UiConsistencyComposeTests {
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("List").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("More").performClick()
-        compose.onNodeWithText("List").assertIsSelected()
-        compose.onNodeWithText("Grid").assertIsNotSelected()
+        // Substring, because MenuAction ticks the chosen entry by rewriting its label to
+        // "✓ List" — an exact match would look for a string the menu no longer draws.
+        compose.onNodeWithText("List", substring = true).assertIsSelected()
+        compose.onNodeWithText("Grid", substring = true).assertIsNotSelected()
         compose.onNodeWithText("Settings").assertIsDisplayed().performClick()
         assertEquals(1, settingsOpened)
     }

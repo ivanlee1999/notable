@@ -123,7 +123,10 @@ fun LibraryFileBar(
                         SectionHeader(stringResource(R.string.home_folders))
                     }
                 }
-                items(rows, key = { it.id }) { row ->
+                // Namespaced, unlike the row's own id: folder ids arrive verbatim from a peer's
+                // folders.json, so one called "tail" or "all-notes" would collide with this
+                // list's own fixed keys and take the sidebar down with a duplicate-key throw.
+                items(rows, key = { "folder:${it.id}" }) { row ->
                     FolderTreeRow(
                         row = row,
                         selected = selectedFolderId == row.id,

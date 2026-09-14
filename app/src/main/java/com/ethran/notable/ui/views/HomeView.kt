@@ -597,7 +597,8 @@ internal fun LibraryHeader(
                 // way, and it now lives two taps inside the menu — so the mark that says to look
                 // belongs on the thing that opens it.
                 if (!uiState.isLatestVersion) {
-                    Box(Modifier.align(Alignment.TopEnd).size(10.dp).background(Kaleido.Red))
+                    Box(Modifier.align(Alignment.TopEnd).size(10.dp).background(Kaleido.Red)
+                        .semantics { contentDescription = "Update available" })
                 }
                 if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
                     MenuAction("Grid", { isMoreOpen = false; onGridChanged(true) }, gridView)
@@ -607,9 +608,12 @@ internal fun LibraryHeader(
                     MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
                     MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
                     RowRule()
-                    MenuAction(if (uiState.isSyncing) "Syncing…" else "Sync now",
+                    MenuAction(
+                        stringResource(
+                            if (uiState.isSyncing) R.string.sync_status_syncing else R.string.sync_now
+                        ),
                         { isMoreOpen = false; onSyncNow() })
-                    MenuAction("Trash", { isMoreOpen = false; onNavigateToTrash() })
+                    MenuAction(stringResource(R.string.home_trash), { isMoreOpen = false; onNavigateToTrash() })
                     MenuAction(if (uiState.isLatestVersion) "Settings" else "Settings · Update available",
                         { isMoreOpen = false; onNavigateToSettings() })
                 }
@@ -633,7 +637,7 @@ internal fun LibraryHeader(
         // you look to ask "is my writing on the server yet?", and a line that costs a row only
         // during a sync is cheaper than a control that answers it permanently.
         if (uiState.isSyncing) {
-            Text("Syncing…", color = Kaleido.Ink, fontSize = 13.sp,
+            Text(stringResource(R.string.sync_status_syncing), color = Kaleido.Ink, fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 8.dp))
         }
