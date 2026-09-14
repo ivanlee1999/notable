@@ -105,13 +105,18 @@ class UiConsistencyComposeTests {
             }
         }
         compose.onNodeWithText("Library").assertIsDisplayed()
-        compose.onNodeWithText("New notebook").assertIsDisplayed().performClick()
+        // The two visible actions are icon squares now, so they are addressed the way a screen
+        // reader addresses them — by description, not by a label the header no longer spends a
+        // row on.
+        compose.onNodeWithContentDescription("New notebook").assertIsDisplayed().performClick()
         assertEquals(1, created)
+        screenshot("library-header-320-large-text")
+        // Layout, settings and the rest all live behind the one gear.
+        compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("List").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("List").assertIsSelected()
         compose.onNodeWithText("Grid").assertIsNotSelected()
-        screenshot("library-header-320-large-text")
-        compose.onNodeWithText("More").performClick()
         compose.onNodeWithText("Settings").assertIsDisplayed().performClick()
         assertEquals(1, settingsOpened)
     }
@@ -126,7 +131,8 @@ class UiConsistencyComposeTests {
         compose.onNodeWithText("Library").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search notebooks and folders").assertIsDisplayed()
         compose.onNodeWithText("Sort").assertIsDisplayed()
-        compose.onNodeWithText("New notebook").assertIsDisplayed()
+        compose.onNodeWithContentDescription("New notebook").assertIsDisplayed()
+        compose.onNodeWithContentDescription("More").assertIsDisplayed()
         screenshot("library-header-600")
     }
 

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -106,8 +105,10 @@ import com.ethran.notable.sync.SyncBadge
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.FolderPlus
 import compose.icons.feathericons.MoreVertical
+import compose.icons.feathericons.Plus
 import compose.icons.feathericons.Search
 import compose.icons.feathericons.Settings
+import compose.icons.feathericons.Sidebar
 import compose.icons.feathericons.Trash2
 import compose.icons.feathericons.X
 import io.shipbook.shipbooksdk.ShipBook
@@ -340,15 +341,8 @@ fun LibraryContent(
             if (showSidebar) LibraryFileBar(
                 tree = uiState.tree,
                 selectedFolderId = uiState.folderId,
-                syncBadges = uiState.syncBadges,
                 isSyncing = uiState.isSyncing,
                 onSelectFolder = onNavigateToFolder,
-                onOpenNotebook = { book ->
-                    // A book with no page has nothing to open — the empty-import leftover the
-                    // shelf warns about. Silently doing nothing beats crashing on `first()`.
-                    val page = book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
-                    if (page != null) openNotebook(page, book.id) else openPages(book.id)
-                },
                 onSyncNow = onSyncNow,
             )
 
@@ -532,8 +526,18 @@ fun LibraryContent(
 }
 
 /**
- * Kicker path over the screen's title, then the three square actions: sync and settings
- * outlined, new notebook filled. Closed by the 2px rule that every section repeats.
+ * The screen's masthead: where you are, and what you can do about it.
+ *
+ * Two visible actions, both top right — a filled `+` for a new notebook, the one thing this
+ * screen exists to get out of the way, and a gear holding everything else. What stays on the bar
+ * is what you reach for without thinking about the library itself: the folder toggle, the way
+ * back up, the title, and search. Everything that is a statement *about* the library rather than
+ * work in it — how the shelf is laid out, where it syncs, what was thrown away — is one tap
+ * further off, which for a once-a-session decision costs nothing and buys back two rows.
+ *
+ * Grid/List lives at the head of that menu rather than as a pair of buttons on a row of their
+ * own: it is the item most often come for, and two ticked entries say which one is on without
+ * spending a line of the header saying it permanently.
  */
 @Composable
 internal fun LibraryHeader(
@@ -557,7 +561,18 @@ internal fun LibraryHeader(
     var isMoreOpen by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(metrics.pad)) {
         Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Only where there is a second column to show: below the breakpoint the shelf has
+            // the screen to itself and a toggle would promise one that cannot appear.
+            onToggleSidebar?.let { toggle ->
+                SquareButton(48.dp, toggle) {
+                    Icon(
+                        FeatherIcons.Sidebar,
+                        if (sidebarVisible) "Hide folders" else "Show folders",
+                        tint = Kaleido.Ink
+                    )
+                }
+            }
             if (uiState.folderId != null) SquareButton(48.dp, {
                 onNavigateToFolder(uiState.breadcrumbFolders.dropLast(1).lastOrNull()?.id)
             }) { Icon(FeatherIcons.ArrowLeft, "Parent folder", tint = Kaleido.Ink) }
@@ -565,6 +580,40 @@ internal fun LibraryHeader(
                 fontSize = metrics.titleSize, fontWeight = FontWeight.ExtraBold,
                 color = Kaleido.Ink, modifier = Modifier.weight(1f), maxLines = 2,
                 overflow = TextOverflow.Ellipsis)
+            SquareButton(48.dp, onCreateNewNotebook, filled = true) {
+                Icon(
+                    FeatherIcons.Plus, stringResource(R.string.home_new_notebook),
+                    tint = Kaleido.Paper
+                )
+            }
+            Box {
+                SquareButton(48.dp, { isMoreOpen = true }, filled = isMoreOpen) {
+                    Icon(
+                        FeatherIcons.Settings, stringResource(R.string.home_more_actions),
+                        tint = if (isMoreOpen) Kaleido.Paper else Kaleido.Ink
+                    )
+                }
+                // An update is the one thing on this screen the user cannot discover any other
+                // way, and it now lives two taps inside the menu — so the mark that says to look
+                // belongs on the thing that opens it.
+                if (!uiState.isLatestVersion) {
+                    Box(Modifier.align(Alignment.TopEnd).size(10.dp).background(Kaleido.Red))
+                }
+                if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
+                    MenuAction("Grid", { isMoreOpen = false; onGridChanged(true) }, gridView)
+                    MenuAction("List", { isMoreOpen = false; onGridChanged(false) }, !gridView)
+                    RowRule()
+                    MenuAction("New folder", { isMoreOpen = false; onCreateNewFolder() })
+                    MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
+                    MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
+                    RowRule()
+                    MenuAction(if (uiState.isSyncing) "Syncing…" else "Sync now",
+                        { isMoreOpen = false; onSyncNow() })
+                    MenuAction("Trash", { isMoreOpen = false; onNavigateToTrash() })
+                    MenuAction(if (uiState.isLatestVersion) "Settings" else "Settings · Update available",
+                        { isMoreOpen = false; onNavigateToSettings() })
+                }
+            }
         }
         if (uiState.folderId != null) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -580,40 +629,16 @@ internal fun LibraryHeader(
                 }
             }
         }
-        FlowRow(Modifier.padding(top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextAction("New notebook", onCreateNewNotebook, filled = true)
-            Box {
-                TextAction(stringResource(R.string.home_more_actions), { isMoreOpen = true })
-                if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
-                    MenuAction("New folder", { isMoreOpen = false; onCreateNewFolder() })
-                    MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
-                    MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
-                    RowRule()
-                    MenuAction("Sync now", { isMoreOpen = false; onSyncNow() })
-                    MenuAction(if (uiState.isLatestVersion) "Settings" else "Settings · Update available",
-                        { isMoreOpen = false; onNavigateToSettings() })
-                    MenuAction("Trash", { isMoreOpen = false; onNavigateToTrash() })
-                    onToggleSidebar?.let { toggle ->
-                        MenuAction(if (sidebarVisible) "Hide folders" else "Show folders",
-                            { isMoreOpen = false; toggle() })
-                    }
-                }
-            }
-            if (uiState.isSyncing) Text("Syncing…", color = Kaleido.Ink,
-                modifier = Modifier.padding(vertical = 14.dp))
+        // Only while a run is in flight. The menu says "Syncing…" too, but the header is where
+        // you look to ask "is my writing on the server yet?", and a line that costs a row only
+        // during a sync is cheaper than a control that answers it permanently.
+        if (uiState.isSyncing) {
+            Text("Syncing…", color = Kaleido.Ink, fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 8.dp))
         }
         Spacer(Modifier.height(12.dp))
         LibrarySearchRow(metrics, uiState.query, onQueryChanged, onSortChanged)
-        FlowRow(Modifier.padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextAction("Grid", { onGridChanged(true) },
-                modifier = Modifier.semantics { selected = gridView }, filled = gridView)
-            TextAction("List", { onGridChanged(false) },
-                modifier = Modifier.semantics { selected = !gridView }, filled = !gridView)
-        }
         Spacer(Modifier.height(12.dp))
         RowRule()
     }

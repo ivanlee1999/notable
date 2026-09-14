@@ -36,17 +36,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
-import com.ethran.notable.data.db.Folder
-import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
-import com.ethran.notable.sync.SyncBadge
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.viewmodels.LibraryTree
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronRight
-import compose.icons.feathericons.FileText
 import compose.icons.feathericons.Folder as FolderIcon
 import compose.icons.feathericons.Inbox
 import compose.icons.feathericons.RefreshCw
@@ -55,26 +51,33 @@ import compose.icons.feathericons.RefreshCw
  *  full-screen refresh per frame. */
 val FILE_BAR_WIDTH = 280.dp
 
-/** One row of the flattened tree — a folder or a notebook, at its depth. */
+/** One folder of the flattened tree, at its depth. */
 private data class FileBarRow(
+    /** The folder id. Also the row key, now the tree holds nothing else. */
     val id: String,
-    val isFolder: Boolean,
-    val itemId: String,
     val title: String,
+    /** Everything filed directly in the folder — subfolders *and* notebooks. */
     val count: Int,
     val depth: Int,
-    /** False for a leaf: that is what suppresses the disclosure triangle. */
-    val hasChildren: Boolean,
-    val badge: SyncBadge?,
+    /**
+     * Whether the folder holds *subfolders* — not whether it holds anything. A folder of nothing
+     * but notebooks still counts above zero, and a triangle that opens onto nothing is worse
+     * than no triangle at all.
+     */
+    val hasSubfolders: Boolean,
 )
 
 /**
- * The library's left column: the whole tree, always open.
+ * The library's left column: the folder tree, always open.
  *
- * Every folder, nested, with the notebooks filed in it underneath — which is the thing the
- * breadcrumb could never say. A breadcrumb tells you the path you walked; it cannot tell you
- * what else is there, so finding a note two folders sideways meant walking back to the root and
- * down again. The tree is that walk, already done.
+ * Every folder, nested — which is the thing the breadcrumb could never say. A breadcrumb tells
+ * you the path you walked; it cannot tell you what else is there, so finding a note two folders
+ * sideways meant walking back to the root and down again. The tree is that walk, already done.
+ *
+ * Folders only. The bar answers *where am I*; what is filed in a folder is the shelf's question,
+ * and the shelf answers it with a cover, a page count and a sync badge where a 280dp row could
+ * only repeat the title. Listing every note in both columns drew the library twice, and made the
+ * column that should stay short exactly as long as the one beside it.
  *
  * Only above [com.ethran.notable.ui.theme.KALEIDO_WIDE_BREAKPOINT]: a one-handed device has one
  * column's worth of room and spends it on the shelf.
@@ -87,16 +90,14 @@ private data class FileBarRow(
 fun LibraryFileBar(
     tree: LibraryTree,
     selectedFolderId: String?,
-    syncBadges: Map<String, SyncBadge>,
     isSyncing: Boolean,
     onSelectFolder: (String?) -> Unit,
-    onOpenNotebook: (Notebook) -> Unit,
     onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
-    val rows = remember(tree, collapsed, syncBadges) { flatten(tree, collapsed, syncBadges) }
+    val rows = remember(tree, collapsed) { flatten(tree, collapsed) }
 
     Row(modifier.fillMaxHeight().width(FILE_BAR_WIDTH + Kaleido.SectionRule)) {
         Column(
@@ -119,24 +120,19 @@ fun LibraryFileBar(
                         onClick = { onSelectFolder(null) },
                     )
                     Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 4.dp)) {
-                        SectionHeader(stringResource(R.string.file_bar_library))
+                        SectionHeader(stringResource(R.string.home_folders))
                     }
                 }
                 items(rows, key = { it.id }) { row ->
-                    if (row.isFolder) FolderTreeRow(
+                    FolderTreeRow(
                         row = row,
-                        selected = selectedFolderId == row.itemId,
+                        selected = selectedFolderId == row.id,
                         shut = row.id in collapsed,
                         onToggle = {
                             collapsed =
                                 if (row.id in collapsed) collapsed - row.id else collapsed + row.id
                         },
-                        onClick = { onSelectFolder(row.itemId) },
-                    ) else NotebookTreeRow(
-                        row = row,
-                        onClick = {
-                            tree.books.firstOrNull { it.id == row.itemId }?.let(onOpenNotebook)
-                        },
+                        onClick = { onSelectFolder(row.id) },
                     )
                 }
                 item(key = "tail") { Spacer(Modifier.height(16.dp)) }
@@ -233,7 +229,7 @@ private fun FolderTreeRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val tint = if (selected) Kaleido.Paper else Kaleido.Ink
-        if (row.hasChildren) Box(
+        if (row.hasSubfolders) Box(
             Modifier
                 .size(DISCLOSURE, ROW_HEIGHT)
                 .semantics { stateDescription = if (shut) "Collapsed" else "Expanded" }
@@ -271,43 +267,7 @@ private fun FolderTreeRow(
     }
 }
 
-/**
- * A note, one step in from the folder holding it. Never selected: tapping it opens the editor,
- * so the bar's selection stays a statement about *where you are* rather than what you last
- * touched.
- */
-@Composable
-private fun NotebookTreeRow(row: FileBarRow, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(ROW_HEIGHT)
-            .noRippleClickable(onClick)
-            .padding(start = indent(row.depth) + DISCLOSURE + 4.dp, end = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Icon(FeatherIcons.FileText, null, tint = Kaleido.Ink, modifier = Modifier.size(GLYPH))
-        Text(
-            text = row.title,
-            fontSize = 14.sp,
-            color = Kaleido.Ink,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        // The same glyph the cover carries, so a note means the same thing in both columns.
-        row.badge?.iconOrNull()?.let { icon ->
-            Icon(
-                icon, row.badge.label(),
-                tint = Kaleido.Muted, modifier = Modifier.size(12.dp)
-            )
-        }
-        Count(row.count, Kaleido.Ink)
-    }
-}
-
-/** The count at the end of a row: how many items in a folder, how many pages in a note. */
+/** The count at the end of a row: how many things are filed directly in the folder. */
 @Composable
 private fun Count(count: Int, tint: Color) {
     Text(text = count.toString(), fontSize = 11.sp, color = tint)
@@ -376,43 +336,23 @@ private fun indent(depth: Int): Dp = minOf(10 + 12 * depth, 46).dp
 private fun flatten(
     tree: LibraryTree,
     collapsed: Set<String>,
-    badges: Map<String, SyncBadge>,
 ): List<FileBarRow> {
     val foldersByParent = tree.folders.groupBy { it.parentFolderId }
-    val booksByParent = tree.books.groupBy { it.parentFolderId }
+    val bookCounts = tree.books.groupingBy { it.parentFolderId }.eachCount()
     val out = mutableListOf<FileBarRow>()
-
-    fun childCount(folderId: String) =
-        (foldersByParent[folderId]?.size ?: 0) + (booksByParent[folderId]?.size ?: 0)
 
     fun walk(parent: String?, depth: Int, ancestors: Set<String>) {
         for (folder in foldersByParent[parent].orEmpty().sortedBy { it.title.lowercase() }) {
             if (folder.id in ancestors) continue
-            val id = "folder:${folder.id}"
-            val children = childCount(folder.id)
+            val subfolders = foldersByParent[folder.id]?.size ?: 0
             out += FileBarRow(
-                id = id,
-                isFolder = true,
-                itemId = folder.id,
+                id = folder.id,
                 title = folder.title,
-                count = children,
+                count = subfolders + (bookCounts[folder.id] ?: 0),
                 depth = depth,
-                hasChildren = children > 0,
-                badge = null,
+                hasSubfolders = subfolders > 0,
             )
-            if (id !in collapsed) walk(folder.id, depth + 1, ancestors + folder.id)
-        }
-        for (book in booksByParent[parent].orEmpty().sortedBy { it.title.lowercase() }) {
-            out += FileBarRow(
-                id = "book:${book.id}",
-                isFolder = false,
-                itemId = book.id,
-                title = book.title,
-                count = book.pageIds.size,
-                depth = depth,
-                hasChildren = false,
-                badge = badges[book.id],
-            )
+            if (folder.id !in collapsed) walk(folder.id, depth + 1, ancestors + folder.id)
         }
     }
 
