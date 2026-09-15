@@ -15,7 +15,6 @@ enum class ToolbarElementId {
      */
     PEN,
 
-    SHAPE, ERASER, SELECT, IMAGE, PASTE, RESET_VIEW,
+    SHAPE, ERASER, SELECT, TEXT, IMAGE, PASTE, RESET_VIEW,
     UNDO, REDO, PAGE_NAV, QUICK_NAV, HOME, MENU;
-    // future: TEXT
 }

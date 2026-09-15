@@ -19,9 +19,11 @@ import com.ethran.notable.data.model.TemplatePlacement
 import com.ethran.notable.di.ApplicationScope
 import com.ethran.notable.editor.EditorViewModel.Companion.DEFAULT_PEN_SETTINGS
 import com.ethran.notable.editor.canvas.CanvasEventBus
+import com.ethran.notable.editor.canvas.TextBoxEdit
 import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Mode
+import com.ethran.notable.editor.state.TextEditState
 import com.ethran.notable.editor.state.SelectionState
 import com.ethran.notable.editor.state.Shape
 import com.ethran.notable.editor.ui.toolbar.model.NibWidth
@@ -40,6 +42,7 @@ import com.ethran.notable.sync.couch.CouchSyncHost
 import com.ethran.notable.utils.AppResult
 import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.SnackDispatcher
+import com.ethran.notable.sync.DEFAULT_DEVICE_ID
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.shipbook.shipbooksdk.Log
@@ -106,6 +109,8 @@ data class ToolbarUiState(
      * of truth). */
     val penSettings: Map<String, PenSetting> = DEFAULT_PEN_SETTINGS,
     val isSelectionActive: Boolean = false,
+    /** A text box is open and the keyboard is up. */
+    val isTextEditing: Boolean = false,
     val hasClipboard: Boolean = false,
     val isDrawing: Boolean = true,
     val isQuickNavOpen: Boolean = false,
@@ -116,7 +121,7 @@ data class ToolbarUiState(
         get() = penSettings[penPresetId] ?: PenSetting(5f, android.graphics.Color.BLACK)
 
     val isDrawingAllowed: Boolean
-        get() = !isSelectionActive &&
+        get() = !isSelectionActive && !isTextEditing &&
                 !(isMenuOpen || isStrokeSelectionOpen || isBackgroundSelectorModalOpen)
                 && !isQuickNavOpen
 }
@@ -266,6 +271,12 @@ class EditorViewModel @Inject constructor(
     // ---- Selection state (kept for drawing logic compatibility) ----
     val selectionState = SelectionState()
 
+    /**
+     * The open text box, if any. Beside [selectionState] and for the same reason: both are modal
+     * interactions over the page that the canvas has to know about.
+     */
+    val textEditState = TextEditState()
+
     // --------------------------------------------------------
     // Initialization from persisted settings
     // --------------------------------------------------------
@@ -332,6 +343,13 @@ class EditorViewModel @Inject constructor(
             }
 
             is ToolbarAction.ChangeMode -> {
+                // Leaving the text tool with a box still open would leave a field floating over a
+                // page the pen is about to draw on again. The commit is the control tower's — it
+                // is the one holding the page — so this only asks for it.
+                if (action.mode != Mode.Text && textEditState.isActive) {
+                    CanvasEventBus.textBoxEditRequested.tryEmit(TextBoxEdit.CommitOpen)
+                }
+                if (action.mode == Mode.Text) loadTextDeviceId()
                 _toolbarState.update { it.copy(mode = action.mode) }
                 updateDrawingState()
                 saveToolbarState()
@@ -923,6 +941,32 @@ class EditorViewModel @Inject constructor(
 
     fun setShowResetView(showResetView: Boolean) {
         _toolbarState.update { it.copy(showResetView = showResetView) }
+    }
+
+    /**
+     * Opens or closes the keyboard's claim on the screen.
+     *
+     * This is what takes the pen's raw channel away while the IME is up: [ToolbarUiState.isDrawingAllowed]
+     * folds it in, and [updateDrawingState] pushes the result down to the firmware. Without it the
+     * pen would keep drawing straight through the text field, which on a BOOX is painted by the
+     * firmware *over* everything Android has put on screen.
+     */
+    /**
+     * Stamps this device into every box it writes — the merge's tiebreak when two edits share a
+     * millisecond, and the same value the sync store puts on a stroke. Read once: changing it is a
+     * settings action that restarts sync anyway.
+     */
+    private fun loadTextDeviceId() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val id = appRepository.kvProxy.getSyncSettings().deviceId.ifBlank { DEFAULT_DEVICE_ID }
+            textEditState.deviceId = id
+        }
+    }
+
+    fun setTextEditing(active: Boolean) {
+        if (_toolbarState.value.isTextEditing == active) return
+        _toolbarState.update { it.copy(isTextEditing = active) }
+        updateDrawingState()
     }
 
     fun setSelectionActive(active: Boolean) {

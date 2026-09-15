@@ -13,6 +13,7 @@ import compose.icons.feathericons.BookOpen
 import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.EyeOff
 import compose.icons.feathericons.RefreshCcw
+import compose.icons.feathericons.Type
 
 /**
  * The registry: every **static** toolbar element, keyed by id. Pen buttons are not here —
@@ -50,6 +51,12 @@ object ToolbarElements {
             icon = IconRef.Drawable(R.drawable.lasso),
             contentDescription = "lasso",
             mode = Mode.Select,
+        ),
+        ModeElement(
+            id = ToolbarElementId.TEXT,
+            icon = IconRef.Vector(FeatherIcons.Type),
+            contentDescription = "text",
+            mode = Mode.Text,
         ),
         CustomElement(
             id = ToolbarElementId.IMAGE,

@@ -18,6 +18,7 @@ import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.canvas.CanvasEventBus
+import com.ethran.notable.editor.text.TextBoxLayout
 import com.ethran.notable.editor.utils.imageBounds
 import com.ethran.notable.editor.utils.plus
 import com.ethran.notable.editor.utils.strokeBounds
@@ -144,6 +145,9 @@ fun drawOnCanvasFromPage(
     pageArea: Rect,
     ignoredStrokeIds: List<String> = listOf(),
     ignoredImageIds: List<String> = listOf(),
+    /** The box currently open in the editor: its live text is on screen in a field above the
+     *  canvas, and drawing the committed copy underneath would show the words twice. */
+    ignoredBlockIds: List<String> = listOf(),
 ): AppResult<Unit, DomainError> {
     val zoomLevel = page.zoomLevel.value
     val backgroundType = page.pageDataManager.getBackgroundType() ?: BackgroundType.Native
@@ -181,6 +185,20 @@ fun drawOnCanvasFromPage(
             } else {
                 DomainError.DrawingError("Failed to load images.")
             }
+            persistentError = persistentError?.let { it + error } ?: error
+        }
+        // Between the pictures and the ink: typed text is page content, and a stroke written
+        // across it belongs on top of it — the same order the iPad draws them in.
+        try {
+            TextBoxLayout.textBoxes(page.blocks).forEach { block ->
+                if (ignoredBlockIds.contains(block.id)) return@forEach
+                val bounds = TextBoxLayout.bounds(block) ?: return@forEach
+                if (!Rect(bounds).intersect(pageArea)) return@forEach
+                TextBoxLayout.draw(this, block, -page.scroll)
+            }
+        } catch (e: Exception) {
+            val error = DomainError.DrawingError("Text boxes failed: ${e.message ?: e.toString()}")
+            pageDrawingLog.e("PageView.kt: ${error.userMessage}", e)
             persistentError = persistentError?.let { it + error } ?: error
         }
         try {
@@ -292,6 +310,14 @@ fun drawBeyondPageEnd(page: PageView, canvas: Canvas) {
             page.pageDataManager.getImages(nextId).forEach { image ->
                 if (image.y <= visibleDepth) {
                     drawImage(page.context, canvas, image, offset)
+                }
+            }
+            // Text under the seam too, or scrolling towards a page of typed notes shows blank
+            // paper and the words appear only once the page commits — which looks exactly like
+            // the text was lost.
+            TextBoxLayout.textBoxes(page.pageDataManager.getBlocks(nextId)).forEach { block ->
+                if ((block.y ?: 0) <= visibleDepth) {
+                    TextBoxLayout.draw(canvas, block, offset)
                 }
             }
         } finally {
