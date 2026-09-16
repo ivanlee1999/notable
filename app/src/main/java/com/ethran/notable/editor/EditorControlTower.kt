@@ -15,6 +15,7 @@ import com.ethran.notable.editor.state.Operation
 import com.ethran.notable.editor.state.PlacementMode
 import com.ethran.notable.editor.state.SelectionState
 import com.ethran.notable.editor.text.TextBoxLayout
+import com.ethran.notable.editor.text.TextBoxMetrics
 import com.ethran.notable.editor.utils.offsetStroke
 import com.ethran.notable.editor.utils.pagedScrollDelta
 import com.ethran.notable.editor.utils.refreshScreen
@@ -138,12 +139,31 @@ class EditorControlTower(
     private fun onTextBoxDrag(drag: TextBoxDrag) {
         val block = page.blocks.firstOrNull { it.id == drag.blockId } ?: return
         val before = TextBoxLayout.bounds(block)
-        val moved = block.copy(
-            x = ((block.x ?: 0) + drag.dx).coerceAtLeast(0),
-            y = ((block.y ?: 0) + drag.dy).coerceAtLeast(0),
-            updatedAt = SyncClock.nowDate(),
-            deviceId = textEditState.deviceId,
-        )
+        val metrics = TextBoxMetrics.STANDARD
+        val moved = if (drag.isResize) {
+            // Height follows the text, so it is remeasured rather than dragged: a box is as tall
+            // as what is in it, at whatever width it has been given.
+            val width = ((block.width ?: 0) + drag.dx)
+                .coerceIn(
+                    metrics.minimumWidth.toInt(),
+                    maxOf(page.sheet.width - (block.x ?: 0), metrics.minimumWidth.toInt()),
+                )
+            block.copy(
+                width = width,
+                height = TextBoxLayout.measuredHeight(
+                    block.text.orEmpty(), width.toFloat(), metrics
+                ),
+                updatedAt = SyncClock.nowDate(),
+                deviceId = textEditState.deviceId,
+            )
+        } else {
+            block.copy(
+                x = ((block.x ?: 0) + drag.dx).coerceAtLeast(0),
+                y = ((block.y ?: 0) + drag.dy).coerceAtLeast(0),
+                updatedAt = SyncClock.nowDate(),
+                deviceId = textEditState.deviceId,
+            )
+        }
         page.addOrUpdateBlocks(listOf(moved))
         history.addOperationsToHistory(listOf(Operation.UpdateBlock(listOf(block))))
         val dirty = TextBoxLayout.bounds(moved)

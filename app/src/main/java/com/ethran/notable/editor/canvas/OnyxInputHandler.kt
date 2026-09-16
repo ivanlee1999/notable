@@ -180,10 +180,20 @@ class OnyxInputHandler(
             CanvasEventBus.textBoxTapped.tryEmit(TextBoxTap(first.x, first.y, box?.id))
             return
         }
-        val moved = box ?: return
-        val dx = (last.x - first.x).roundToInt()
-        val dy = (last.y - first.y).roundToInt()
-        CanvasEventBus.textBoxDragged.tryEmit(TextBoxDrag(moved.id, dx, dy))
+        val dragged = box ?: return
+        // A drag that began on the box's right edge sets its wrap width; anywhere else inside it
+        // moves the box. Same two gestures as the iPad, and the same band.
+        val onRightEdge = TextBoxLayout.bounds(dragged)?.let {
+            first.x >= it.right - TEXT_RESIZE_EDGE
+        } == true
+        CanvasEventBus.textBoxDragged.tryEmit(
+            TextBoxDrag(
+                blockId = dragged.id,
+                dx = (last.x - first.x).roundToInt(),
+                dy = (last.y - first.y).roundToInt(),
+                isResize = onRightEdge,
+            )
+        )
     }
 
     /** The box under a page-unit point, topmost first — the one the eye would pick. */
@@ -287,6 +297,9 @@ class OnyxInputHandler(
          * nothing instead of opening a box.
          */
         const val TEXT_TAP_SLOP = 12f
+
+        /** How close to a box's right edge a drag must start to mean "resize", in page units. */
+        const val TEXT_RESIZE_EDGE = 24f
     }
 
     fun updateActiveSurface() {

@@ -134,8 +134,16 @@ object CanvasEventBus {
 /** Where a text-tool tap landed, in page units, and the box under it if there was one. */
 data class TextBoxTap(val x: Float, val y: Float, val blockId: String?)
 
-/** A text box dragged by a pen: which one, and by how much in page units. */
-data class TextBoxDrag(val blockId: String, val dx: Int, val dy: Int)
+/**
+ * A text box dragged by a pen: which one, by how much in page units, and whether the drag began
+ * on its right edge — which means "set the wrap width" rather than "move the box".
+ */
+data class TextBoxDrag(
+    val blockId: String,
+    val dx: Int,
+    val dy: Int,
+    val isResize: Boolean = false,
+)
 
 /** What to do with the open text box. */
 enum class TextBoxEdit { CommitOpen }
