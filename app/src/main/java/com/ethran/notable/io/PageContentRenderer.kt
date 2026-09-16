@@ -21,6 +21,7 @@ import com.ethran.notable.data.model.declaredPageSize
 import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.drawing.drawBg
 import com.ethran.notable.editor.drawing.drawImage
+import com.ethran.notable.editor.text.TextBoxLayout
 import com.ethran.notable.editor.drawing.StrokeRenderers
 import com.ethran.notable.utils.ensureNotMainThread
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -158,6 +159,9 @@ class PageContentRenderer @Inject constructor(
             )
 
             data.images.forEach { drawImage(context, canvas, it, -scroll) }
+            // Below the ink, as on the canvas. Left out, an exported page of typed notes comes
+            // out blank and a thumbnail says the page is empty.
+            TextBoxLayout.textBoxes(data.blocks).forEach { TextBoxLayout.draw(canvas, it, -scroll) }
             data.strokes.forEach { StrokeRenderers.current.drawStroke(canvas, it, -scroll) }
         }
     }
@@ -167,7 +171,8 @@ class PageContentRenderer @Inject constructor(
         // The page's own sheet is the floor, not the screen: an export has to contain the page,
         // not whatever device happens to be running the export.
         val sheet = data.page.sheet()
-        if (data.strokes.isEmpty() && data.images.isEmpty()) {
+        val textBoxes = TextBoxLayout.textBoxes(data.blocks).mapNotNull { TextBoxLayout.bounds(it) }
+        if (data.strokes.isEmpty() && data.images.isEmpty() && textBoxes.isEmpty()) {
             return sheet.width to sheet.height
         }
 
@@ -179,8 +184,11 @@ class PageContentRenderer @Inject constructor(
         // The same 50-unit slack the canvas keeps past overflowing content (CONTENT_SLACK).
         // This used to consult the retired pagination-preview setting; content-based export
         // sizing is not a preference.
-        val rawHeight = maxOf(strokeBottom, imageBottom) + 50
-        val rawWidth = maxOf(strokeRight, imageRight) + 50
+        val textBottom = textBoxes.maxOfOrNull { it.bottom } ?: 0
+        val textRight = textBoxes.maxOfOrNull { it.right } ?: 0
+
+        val rawHeight = maxOf(strokeBottom, imageBottom, textBottom) + 50
+        val rawWidth = maxOf(strokeRight, imageRight, textRight) + 50
 
         val height = rawHeight.coerceAtLeast(sheet.height)
         val width = rawWidth.coerceAtLeast(sheet.width)

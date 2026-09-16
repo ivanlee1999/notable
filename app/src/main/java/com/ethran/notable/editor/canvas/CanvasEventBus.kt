@@ -55,6 +55,28 @@ object CanvasEventBus {
     // There is probably better way
     val addImageByUri = MutableStateFlow<Uri?>(null)
 
+    /**
+     * A pen tap while the text tool is up: where it landed, in page units, and which box it hit
+     * (null for bare paper).
+     *
+     * A signal rather than a direct call because the pen arrives on the firmware's raw callback,
+     * off the main thread, and what it means — open a box, make one, close the one that is open —
+     * is a decision the editor makes with state the input handler cannot see.
+     */
+    val textBoxTapped = MutableSharedFlow<TextBoxTap>(
+        extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /** A pen drag that started on a box: how far it went, in page units. */
+    val textBoxDragged = MutableSharedFlow<TextBoxDrag>(
+        extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /** Asked of whoever owns the page: finish the box that is open. */
+    val textBoxEditRequested = MutableSharedFlow<TextBoxEdit>(
+        extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
     // Event, not state: each emission is one gesture-selection request.
     val rectangleToSelectByGesture = MutableSharedFlow<Rect>()
     val drawingInProgress = Mutex()
@@ -108,3 +130,12 @@ object CanvasEventBus {
     }
 
 }
+
+/** Where a text-tool tap landed, in page units, and the box under it if there was one. */
+data class TextBoxTap(val x: Float, val y: Float, val blockId: String?)
+
+/** A text box dragged by a pen: which one, and by how much in page units. */
+data class TextBoxDrag(val blockId: String, val dx: Int, val dy: Int)
+
+/** What to do with the open text box. */
+enum class TextBoxEdit { CommitOpen }

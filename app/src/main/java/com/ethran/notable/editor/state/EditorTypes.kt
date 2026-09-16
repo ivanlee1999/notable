@@ -4,7 +4,13 @@ package com.ethran.notable.editor.state
  * Drawing mode for the editor.
  */
 enum class Mode {
-    Draw, Erase, Select, Line
+    Draw, Erase, Select, Line,
+
+    /**
+     * Typing rather than drawing. A tap puts a text box where it lands and opens the keyboard;
+     * the pen stops leaving ink for as long as it is the mode.
+     */
+    Text
 }
 
 /**

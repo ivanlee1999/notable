@@ -24,14 +24,16 @@ class RailGroupsTest {
     private val pens = ToolbarPen.DEFAULT_PENS
 
     @Test
-    fun `the tool group is the four implements then the two tools that take no ink`() {
+    fun `the tool group is the four implements then the tools that take no ink`() {
         val tools = RailGroups.of(pens).tools
         assertEquals(
             ToolbarPen.RAIL_TYPES,
             tools.filterIsInstance<PenElement>().map { it.pen },
         )
         assertEquals(
-            listOf(ToolbarElementId.ERASER, ToolbarElementId.SELECT),
+            // Text sits with the eraser and the lasso rather than with the pens: it is a thing
+            // you do to the page, not another implement you write with.
+            listOf(ToolbarElementId.ERASER, ToolbarElementId.SELECT, ToolbarElementId.TEXT),
             tools.drop(ToolbarPen.RAIL_TYPES.size).map { it.id },
         )
     }

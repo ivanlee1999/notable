@@ -2,12 +2,14 @@ package com.ethran.notable.editor.state
 
 import android.graphics.Rect
 import com.ethran.notable.data.PageMemoryModel
+import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.events.AppEvent
 import com.ethran.notable.data.events.AppEventBus
 import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.canvas.CanvasEventBus
+import com.ethran.notable.editor.text.TextBoxLayout
 import com.ethran.notable.editor.utils.imageBoundsInt
 import com.ethran.notable.editor.utils.strokeBounds
 import com.ethran.notable.utils.logCallStack
@@ -28,6 +30,12 @@ sealed class Operation {
     // id (which raced to a UNIQUE(Image.id) crash).
     data class UpdateStroke(val strokes: List<Stroke>) : Operation()
     data class UpdateImage(val images: List<Image>) : Operation()
+
+    // Text boxes, which follow the images exactly: a box is a positioned object with an id, and
+    // the same three verbs cover typing one, editing one, moving one and throwing one away.
+    data class AddBlock(val blocks: List<Block>) : Operation()
+    data class DeleteBlock(val blockIds: List<String>) : Operation()
+    data class UpdateBlock(val blocks: List<Block>) : Operation()
 }
 
 typealias OperationBlock = List<Operation>
@@ -150,7 +158,34 @@ class History @AssistedInject constructor(
                 return Operation.UpdateImage(images = previous) to
                         imageBoundsInt(operation.images + previous)
             }
+
+            is Operation.AddBlock -> {
+                pageModel.addOrUpdateBlocks(operation.blocks)
+                return Operation.DeleteBlock(blockIds = operation.blocks.map { it.id }) to
+                        blockBounds(operation.blocks)
+            }
+
+            is Operation.DeleteBlock -> {
+                val blocks = pageModel.blocks.filter { it.id in operation.blockIds }
+                pageModel.removeBlocks(operation.blockIds)
+                return Operation.AddBlock(blocks = blocks) to blockBounds(blocks)
+            }
+
+            is Operation.UpdateBlock -> {
+                val ids = operation.blocks.map { it.id }.toHashSet()
+                val previous = pageModel.blocks.filter { it.id in ids }
+                pageModel.addOrUpdateBlocks(operation.blocks)
+                return Operation.UpdateBlock(blocks = previous) to
+                        blockBounds(operation.blocks + previous)
+            }
         }
+    }
+
+    /** The union of these boxes' rectangles — what an undo of them has to repaint. */
+    private fun blockBounds(blocks: List<Block>): Rect {
+        val zone = Rect()
+        blocks.forEach { block -> TextBoxLayout.bounds(block)?.let { zone.union(it) } }
+        return zone
     }
 
     private fun undoRedo(type: UndoRedoType): Rect? {
@@ -233,8 +268,16 @@ class History @AssistedInject constructor(
             is Operation.AddImage -> operation.images.size * PageMemoryModel.BYTES_PER_IMAGE
             is Operation.UpdateImage -> operation.images.size * PageMemoryModel.BYTES_PER_IMAGE
             is Operation.DeleteImage -> operation.imageIds.size * PageMemoryModel.BYTES_PER_IMAGE
+            is Operation.AddBlock -> blockBytes(operation.blocks)
+            is Operation.UpdateBlock -> blockBytes(operation.blocks)
+            is Operation.DeleteBlock ->
+                operation.blockIds.size * PageMemoryModel.BYTES_PER_IMAGE
         }
     }
+
+    /** A box costs what its markdown costs, at the same per-character rate the page cache uses. */
+    private fun blockBytes(blocks: List<Block>): Long =
+        blocks.sumOf { it.text?.length?.toLong() ?: 0L } * PageMemoryModel.BYTES_PER_MD_CHAR
 
     private fun strokeBytes(strokes: List<Stroke>): Long = PageMemoryModel.entryBytes(
         strokeCount = strokes.size,
