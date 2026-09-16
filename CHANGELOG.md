@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.52.0
+
+- Type on a page, not only draw on it. A new Text tool puts a text box wherever you tap
+  with the pen: tap a box to edit it, drag one to move it, drag its right edge to set how
+  wide it wraps, and Delete — or leaving it empty — removes it. Text sits under the ink,
+  so you can still write and annotate straight over it.
+- A closed box renders its markdown — headings, bold, italic, bullet and numbered lists,
+  inline code and links — while an open one shows the source you typed, so the markup
+  stays yours to edit.
+- Typed text syncs with the iPad, is drawn into previews and exports, and goes into a
+  Xournal++ export as real text rather than a picture of it, so it stays searchable and
+  editable there.
+- The keyboard takes the pen's raw channel while it is up, and finishing a box repaints
+  only that box, so typing costs no full-screen flashes.
+
+No database or sync-format change: a text box is the page block the sync protocol has
+carried since 0.48.0, now with a way to write one. Matches the same feature in Bopa 0.6.0.
+
 ## 0.51.0
 
 - Navigate folders in the file bar — it lists folders only now, so a notebook appears
