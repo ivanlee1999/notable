@@ -28,6 +28,8 @@ import com.ethran.notable.editor.utils.handleSelect
 import com.ethran.notable.editor.utils.onSurfaceInit
 import com.ethran.notable.editor.utils.penToStroke
 import com.ethran.notable.editor.utils.setupSurface
+import com.ethran.notable.data.model.SimplePointF
+import com.ethran.notable.editor.text.TextBoxLayout
 import com.ethran.notable.editor.utils.ShapeGeometry
 import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.device.Device
@@ -41,8 +43,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class OnyxInputHandler(
     private val drawCanvas: DrawCanvas,
@@ -154,6 +158,50 @@ class OnyxInputHandler(
         }
     }
 
+    /**
+     * What a pen stroke means while the text tool is up.
+     *
+     * A tap — a stroke that went nowhere — opens the box under it, or makes one where it landed.
+     * A drag that started on a box moves it. Everything else is ignored: there is no third thing
+     * a pen can mean here, and guessing would put boxes on the page by accident.
+     *
+     * The pen is routed through the stroke callback rather than through a touch listener because
+     * on a BOOX the firmware takes the pen before Android sees it (see
+     * [com.ethran.notable.editor.canvas.DrawCanvas.dispatchTouchEvent]) — a Compose field over the
+     * canvas would never feel a stylus at all.
+     */
+    private fun handleTextTool(points: List<SimplePointF>) {
+        val first = points.firstOrNull() ?: return
+        val last = points.last()
+        val travelled = max(abs(last.x - first.x), abs(last.y - first.y))
+        val box = textBoxAt(first.x, first.y)
+
+        if (travelled <= TEXT_TAP_SLOP) {
+            CanvasEventBus.textBoxTapped.tryEmit(TextBoxTap(first.x, first.y, box?.id))
+            return
+        }
+        val dragged = box ?: return
+        // A drag that began on the box's right edge sets its wrap width; anywhere else inside it
+        // moves the box. Same two gestures as the iPad, and the same band.
+        val onRightEdge = TextBoxLayout.bounds(dragged)?.let {
+            first.x >= it.right - TEXT_RESIZE_EDGE
+        } == true
+        CanvasEventBus.textBoxDragged.tryEmit(
+            TextBoxDrag(
+                blockId = dragged.id,
+                dx = (last.x - first.x).roundToInt(),
+                dy = (last.y - first.y).roundToInt(),
+                isResize = onRightEdge,
+            )
+        )
+    }
+
+    /** The box under a page-unit point, topmost first — the one the eye would pick. */
+    private fun textBoxAt(x: Float, y: Float) =
+        TextBoxLayout.textBoxes(page.blocks).lastOrNull { block ->
+            TextBoxLayout.bounds(block)?.contains(x.roundToInt(), y.roundToInt()) == true
+        }
+
     fun updatePenAndStroke() {
         if(touchHelper == null) return
         // it takes around 11 ms to run on Note 4c.
@@ -175,6 +223,12 @@ class OnyxInputHandler(
             Mode.Erase -> applyEraserIndicatorStyle(penEraserColor = Color.GRAY)
 
             Mode.Select -> touchHelper?.setStrokeStyle(penToStroke(Pen.BALLPEN))?.setStrokeWidth(3f)
+                ?.setStrokeColor(Color.GRAY)
+
+            // A tap in text mode places a caret, but the firmware still paints the pen-down
+            // before we see it. A hairline in grey is the least it can be without going invisible
+            // and leaving the pen feeling dead.
+            Mode.Text -> touchHelper?.setStrokeStyle(penToStroke(Pen.BALLPEN))?.setStrokeWidth(2f)
                 ?.setStrokeColor(Color.GRAY)
         }
     }
@@ -236,6 +290,18 @@ class OnyxInputHandler(
         }
     }
 
+    private companion object {
+        /**
+         * How far a pen may travel and still be a tap, in page units. Generous: a stylus on
+         * e-ink wanders under the hand, and a tap that missed by two units would silently do
+         * nothing instead of opening a box.
+         */
+        const val TEXT_TAP_SLOP = 12f
+
+        /** How close to a box's right edge a drag must start to mean "resize", in page units. */
+        const val TEXT_RESIZE_EDGE = 24f
+    }
+
     fun updateActiveSurface() {
         // Takes at least 50ms on Note 4c,
         // and I don't think that we need it immediately
@@ -285,6 +351,13 @@ class OnyxInputHandler(
 
         when (toolbarState.mode) {
             Mode.Erase -> onRawErasingList(plist)
+            Mode.Text -> {
+                val points = copyInputToSimplePointF(plist.points, viewport)
+                coroutineScope.launch(Dispatchers.Main.immediate) {
+                    handleTextTool(points)
+                }
+            }
+
             Mode.Select -> {
                 thread {
                     val points =

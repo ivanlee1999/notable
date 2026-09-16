@@ -178,6 +178,7 @@ data class RailGroups(
             tools = ToolbarPen.railPresets(pens).map(ToolbarElements::penElement) + listOf(
                 ToolbarElements.of(ToolbarElementId.ERASER),
                 ToolbarElements.of(ToolbarElementId.SELECT),
+                ToolbarElements.of(ToolbarElementId.TEXT),
             ),
             overflow = listOf(ToolbarElements.of(ToolbarElementId.SHAPE)) +
                 ToolbarPen.extraPresets(pens).map(ToolbarElements::penElement) +

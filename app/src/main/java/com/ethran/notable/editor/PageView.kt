@@ -23,6 +23,7 @@ import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.CachedBackground
 import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.datastore.GlobalAppSettings
+import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.model.BackgroundType
@@ -141,6 +142,20 @@ class PageView(
     var images: List<Image>
         get() = pageDataManager.getImages(currentPageId)
         set(value) = pageDataManager.setImages(currentPageId, value)
+
+    /**
+     * The box being typed into, if any — set by the editor while a field is over the page.
+     *
+     * The committed copy is not drawn underneath it: the field shows the *draft*, and a box whose
+     * text has just been shortened would otherwise leave the old words showing below the field's
+     * bottom edge.
+     */
+    var openTextBoxId: String? = null
+
+    /** The page's blocks — its text boxes, and whatever other kinds arrived from the iPad. */
+    var blocks: List<Block>
+        get() = pageDataManager.getBlocks(currentPageId)
+        set(value) = pageDataManager.setBlocks(currentPageId, value)
 
     // warning: The setter is delayed!
     private var currentBackground: CachedBackground
@@ -675,6 +690,32 @@ class PageView(
         pageDataManager.recomputeHeight(currentPageId)
     }
 
+    /**
+     * Adds or replaces text boxes. One method for both because a box is upserted by id: the row a
+     * box is edited into is the row it was created as.
+     */
+    fun addOrUpdateBlocks(blocksToWrite: List<Block>) {
+        if (blocksToWrite.isEmpty()) return
+        val byId = blocksToWrite.associateBy { it.id }
+        val existing = blocks
+        val replaced = existing.map { byId[it.id] ?: it }
+        val added = blocksToWrite.filterNot { written -> existing.any { it.id == written.id } }
+        blocks = replaced + added
+        pageDataManager.saveBlocksToDb(blocksToWrite)
+        // Recomputed rather than nudged, for the reason [addImage] gives: an edit is exactly what
+        // puts a box below the sheet or past its right edge, and the page has to be able to
+        // scroll to where it now ends.
+        pageDataManager.recomputeHeight(currentPageId)
+    }
+
+    fun removeBlocks(blockIds: List<String>) {
+        if (blockIds.isEmpty()) return
+        val gone = blockIds.toHashSet()
+        blocks = blocks.filterNot { it.id in gone }
+        pageDataManager.removeBlocksFromDb(blockIds, currentPageId)
+        pageDataManager.recomputeHeight(currentPageId)
+    }
+
     fun getImages(imageIds: List<String>): List<Image?> =
         pageDataManager.getImages(imageIds, currentPageId)
 
@@ -760,6 +801,7 @@ class PageView(
             pageArea = pageArea,
             ignoredStrokeIds = ignoredStrokeIds,
             ignoredImageIds = ignoredImageIds,
+            ignoredBlockIds = listOfNotNull(openTextBoxId),
         ).onError {
             snackManager.showOrUpdateSnack(
                 SnackConf(

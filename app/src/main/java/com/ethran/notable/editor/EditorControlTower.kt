@@ -6,12 +6,16 @@ import android.graphics.Rect
 import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.canvas.CanvasEventBus
+import com.ethran.notable.editor.canvas.TextBoxDrag
+import com.ethran.notable.editor.canvas.TextBoxTap
 import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Mode
 import com.ethran.notable.editor.state.Operation
 import com.ethran.notable.editor.state.PlacementMode
 import com.ethran.notable.editor.state.SelectionState
+import com.ethran.notable.editor.text.TextBoxLayout
+import com.ethran.notable.editor.text.TextBoxMetrics
 import com.ethran.notable.editor.utils.offsetStroke
 import com.ethran.notable.editor.utils.pagedScrollDelta
 import com.ethran.notable.editor.utils.refreshScreen
@@ -42,6 +46,7 @@ class EditorControlTower(
     private var scrollInProgress = Mutex()
     private val logEditorControlTower = ShipBook.getLogger("EditorControlTower")
     private var changePageObserverJob: Job? = null
+    private var textToolJob: Job? = null
 
     // Accumulated, not-yet-rendered scroll delta in screen coordinates. Input events add
     // into this; a single consumer coroutine drains and renders it. StateFlow conflation
@@ -57,8 +62,12 @@ class EditorControlTower(
     @Volatile
     private var edgeTurnTaken = false
 
+    /** The open text box, if any. The view model owns it so the toolbar can see it too. */
+    val textEditState get() = viewModel.textEditState
+
     fun registerObservers() {
         startScrollConsumer()
+        startTextToolConsumers()
         if (changePageObserverJob?.isActive == true) return
 
         changePageObserverJob = scope.launch {
@@ -75,8 +84,127 @@ class EditorControlTower(
         }
     }
 
+    /**
+     * The text tool's three signals: a pen tap, a pen drag of a box, and "finish what is open".
+     *
+     * Collected here because this is the object that holds the page and the history — the input
+     * handler sees the pen but not the page's state, and the view model sees the state but not
+     * the page.
+     */
+    private fun startTextToolConsumers() {
+        if (textToolJob?.isActive == true) return
+        textToolJob = scope.launch {
+            launch {
+                CanvasEventBus.textBoxTapped.collect { tap ->
+                    withContext(Dispatchers.Main) { onTextBoxTap(tap) }
+                }
+            }
+            launch {
+                CanvasEventBus.textBoxDragged.collect { drag ->
+                    withContext(Dispatchers.Main) { onTextBoxDrag(drag) }
+                }
+            }
+            launch {
+                CanvasEventBus.textBoxEditRequested.collect {
+                    withContext(Dispatchers.Main) { commitTextBox() }
+                }
+            }
+        }
+    }
+
+    private fun onTextBoxTap(tap: TextBoxTap) {
+        // A tap while a box is open finishes that box first, whatever it landed on — so tapping
+        // straight from one box to the next still works, it just commits on the way.
+        val wasEditing = textEditState.editing?.id
+        if (textEditState.isActive) commitTextBox()
+        // A tap on the box that was just closed means "I am done", not "open it again".
+        if (tap.blockId != null && tap.blockId == wasEditing) return
+
+        val existing = tap.blockId?.let { id -> page.blocks.firstOrNull { it.id == id } }
+        if (existing != null) {
+            textEditState.begin(existing, isNew = false)
+        } else {
+            textEditState.begin(
+                textEditState.newBlockAt(
+                    tap.x, tap.y, page.currentPageId, page.sheet.width
+                ),
+                isNew = true,
+            )
+        }
+        page.openTextBoxId = textEditState.editing?.id
+        viewModel.setTextEditing(true)
+        repaintTextArea(textEditState.editing?.let { TextBoxLayout.bounds(it) })
+    }
+
+    private fun onTextBoxDrag(drag: TextBoxDrag) {
+        val block = page.blocks.firstOrNull { it.id == drag.blockId } ?: return
+        val before = TextBoxLayout.bounds(block)
+        val metrics = TextBoxMetrics.STANDARD
+        val moved = if (drag.isResize) {
+            // Height follows the text, so it is remeasured rather than dragged: a box is as tall
+            // as what is in it, at whatever width it has been given.
+            val width = ((block.width ?: 0) + drag.dx)
+                .coerceIn(
+                    metrics.minimumWidth.toInt(),
+                    maxOf(page.sheet.width - (block.x ?: 0), metrics.minimumWidth.toInt()),
+                )
+            block.copy(
+                width = width,
+                height = TextBoxLayout.measuredHeight(
+                    block.text.orEmpty(), width.toFloat(), metrics
+                ),
+                updatedAt = SyncClock.nowDate(),
+                deviceId = textEditState.deviceId,
+            )
+        } else {
+            block.copy(
+                x = ((block.x ?: 0) + drag.dx).coerceAtLeast(0),
+                y = ((block.y ?: 0) + drag.dy).coerceAtLeast(0),
+                updatedAt = SyncClock.nowDate(),
+                deviceId = textEditState.deviceId,
+            )
+        }
+        page.addOrUpdateBlocks(listOf(moved))
+        history.addOperationsToHistory(listOf(Operation.UpdateBlock(listOf(block))))
+        val dirty = TextBoxLayout.bounds(moved)
+        if (before != null && dirty != null) dirty.union(before)
+        repaintTextArea(dirty)
+    }
+
+    /** Writes the open box and puts the change on the undo stack. */
+    fun commitTextBox() {
+        val committed = textEditState.commit(page) ?: return
+        page.openTextBoxId = null
+        viewModel.setTextEditing(false)
+        if (committed.operations.isNotEmpty()) {
+            history.addOperationsToHistory(committed.operations)
+        }
+        repaintTextArea(committed.dirtyRect)
+    }
+
+    /** Throws the open box away, through the same path an emptied one takes. */
+    fun deleteOpenTextBox() {
+        textEditState.draft = ""
+        commitTextBox()
+    }
+
+    /**
+     * Repaints just the box that changed.
+     *
+     * A region, never [com.ethran.notable.editor.utils.refreshScreen]: typing a paragraph would
+     * otherwise flash the whole panel once per commit, which is the one thing an e-ink editor
+     * cannot spend.
+     */
+    private fun repaintTextArea(area: Rect?) {
+        scope.launch {
+            CanvasEventBus.forceUpdate.emit(area?.let { page.toScreenCoordinates(it) })
+        }
+    }
+
     // TODO: remove it, change to proper solution
     fun unregisterObservers() {
+        textToolJob?.cancel()
+        textToolJob = null
         changePageObserverJob?.cancel()
         changePageObserverJob = null
         scrollConsumerJob?.cancel()

@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import com.ethran.notable.BuildConfig
 import com.ethran.notable.SCREEN_HEIGHT
 import com.ethran.notable.SCREEN_WIDTH
+import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.Stroke
@@ -26,6 +27,7 @@ import com.ethran.notable.data.model.BackgroundType.ImageRepeating
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.PageViewportBounds
+import com.ethran.notable.editor.text.TextBoxLayout
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.saveHQPagePreview
 import com.ethran.notable.editor.utils.savePageThumbnail
@@ -94,6 +96,13 @@ internal class PageCacheEntry(val pageId: String) {
     var strokes: MutableList<Stroke>? = null
     var images: MutableList<Image>? = null
 
+    /**
+     * The page's blocks — typed text, and whatever other kinds arrive from the iPad. Loaded with
+     * the strokes now that the editor can draw one; until it could, carrying them would have been
+     * memory spent on something nothing looked at.
+     */
+    var blocks: MutableList<Block>? = null
+
     // Resident bytes of strokes+images only (backgrounds and windowed bitmaps excluded).
     var sizeBytes: Long = 0L
     var sizeComputed: Boolean = false
@@ -114,7 +123,7 @@ internal class PageCacheEntry(val pageId: String) {
     // LRU stamp; bumped on genuine access.
     var lastAccessSeq: Long = 0L
 
-    val loaded: Boolean get() = strokes != null && images != null && sizeComputed
+    val loaded: Boolean get() = strokes != null && images != null && blocks != null && sizeComputed
 }
 
 /**
@@ -832,6 +841,7 @@ class PageDataManager @Inject constructor(
                 // Join with any strokes/images drawn during loading (append, don't replace).
                 appendStrokesLocked(entry, pageWithData.strokes)
                 appendImagesLocked(entry, pageWithData.images)
+                appendBlocksLocked(entry, pageWithData.blocks)
                 recomputeEntrySizeLocked(entry)
                 touchLocked(entry)
                 logEstimateVsActualLocked(entry)
@@ -908,6 +918,22 @@ class PageDataManager @Inject constructor(
         if (fresh.isEmpty()) return
         log.d("Joining images drawn during page loading and existing images")
         entry.images = ArrayList<Image>(existing.size + fresh.size).apply {
+            addAll(existing); addAll(fresh)
+        }
+    }
+
+    /** By id, for the reason [appendStrokesLocked] is: a box typed while the page was still
+     *  loading is in this cache and in Room, and the load reads it back. */
+    private fun appendBlocksLocked(entry: PageCacheEntry, newBlocks: List<Block>) {
+        val existing = entry.blocks
+        if (existing == null) {
+            entry.blocks = newBlocks.toMutableList()
+            return
+        }
+        val resident = existing.mapTo(HashSet(existing.size)) { it.id }
+        val fresh = newBlocks.filterNot { it.id in resident }
+        if (fresh.isEmpty()) return
+        entry.blocks = ArrayList<Block>(existing.size + fresh.size).apply {
             addAll(existing); addAll(fresh)
         }
     }
@@ -1164,15 +1190,25 @@ class PageDataManager @Inject constructor(
     private fun bottomEdgesLocked(pageId: String): List<Float> {
         val entry = entries[pageId] ?: return emptyList()
         return (entry.strokes?.map { it.bottom } ?: emptyList()) +
-            (entry.images?.map { (it.y + it.height).toFloat() } ?: emptyList())
+            (entry.images?.map { (it.y + it.height).toFloat() } ?: emptyList()) +
+            textBoxBoundsLocked(entry).map { it.bottom.toFloat() }
     }
 
     /** Right edge of every stroke and image on the page. Call with [lock] held. */
     private fun rightEdgesLocked(pageId: String): List<Float> {
         val entry = entries[pageId] ?: return emptyList()
         return (entry.strokes?.map { it.right } ?: emptyList()) +
-            (entry.images?.map { (it.x + it.width).toFloat() } ?: emptyList())
+            (entry.images?.map { (it.x + it.width).toFloat() } ?: emptyList()) +
+            textBoxBoundsLocked(entry).map { it.right.toFloat() }
     }
+
+    /**
+     * Where this page's text boxes reach. A box typed at the foot of a page has to stay
+     * scrollable-to, exactly as an image dropped there does — without this the box exists,
+     * renders, and no scroll reaches it.
+     */
+    private fun textBoxBoundsLocked(entry: PageCacheEntry) =
+        entry.blocks.orEmpty().mapNotNull { TextBoxLayout.bounds(it) }
 
     /** Stored scroll for [pageId], falling back to the page's persisted scroll position. */
     fun getPageScroll(pageId: String): Offset =
@@ -1280,6 +1316,16 @@ class PageDataManager @Inject constructor(
         }
         removeStrokesFromDb(strokeIds, pageId)
         recomputeHeight(pageId)
+    }
+
+    fun getBlocks(pageId: String): List<Block> = synchronized(lock) {
+        entries[pageId]?.blocks ?: emptyList()
+    }
+
+    fun setBlocks(pageId: String, blocks: List<Block>) = synchronized(lock) {
+        val entry = getOrCreateEntryLocked(pageId)
+        entry.blocks = blocks.toMutableList()
+        recomputeEntrySizeLocked(entry)
     }
 
     fun getImages(pageId: String): List<Image> = synchronized(lock) {
@@ -1597,6 +1643,39 @@ class PageDataManager @Inject constructor(
      * [removeStrokesFromDb]: the field names whatever page is currently open, while these ids
      * belong to the page the edit was made on.
      */
+    /**
+     * Writes a page's text boxes. One call for adds and edits alike, because Room upserts and a
+     * box being edited is the same row it was created as.
+     *
+     * [bumpEditTimestamps] is the part that matters for sync: it is what marks the page dirty and
+     * queues it for the next push, exactly as an image edit does. Without it a typed paragraph
+     * would sit in the database looking saved and never leave the device.
+     */
+    fun saveBlocksToDb(blocks: List<Block>) {
+        if (blocks.isEmpty()) return
+        val pages = blocks.map { it.pageId }.distinct()
+        launchDbWrite("saveBlocks(${blocks.size})", pages) {
+            appRepository.blockRepository.upsertAll(blocks)
+            pages.forEach { bumpEditTimestamps(it) }
+        }
+    }
+
+    /**
+     * Deletes text boxes and records the tombstones.
+     *
+     * The tombstone is the whole point, and the same rule the eraser follows: a row that merely
+     * became absent cannot be told from one that has not arrived yet, so the peer's copy would
+     * come back on the very next merge.
+     */
+    fun removeBlocksFromDb(blockIds: List<String>, pageId: String) {
+        if (blockIds.isEmpty()) return
+        launchDbWrite("removeBlocks(${blockIds.size})", listOf(pageId)) {
+            appRepository.blockRepository.deleteByIds(blockIds)
+            appRepository.deletedBlockRepository.record(pageId, blockIds)
+            bumpEditTimestamps(pageId)
+        }
+    }
+
     fun removeImagesFromDb(images: List<String>, pageId: String) {
         launchDbWrite("removeImages(${images.size})", listOf(pageId)) {
             appRepository.imageRepository.deleteAll(images)

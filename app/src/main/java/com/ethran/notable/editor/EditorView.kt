@@ -28,6 +28,7 @@ import com.ethran.notable.editor.ui.HorizontalScrollIndicator
 import com.ethran.notable.editor.ui.SaveStateBadge
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
+import com.ethran.notable.editor.ui.TextBoxEditor
 import com.ethran.notable.editor.ui.toolbar.PositionedToolbar
 import com.ethran.notable.editor.ui.toolbar.editorChromeInset
 import com.ethran.notable.editor.ui.toolbar.toolbarInset
@@ -301,6 +302,10 @@ fun EditorView(
                 SelectedBitmap(
                     context = context, controlTower = editorControlTower
                 )
+                // Only while a box is open. The rest of the time a text box is drawn into the
+                // page bitmap with everything else, so the page carries no views and scrolling
+                // stays a bitmap blit.
+                TextBoxEditor(controlTower = editorControlTower, page = page)
             }
             Row(
                 modifier = Modifier

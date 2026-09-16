@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.toColorInt
 import androidx.core.net.toUri
 import com.ethran.notable.BuildConfig
+import com.ethran.notable.editor.text.TextBoxLayout
+import com.ethran.notable.editor.text.TextBoxMetrics
 import com.ethran.notable.SCREEN_HEIGHT
 import com.ethran.notable.SCREEN_WIDTH
 import com.ethran.notable.data.datastore.A4_WIDTH
@@ -238,6 +240,26 @@ class XoppFile @Inject constructor(
                 if (!imageWasWritten) {
                     appEventBus.tryEmit(AppEvent.ActionHint("Image cannot be loaded."))
                 }
+            }
+
+            // Xournal++ has a text element of its own, so a typed box exports as text rather
+            // than as a picture of text: it stays searchable, selectable and editable in the
+            // other program. The markdown source is written verbatim — the markup is the user's
+            // own characters, and a renderer's idea of them is not something to bake into an
+            // export nobody can undo.
+            for (block in TextBoxLayout.textBoxes(pageWithData.blocks)) {
+                val text = block.text
+                if (text.isNullOrEmpty()) continue
+                val metrics = TextBoxMetrics.STANDARD
+                writer.write("<text font=\"Sans\" size=\"")
+                writer.write((metrics.body * scaleFactor).toString())
+                writer.write("\" x=\"")
+                writer.write(((block.x ?: 0) + metrics.padding).let { it * scaleFactor }.toString())
+                writer.write("\" y=\"")
+                writer.write(((block.y ?: 0) + metrics.padding).let { it * scaleFactor }.toString())
+                writer.write("\" color=\"#000000ff\">")
+                writer.write(escapeXml(text))
+                writer.write("</text>\n")
             }
 
             writer.write("</layer>\n")
