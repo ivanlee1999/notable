@@ -123,7 +123,20 @@ internal class PageCacheEntry(val pageId: String) {
     // LRU stamp; bumped on genuine access.
     var lastAccessSeq: Long = 0L
 
-    val loaded: Boolean get() = strokes != null && images != null && blocks != null && sizeComputed
+    /**
+     * Deliberately **not** gated on [blocks].
+     *
+     * This flag is what decides whether a page's ink is resident — the seam reads it to know it
+     * can draw the next page, and [PageDataManager.checkLoadStateLocked] calls an entry whose job
+     * has finished but whose data has not "inconsistent" and throws it away to reload. Any path
+     * that fills an entry without going through the full load (a stroke appended to a neighbour,
+     * say) would leave [blocks] null for ever, and the page would read as permanently half-loaded.
+     *
+     * Blocks travel with the strokes on the real load path and are a drawing concern, not a
+     * residency one: the worst an absent list can cost is a text box not drawn until the page is
+     * loaded properly, which is the same thing that was true before it was cached at all.
+     */
+    val loaded: Boolean get() = strokes != null && images != null && sizeComputed
 }
 
 /**
