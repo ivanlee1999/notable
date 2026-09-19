@@ -20,6 +20,7 @@ import com.ethran.notable.data.db.Page
 import com.ethran.notable.data.db.RemoteApply
 import com.ethran.notable.data.db.Stroke
 import com.ethran.notable.data.db.declaredDefaultPageSize
+import com.ethran.notable.data.model.PageLayout
 import com.ethran.notable.data.db.decodeStrokePoints
 import com.ethran.notable.data.db.encodeStrokePoints
 import com.ethran.notable.data.db.withNormalizedPressure
@@ -409,6 +410,10 @@ class RoomCouchStore(
         val notebookDefault = book.declaredDefaultPageSize()
         val candidates = book.pageIds.filter { pageId ->
             val page = appRepository.pageRepository.getById(pageId) ?: return@filter false
+            // Rule 0: a page that declares it scrolls is exempt, however far its ink runs. Tested
+            // here as well as inside the split so a journal entry never even loads its ink for a
+            // division that would be refused.
+            if (PageLayout.isScroll(page.layout)) return@filter false
             val sheet = PageSplit.sheetFor(page.pageWidth, page.pageHeight, notebookDefault)
             val lowestStart = maxOf(
                 appRepository.strokeRepository.maxTop(pageId) ?: 0f,
@@ -511,6 +516,7 @@ class RoomCouchStore(
             backgroundType = data.page.backgroundType,
             pageWidth = data.page.pageWidth,
             pageHeight = data.page.pageHeight,
+            layout = data.page.layout,
             strokes = data.strokes.mapNotNull(::couchStroke),
             deletedStrokes = appRepository.deletedStrokeRepository.getByPage(id)
                 .map { CouchTombstone(id = it.strokeId, deletedAt = iso(it.deletedAt)) },
@@ -729,6 +735,8 @@ class RoomCouchStore(
             width = block.width,
             height = block.height,
             startedAt = block.startedAt?.let(::iso),
+            targetNotebookId = block.targetNotebookId,
+            targetPageId = block.targetPageId,
             createdAt = iso(block.createdAt),
             updatedAt = iso(block.updatedAt),
             deviceId = block.deviceId,
@@ -753,6 +761,8 @@ class RoomCouchStore(
             width = block.width,
             height = block.height,
             startedAt = block.startedAt?.let(::date),
+            targetNotebookId = block.targetNotebookId,
+            targetPageId = block.targetPageId,
             createdAt = date(block.createdAt),
             updatedAt = date(block.updatedAt),
             deviceId = block.deviceId,
@@ -890,6 +900,9 @@ class RoomCouchStore(
             backgroundType = page.backgroundType,
             pageWidth = page.pageWidth ?: existing?.page?.pageWidth,
             pageHeight = page.pageHeight ?: existing?.page?.pageHeight,
+            // Same "a declaration is never dropped" rule as the geometry: a peer that has not
+            // learned the field must not be able to re-bind a journal entry to its sheet.
+            layout = page.layout ?: existing?.page?.layout,
             createdAt = date(page.createdAt),
             updatedAt = date(page.updatedAt),
             // Who actually wrote this, so the next merge can break a scalar tie on the real author

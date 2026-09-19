@@ -2,8 +2,8 @@ package com.ethran.notable.sync.couch
 
 import com.ethran.notable.data.db.decodeStrokePoints
 import com.ethran.notable.data.db.encodeStrokePoints
+import com.ethran.notable.data.model.PageLayout
 import com.ethran.notable.data.model.PageSize
-import java.security.MessageDigest
 import java.util.Base64
 import kotlin.math.floor
 
@@ -15,6 +15,9 @@ import kotlin.math.floor
  * below the first sheet was then invisible to anything that works in pages — the overview showed
  * one thumbnail, a bookmark could only point at the whole scroll, and reordering could not reach
  * it. This turns each of those sheets into a page of its own.
+ *
+ * A page that declares it scrolls ([PageLayout.SCROLL]) is exempt from all of it — a journal
+ * entry is a day, not a sheet of paper that ran out.
  *
  * The rules are shared with the iPad (`PageSplit.swift`) and pinned by the conformance vectors in
  * `couch-sync-vectors/`, described normatively in `couch-sync-protocol.md` §6.6. Four of them
@@ -67,18 +70,12 @@ object PageSplit {
     /**
      * The id of sheet [index] of [parentId] — `index` 0 is the parent itself.
      *
-     * SHA-256 over an ASCII string, rendered in the shape of a UUID because that is what every
-     * other page id looks like. Not a UUIDv5: no namespace, no version nibble, just the first 16
-     * bytes of the digest — the only property required of it is that Kotlin and Swift compute the
-     * same one.
+     * [DerivedId] over the split's seed — see there for why an id is computed rather than minted,
+     * and for the shape of the result.
      */
     fun childId(parentId: String, index: Int): String {
         if (index == 0) return parentId
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest("notable-page-split:$parentId:$index".toByteArray(Charsets.UTF_8))
-        val hex = digest.joinToString("") { "%02x".format(it) }.take(32)
-        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-" +
-            "${hex.substring(16, 20)}-${hex.substring(20, 32)}"
+        return DerivedId.derive(DerivedId.pageSplitSeed(parentId, index))
     }
 
     /**
@@ -138,6 +135,9 @@ object PageSplit {
         now: String,
         updatedBy: String,
     ): List<Divided> {
+        // Rule 0 — and returned *untouched*, not merely undivided: `declaring` would stamp a sheet
+        // height onto a page whose whole claim is that it has none.
+        if (page.isScroll) return listOf(Divided(id, page))
         val count = sheetCount(page, sheet)
         if (count <= 1) return listOf(Divided(id, declaring(sheet, page)))
 

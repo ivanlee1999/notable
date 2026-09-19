@@ -262,6 +262,10 @@ object CouchMerge {
             // wins like any other scalar.
             pageWidth = winner.pageWidth ?: pageLoser.pageWidth,
             pageHeight = winner.pageHeight ?: pageLoser.pageHeight,
+            // Same rule, and for a sharper reason: a peer that has not learned about `layout`
+            // drops the field, so letting it win the scalar tiebreak would silently re-bind a
+            // journal entry to its sheet — and the next split would divide it.
+            layout = winner.layout ?: pageLoser.layout,
             strokes = strokes,
             deletedStrokes = deletedStrokes,
             images = images,
@@ -332,14 +336,16 @@ object CouchMerge {
      * [CouchBlock.text] is last because it is the only component that can contain the separator.
      * Every field before it is drawn from a grammar that excludes `|` — ids and asset ids are UUID-
      * or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
-     * normatively `[a-z][a-z0-9-]*` — so with exactly one separator-bearing component, and it
-     * terminal, the map from block to key is injective and this order is genuinely total.
+     * normatively `[a-z][a-z0-9-]*`, and a link's targets are ids — so with exactly one
+     * separator-bearing component, and it terminal, the map from block to key is injective and
+     * this order is genuinely total.
      */
     private fun blockTiebreak(b: CouchBlock): String = listOf(
         b.deviceId, b.createdAt, b.updatedAt, b.kind, b.orderKey,
         b.x?.toString() ?: "", b.y?.toString() ?: "",
         b.width?.toString() ?: "", b.height?.toString() ?: "",
         b.startedAt ?: "", b.imageAssetId ?: "",
+        b.targetNotebookId ?: "", b.targetPageId ?: "",
         b.segments.joinToString(",") { "${it.assetId}:${it.startMs}:${it.durationMs}" },
         b.strokeIds.joinToString(","),
         b.text ?: "",
@@ -378,6 +384,7 @@ object CouchMerge {
             "background" to page.background, "backgroundType" to page.backgroundType,
             "pageWidth" to page.pageWidth?.toString(),
             "pageHeight" to page.pageHeight?.toString(),
+            "layout" to page.layout,
         )
     )
 

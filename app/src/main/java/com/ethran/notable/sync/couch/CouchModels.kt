@@ -1,5 +1,6 @@
 package com.ethran.notable.sync.couch
 
+import com.ethran.notable.data.model.PageLayout
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -206,7 +207,7 @@ data class CouchBlock(
      */
     val id: String,
     /**
-     * `md` | `image` | `audio` | `ink`.
+     * `md` | `image` | `audio` | `ink` | `link`.
      *
      * A string rather than an enum, and an unrecognized value is carried verbatim and drawn as a
      * placeholder — never dropped, never coerced. This is the field that lets a fifth kind ship on
@@ -244,7 +245,8 @@ data class CouchBlock(
     /** The recording, in playback order, for `kind == "audio"`; empty otherwise. */
     val segments: List<CouchAudioSegment> = emptyList(),
     /**
-     * The [CouchPage.strokes] this block groups, for `kind == "ink"`; empty otherwise.
+     * The [CouchPage.strokes] this block groups, for `kind == "ink"` and `kind == "link"`; empty
+     * otherwise.
      *
      * The strokes stay in the page's stroke list and are named from here rather than nested inside.
      * A peer that has not learned about blocks strips this field, which costs the *grouping* — and
@@ -278,6 +280,26 @@ data class CouchBlock(
      * say something both clocks already say.
      */
     val startedAt: String? = null,
+    /**
+     * The notebook this block points at, for `kind == "link"`; null otherwise — protocol §3.3.4.
+     *
+     * A bare id, like [CouchPage.notebookId], not a `notebook:<id>` document id: the field already
+     * says what kind of thing it names, and both apps' stores address notebooks by the bare form
+     * everywhere else.
+     *
+     * There is deliberately no cached title beside it. A trashed notebook still syncs and still
+     * resolves, so a reader can name the target from its own library in every case but an outright
+     * purge — and a free-text field here would be a second `|`-bearing component in
+     * `blockTiebreak`, whose injectivity argument rests on there being exactly one, terminal.
+     */
+    val targetNotebookId: String? = null,
+    /**
+     * A page within [targetNotebookId], or null to point at the notebook as a whole.
+     *
+     * A page and never a position on one, for the reason [CouchOutlineEntry] gives: a page anchor
+     * is the only one that survives the page being written on.
+     */
+    val targetPageId: String? = null,
     val createdAt: String,
     var updatedAt: String = "",
     /** Which device last wrote this block. The first component of `blockTiebreak`. */
@@ -289,6 +311,9 @@ data class CouchBlock(
 
     /** Whether this block joins the page's linear flow, rather than sitting at a point on it. */
     val isFlowing: Boolean get() = x == null || y == null
+
+    /** Whether this block points at a notebook — protocol §3.3.4. */
+    val isLink: Boolean get() = kind == "link"
 
     /**
      * The assets this block's bytes live in, whatever its kind — what the push ordering, the
@@ -311,6 +336,10 @@ data class CouchPage(
     // before page sizes existed. Mirrors the WebDAV page DTO — see [PageSize].
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
+    // Whether the page ends at its sheet — [PageLayout.SHEET] (the default) or
+    // [PageLayout.SCROLL]. See [PageLayout], and §3.3.3 for why a scroll page still declares a
+    // `pageHeight`.
+    val layout: String? = null,
     val strokes: List<CouchStroke> = emptyList(),
     val deletedStrokes: List<CouchTombstone> = emptyList(),
     val images: List<CouchImage> = emptyList(),
@@ -329,6 +358,9 @@ data class CouchPage(
     init {
         if (updatedAt.isEmpty()) updatedAt = createdAt
     }
+
+    /** Whether this page scrolls instead of ending at its sheet — [PageLayout.isScroll]. */
+    val isScroll: Boolean get() = PageLayout.isScroll(layout)
 }
 
 /**

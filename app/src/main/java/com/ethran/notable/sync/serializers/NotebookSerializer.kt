@@ -153,6 +153,7 @@ object NotebookSerializer {
             scroll = page.scroll,
             pageWidth = page.pageWidth,
             pageHeight = page.pageHeight,
+            layout = page.layout,
             createdAt = page.createdAt.toInstant().toString(),
             updatedAt = page.updatedAt.toInstant().toString()
         )
@@ -239,6 +240,7 @@ object NotebookSerializer {
                 scroll = pageDto.scroll,
                 pageWidth = pageDto.pageWidth?.takeIf { it > 0 },
                 pageHeight = pageDto.pageHeight?.takeIf { it > 0 },
+                layout = pageDto.layout,
                 createdAt = pageCreated,
                 updatedAt = pageUpdated
             )
@@ -401,6 +403,10 @@ object NotebookSerializer {
         // The sheet this page is laid out on, in page units; null = declares none.
         val pageWidth: Int? = null,
         val pageHeight: Int? = null,
+        // Whether the page ends at that height at all — null or "sheet", or "scroll" for a
+        // journal entry. A stock upstream install strips it; see `notable-sync-protocol.md` §3.1
+        // for why that is survivable.
+        val layout: String? = null,
         val createdAt: String,
         val updatedAt: String
     )
@@ -417,6 +423,7 @@ object NotebookSerializer {
         val scroll: Int,
         val pageWidth: Int? = null,
         val pageHeight: Int? = null,
+        val layout: String? = null,
         val createdAt: String,
         val updatedAt: String,
         val strokes: List<StrokeDto>,
