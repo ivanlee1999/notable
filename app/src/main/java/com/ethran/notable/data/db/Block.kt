@@ -43,13 +43,21 @@ import javax.inject.Inject
         childColumns = ["pageId"],
         onDelete = ForeignKey.CASCADE,
     )],
-    indices = [androidx.room.Index(value = ["pageId", "orderKey"])],
+    indices = [
+        androidx.room.Index(value = ["pageId", "orderKey"]),
+        // What "which journal entries point at this notebook?" reads. Indexed rather than
+        // scanned because it is asked every time a notebook is opened.
+        androidx.room.Index(value = ["targetNotebookId"]),
+    ],
 )
 data class Block(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
     @ColumnInfo(index = true) val pageId: String,
 
-    /** `md` | `image` | `audio` | `ink`, carried verbatim even when this build does not know it. */
+    /**
+     * `md` | `image` | `audio` | `ink` | `link`, carried verbatim even when this build does not
+     * know it.
+     */
     @ColumnInfo(defaultValue = "md") val kind: String = "md",
 
     /**
@@ -64,6 +72,16 @@ data class Block(
 
     /** Kind-specific fields as JSON — see the class comment. `{}` when there are none. */
     @ColumnInfo(defaultValue = "{}") val payload: String = "{}",
+
+    /**
+     * The notebook a `link` block points at, and optionally a page within it — protocol §3.3.4.
+     *
+     * Columns rather than [payload] entries, unlike every other kind-specific field: the backlink
+     * index queries them ("which links point at this notebook?"), and [payload] is for what
+     * nothing queries.
+     */
+    val targetNotebookId: String? = null,
+    val targetPageId: String? = null,
 
     /** Page units, top-left. Both null means flowing; see the class comment. */
     val x: Int? = null,

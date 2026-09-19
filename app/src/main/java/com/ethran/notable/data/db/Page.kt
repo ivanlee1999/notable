@@ -59,6 +59,10 @@ data class Page(
     // hand.
     val pageWidth: Int? = null,
     val pageHeight: Int? = null,
+    // Whether this page ends at its sheet at all: null or "sheet" (every page until now), or
+    // "scroll" for one that does not — a journal entry. See [PageLayout], and protocol §3.3.3 for
+    // why a scroll page still declares a [pageHeight].
+    val layout: String? = null,
     val createdAt: Date = SyncClock.nowDate(), val updatedAt: Date = SyncClock.nowDate(),
     /**
      * Which device last wrote this page, or null when that device is this one.

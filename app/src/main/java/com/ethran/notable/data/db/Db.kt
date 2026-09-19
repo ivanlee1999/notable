@@ -74,7 +74,7 @@ class Converters {
 
 @Database(
     entities = [Folder::class, Notebook::class, Page::class, Stroke::class, Image::class, Kv::class, NotebookSyncState::class, PageSyncState::class, DeletedStroke::class, DeletedPage::class, DeletedImage::class, CouchDeletion::class, CouchOutbox::class, Block::class, DeletedBlock::class],
-    version = 49,
+    version = 50,
     autoMigrations = [
         AutoMigration(19, 20),
         AutoMigration(20, 21),
@@ -121,6 +121,10 @@ class Converters {
         // hand-written migrations in this list are the ones that rewrite or backfill data; this
         // does neither, and a page with no blocks is what every page already is.
         AutoMigration(48, 49),
+        // Page.layout and Block.targetNotebookId / Block.targetPageId: nullable columns plus one
+        // index, so Room adds them itself. Every existing page reads as "ends at its sheet" and
+        // every existing block as pointing nowhere, which is what they are.
+        AutoMigration(49, 50),
     ], exportSchema = true
 )
 @TypeConverters(Converters::class)

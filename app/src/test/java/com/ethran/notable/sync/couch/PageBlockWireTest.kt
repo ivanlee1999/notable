@@ -137,4 +137,61 @@ class PageBlockWireTest {
 
         assertEquals(listOf("b0", "aa", "zz", "b3"), sorted.map { it.id })
     }
+
+    // ---- Links --------------------------------------------------------------------------
+
+    private val link = CouchBlock(
+        id = "l1",
+        kind = "link",
+        strokeIds = listOf("s1", "s2"),
+        x = 212,
+        y = 1480,
+        width = 640,
+        height = 210,
+        targetNotebookId = "nb-groceries",
+        targetPageId = "page-7",
+        createdAt = "2026-09-19T10:00:00Z",
+        updatedAt = "2026-09-19T10:00:00Z",
+        deviceId = "ipad",
+    )
+
+    @Test
+    fun `a link block round-trips through the page document`() {
+        val page = CouchPage(
+            notebookId = "nb1",
+            blocks = listOf(link),
+            createdAt = "2026-09-19T09:00:00Z",
+            updatedAt = "2026-09-19T10:00:00Z",
+            updatedBy = "ipad",
+        )
+        val decoded = couchJson.decodeFromString(
+            CouchPage.serializer(), couchJson.encodeToString(CouchPage.serializer(), page)
+        )
+        assertEquals(listOf(link), decoded.blocks)
+    }
+
+    /**
+     * The iPad's encoder writes every optional explicitly, so both apps must agree that an absent
+     * target is `null` on the wire rather than a missing key.
+     */
+    @Test
+    fun `a block with no target writes both fields as explicit nulls`() {
+        val json = couchJson.encodeToString(CouchBlock.serializer(), paragraph)
+        assertTrue(json, json.contains("\"targetNotebookId\":null"))
+        assertTrue(json, json.contains("\"targetPageId\":null"))
+    }
+
+    @Test
+    fun `a page that predates links decodes with none, and a link declares itself one`() {
+        val old = """
+            {"id":"b9","kind":"md","orderKey":"a0","text":"x",
+             "createdAt":"2026-09-01T10:00:00Z","updatedAt":"2026-09-01T10:00:00Z"}
+        """.trimIndent()
+        val decoded = couchJson.decodeFromString(CouchBlock.serializer(), old)
+        assertEquals(null, decoded.targetNotebookId)
+        assertEquals(null, decoded.targetPageId)
+        assertFalse(decoded.isLink)
+        assertTrue(link.isLink)
+        assertFalse(link.isFlowing)
+    }
 }

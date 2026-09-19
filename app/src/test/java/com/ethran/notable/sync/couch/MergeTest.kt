@@ -38,7 +38,13 @@ class MergeTest {
         val page: JsonObject? = null,
         val sheet: Sheet? = null,
         val now: String? = null,
+        // A `derive` vector takes neither: just the seed whose digest is pinned.
+        val seed: String? = null,
     )
+
+    /** What a `derive` vector asserts: the identifier the seed must hash to, on both apps. */
+    @Serializable
+    private data class ExpectedId(val id: String)
 
     @Serializable
     private data class Sheet(val width: Int, val height: Int)
@@ -63,7 +69,14 @@ class MergeTest {
 
     /** A block after the split: a flowing one has no `y` to check, a positioned one's must move. */
     @Serializable
-    private data class ExpectedBlock(val id: String, val y: Int? = null)
+    private data class ExpectedBlock(
+        val id: String,
+        val y: Int? = null,
+        // Stated only by the vectors that care: a link carried across a split is worthless if it
+        // arrives pointing nowhere.
+        val targetNotebookId: String? = null,
+        val targetPageId: String? = null,
+    )
 
     @Serializable
     private data class ExpectedTombstone(val id: String, val deletedAt: String)
@@ -93,7 +106,8 @@ class MergeTest {
         assertTrue("vector file is empty", vectors.isNotEmpty())
         // Every merge rule with a branch of its own should have at least one vector.
         assertEquals(
-            setOf("page", "notebook", "folder", "split"), vectors.map { it.kind }.toSet())
+            setOf("page", "notebook", "folder", "split", "derive"),
+            vectors.map { it.kind }.toSet())
     }
 
     @Test
@@ -104,9 +118,24 @@ class MergeTest {
                 "notebook" -> check(vector, CouchNotebook.serializer(), CouchMerge::mergeNotebook)
                 "folder" -> check(vector, CouchFolder.serializer(), CouchMerge::mergeFolder)
                 "split" -> checkSplit(vector)
+                "derive" -> checkDerive(vector)
                 else -> throw AssertionError("vector ${vector.name}: unknown kind ${vector.kind}")
             }
         }
+    }
+
+    /**
+     * Runs a `derive` vector: the seed, and the identifier both apps must compute from it.
+     *
+     * Pinned rather than merely tested for agreement between the two implementations, because the
+     * whole value of a derived id is that a device offline *now* computes what a device offline
+     * last year computed. A change here is a change to where existing journal entries live, and it
+     * would look like data loss rather than like a broken hash.
+     */
+    private fun checkDerive(vector: Vector) {
+        val seed = requireNotNull(vector.seed) { "${vector.name}: derive vector needs a seed" }
+        val expected = couchJson.decodeFromJsonElement(ExpectedId.serializer(), vector.expected)
+        assertEquals(vector.name, expected.id, DerivedId.derive(seed))
     }
 
     /**
@@ -527,6 +556,16 @@ class MergeTest {
                 if (wantBlock.y != null) {
                     assertEquals(
                         "${vector.name}: ${block.id} y on ${want.id}", wantBlock.y, block.y)
+                }
+                if (wantBlock.targetNotebookId != null) {
+                    assertEquals(
+                        "${vector.name}: ${block.id} target notebook on ${want.id}",
+                        wantBlock.targetNotebookId, block.targetNotebookId)
+                }
+                if (wantBlock.targetPageId != null) {
+                    assertEquals(
+                        "${vector.name}: ${block.id} target page on ${want.id}",
+                        wantBlock.targetPageId, block.targetPageId)
                 }
             }
             assertEquals(
