@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.53.0
+
+- Groundwork for daily notes, with nothing yet to see. The sync protocol gains three
+  things: identifiers both devices compute rather than mint (so two tablets that open the
+  same day offline write to one page instead of two), a page-level `layout` flag for a
+  page that does not end at its sheet, and a `link` block that points a region of one page
+  at a notebook.
+- Database schema 50: three nullable columns and one index, migrated automatically. No
+  existing page or block changes meaning.
+
+Nothing in the app writes any of it yet. The release exists so that both devices
+understand the format before either starts producing it — a peer erases a field it has not
+learned about the next time it writes the document back. Matches the same change in Bopa
+0.7.0; the shared conformance vectors are identical in both repositories.
+
 ## 0.52.0
 
 - Type on a page, not only draw on it. A new Text tool puts a text box wherever you tap
