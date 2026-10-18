@@ -154,6 +154,7 @@ class PageViewChangePageTest {
             context = context,
             coroutineScope = scope,
             pageDataManager = manager,
+            appRepository = repository,
             initialPageId = pageA,
             viewWidth = 200,
             viewHeight = 300,

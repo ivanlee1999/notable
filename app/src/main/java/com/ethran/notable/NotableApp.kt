@@ -3,6 +3,7 @@ package com.ethran.notable
 import android.app.Application
 import android.util.Log
 import com.ethran.notable.sync.SyncLogger
+import com.onyx.android.sdk.base.utils.ResManager
 import com.onyx.android.sdk.rx.RxManager
 import dagger.hilt.android.HiltAndroidApp
 import io.shipbook.shipbooksdk.ShipBook
@@ -31,6 +32,9 @@ class NotableApp : Application() {
         // log file already wired up, or the very run the user is trying to diagnose goes unrecorded.
         SyncLogger.install(this)
         RxManager.Builder.initAppContext(this)
+        // penbrush reads its context from here (PenUtils static init, NeoPencilPen); without it the
+        // first stroke render throws UninitializedPropertyAccessException.
+        ResManager.init(this)
         checkHiddenApiBypass()
         Log.i("NotableApp", "onCreate FINISH")
     }

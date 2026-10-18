@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -89,6 +90,7 @@ class PageView(
     var viewWidth: Int,
     var viewHeight: Int,
     val snackManager: SnackState,
+    val appRepository: com.ethran.notable.data.AppRepository,
 ) {
     // TODO: unify width height variable
 
@@ -159,11 +161,18 @@ class PageView(
 
     // warning: The setter is delayed!
     private var currentBackground: CachedBackground
-        get() = pageDataManager.getCurrentBackground()
-        set(value) = pageDataManager.setCurrentBackground(value)
+        get() = pageDataManager.getBackground(currentPageId)
+        set(value) = pageDataManager.setBackground(currentPageId, value)
+
+    private val openPageRef = AtomicReference(OpenPage(initialPageId))
+    val openPage: OpenPage get() {
+        val shown = openPageRef.get()
+        val record = pageDataManager.cachedPageRecord(shown.pageId) ?: return shown
+        return if (record === shown.record) shown else shown.copy(record = record)
+    }
 
     val currentPageId: String
-        get() = pageDataManager.getCurrentPageId()
+        get() = openPage.pageId
 
 
     // scroll is observed by ui, represents top left corner
@@ -173,7 +182,7 @@ class PageView(
 
 
     val isTransformationAllowed: Boolean
-        get() = pageDataManager.isTransformationAllowedForCurrentPage()
+        get() = openPage.isTransformationAllowed
 
     /**
      * The view the pen is drawing on right now, taken at pen-down; null when no stroke is open.
@@ -319,7 +328,7 @@ class PageView(
 //    private var dbImages = appRepository.imageRepository
 
     val currentPageNumber: Int
-        get() = pageDataManager.getCurrentPageNumber()
+        get() = openPage.pageNumber
 
     /*
         If pageNumber is -1, its assumed that the background is image type.
@@ -349,7 +358,7 @@ class PageView(
 
     private val initializationJob: Job = coroutineScope.launch(Dispatchers.IO) {
         // set page, and retrieve page data from db
-        pageDataManager.setPage(initialPageId)
+        showPage(initialPageId)
         log.i("PageView init with initial pageId: $initialPageId")
         if (currentPageId.isEmpty())
             log.e("Current page id is empty")
@@ -410,6 +419,7 @@ class PageView(
         log.d("changePage Entry: -> $newPageId (request $generation)")
 
         coroutineScope.launch(Dispatchers.IO) {
+            initializationJob.join()
             // Serialized, not merely cancellable. Every step below reads and writes state the page
             // owns — currentPageId, windowedBitmap, windowedCanvas — and two switches interleaving
             // over it could finish in the wrong order: the toolbar would name page C while the
@@ -440,7 +450,7 @@ class PageView(
                 endInkCapture()
 
                 pageDataManager.onExit(oldId, windowedBitmap)
-                pageDataManager.setPage(newPageId)
+                showPage(newPageId)
                 zoomLevel.value = initialZoom()
                 clampScrollToBounds()
                 pageDataManager.getCachedBitmap(newPageId)?.let { cached ->
@@ -529,7 +539,7 @@ class PageView(
                 snackManager.showSnackDuring(text = "Loading strokes...") {
                     val timeToLoad = measureTimeMillis {
                         logCache.d("Start page loading, id $currentPageId")
-                        pageDataManager.requestCurrentPageLoadJoin()
+                        pageDataManager.requestPageLoadJoin(currentPageId)
                         logCache.d("Got page data (PageView.loadPage). id $currentPageId")
                     }
                     logCache.d("All strokes loaded in $timeToLoad ms")
@@ -553,7 +563,7 @@ class PageView(
                 // not after a magic delay. Then prefetch neighbors into whatever budget is left.
                 coroutineScope.launch(Dispatchers.Default) {
                     pageDataManager.trimToBudget()
-                    pageDataManager.cacheNeighbors()
+                    pageDataManager.cacheNeighbors(currentPageId)
                 }
 //                sleep(10000)
 
@@ -733,7 +743,7 @@ class PageView(
             pageID = currentPageId,
             scroll = scroll,
             zoom = zoomLevel.value,
-            pageUpdatedAtMs = pageDataManager.pageFromDb?.updatedAt?.time,
+            pageUpdatedAtMs = openPage.record?.updatedAt?.time,
             requireExactMatch = true,
         )
         if (bitmapFromDisc != null) {
@@ -748,7 +758,7 @@ class PageView(
 
         log.d("Drawing initial background.")
         // draw just background.
-        val backgroundType = pageDataManager.getBackgroundType()
+        val backgroundType = openPage.backgroundType
         if (backgroundType == BackgroundType.Native) {
             drawBgToCanvas(null)
         } else
@@ -1226,9 +1236,16 @@ class PageView(
     }
 
 
+    private suspend fun showPage(pageId: String) {
+        openPageRef.set(OpenPage(pageId))
+        val record = pageDataManager.setPage(pageId)
+        val loaded = OpenPage.load(appRepository, pageId, record)
+        openPageRef.updateAndGet { it.withLoaded(loaded) }
+    }
+
     fun drawBgToCanvas(clipRect: Rect?) {
-        val backgroundType = pageDataManager.getBackgroundType() ?: BackgroundType.Native
-        val bg = pageDataManager.getBackgroundName()
+        val backgroundType = openPage.backgroundType ?: BackgroundType.Native
+        val bg = openPage.backgroundName
         val pageNumber = currentPageNumber
         val scale = zoomLevel.value
         val bgImage: Bitmap? =
@@ -1292,7 +1309,7 @@ class PageView(
     }
 
 
-    private fun saveToPersistLayer() = pageDataManager.setScrollInDb()
+    private fun saveToPersistLayer() = pageDataManager.setScrollInDb(currentPageId)
 
     fun applyZoom(point: IntOffset): IntOffset {
         return point * zoomLevel.value

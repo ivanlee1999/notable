@@ -76,7 +76,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
 import com.ethran.notable.R
@@ -308,7 +307,7 @@ fun BackgroundSelector(
     // all — not clipped, unreachable. `heightIn` respects the constraints the dialog is given, so
     // the box is as tall as its content up to this, and never taller than the screen.
     val modalHeight = 550.dp
-    Dialog(onDismissRequest = { onClose() }) {
+    ScaledDialog(onDismissRequest = { onClose() }) {
         Column(
             modifier = Modifier
                 .background(Color.White)

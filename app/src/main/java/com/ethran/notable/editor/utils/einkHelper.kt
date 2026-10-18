@@ -173,12 +173,6 @@ fun setupSurface(
         .setExcludeRect(emptyList())
         .openRawDrawing()
 
-    touchHelper.setRawDrawingEnabled(true)
-
-    // Enable the firmware's native eraser indicator. MUST be called after setRawDrawingEnabled(true)
-    // because that call internally resets it to disabled. Also re-asserted in onBeginRawErasing.
-    // See docs/onyx-sdk/onyx-native-eraser-indicator.md.
-    enableNativeEraser(touchHelper, zoom = zoom)
     log.i("Setup editable surface completed")
 
 }

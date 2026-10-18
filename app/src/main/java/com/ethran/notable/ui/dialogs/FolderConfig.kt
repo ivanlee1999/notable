@@ -27,7 +27,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.ethran.notable.ui.components.ScaledDialog
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.TrashRepository
@@ -148,7 +148,7 @@ fun FolderConfigDialog(appRepository: AppRepository,
         )
     }
 
-    Dialog(
+    ScaledDialog(
         onDismissRequest = {
             log.i("Closing Directory Dialog - upstream")
             onClose()

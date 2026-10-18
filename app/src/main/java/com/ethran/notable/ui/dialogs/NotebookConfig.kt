@@ -51,7 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.ethran.notable.ui.components.ScaledDialog
 import androidx.core.net.toUri
 import com.ethran.notable.R
 import com.ethran.notable.data.AppRepository
@@ -252,7 +252,7 @@ fun NotebookConfigDialog(
         )
     }
 
-    Dialog(
+    ScaledDialog(
         onDismissRequest = {
             onClose()
         }) {

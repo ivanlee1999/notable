@@ -3,6 +3,11 @@ package com.ethran.notable.ui.theme
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.lightColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Density
+import com.ethran.notable.data.datastore.GlobalAppSettings
 
 /**
  * Notable has one palette, and it is [Kaleido].
@@ -41,10 +46,14 @@ private val KaleidoColors = lightColors(
 
 @Composable
 fun InkaTheme(content: @Composable () -> Unit) {
+    val config = LocalConfiguration.current
+    val density = Density(config.densityDpi / 160f * GlobalAppSettings.current.uiScale, config.fontScale)
+    CompositionLocalProvider(LocalDensity provides density) {
     MaterialTheme(
         colors = KaleidoColors,
         typography = Typography,
         shapes = Shapes,
         content = content
     )
+    }
 }

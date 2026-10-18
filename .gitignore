@@ -1,7 +1,6 @@
 *.iml
 .gradle
 /local.properties
-/.idea/
 .DS_Store
 /build
 /captures
@@ -27,3 +26,12 @@ app/libs
 *.p12
 *.keystore
 /secrets/
+# Android Studio
+# Ignore the directory's contents, not the directory itself, so the
+# exceptions below can re-include shared project configuration.
+.idea/*
+!.idea/.name
+!.idea/vcs.xml
+!.idea/runConfigurations.xml
+!.idea/codeStyles/
+!.idea/inspectionProfiles/

@@ -22,6 +22,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
@@ -134,7 +136,7 @@ class KvProxy @Inject constructor(
 
     suspend fun <T> setKv(key: String, value: T, serializer: KSerializer<T>) {
         val jsonValue = json.encodeToString(serializer, value)
-        log.i("Setting $key to $value")
+        log.i("Setting $key")
         kvRepository.set(Kv(key, jsonValue))
     }
 
@@ -178,15 +180,25 @@ class KvProxy @Inject constructor(
         }
     }
 
-    suspend fun setSyncSettings(value: SyncSettings) {
-        setKv(
-            SYNC_SETTINGS_KEY,
-            value.copy(
-                password = encryptOrThrow(value.password, "WebDAV"),
-                couchPassword = encryptOrThrow(value.couchPassword, "CouchDB"),
-            ),
-            SyncSettings.serializer()
-        )
+    private val syncSettingsMutex = Mutex()
+
+    suspend fun setSyncSettings(value: SyncSettings) = updateSyncSettings(
+        newPassword = value.password, newCouchPassword = value.couchPassword
+    ) { value }
+
+    suspend fun updateSyncSettings(
+        newPassword: String? = null,
+        newCouchPassword: String? = null,
+        transform: (SyncSettings) -> SyncSettings,
+    ) = withContext(Dispatchers.IO) {
+        val password = newPassword?.let { encryptOrThrow(it, "WebDAV") }
+        val couchPassword = newCouchPassword?.let { encryptOrThrow(it, "CouchDB") }
+        syncSettingsMutex.withLock {
+            val stored = get(SYNC_SETTINGS_KEY, SyncSettings.serializer()) ?: SyncSettings()
+            setKv(SYNC_SETTINGS_KEY,
+                applySyncSettingsUpdate(stored, password, couchPassword, transform),
+                SyncSettings.serializer())
+        }
     }
 
     private fun encryptOrThrow(plain: String, what: String): String =
@@ -210,3 +222,12 @@ class KvProxy @Inject constructor(
         setKv(SYNC_SERVER_CAPABILITIES_KEY, value, ServerCapabilities.serializer())
 
 }
+
+internal fun applySyncSettingsUpdate(
+    stored: SyncSettings,
+    encryptedNewPassword: String?,
+    encryptedNewCouchPassword: String? = null,
+    transform: (SyncSettings) -> SyncSettings,
+): SyncSettings = transform(stored.copy(password = "", couchPassword = ""))
+    .copy(password = encryptedNewPassword ?: stored.password,
+        couchPassword = encryptedNewCouchPassword ?: stored.couchPassword)
