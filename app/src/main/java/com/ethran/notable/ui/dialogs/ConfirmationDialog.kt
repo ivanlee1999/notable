@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.dialogs
 
+import com.ethran.notable.ui.components.ScaledDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -22,7 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.io.ExportFormat
 import com.ethran.notable.io.ExportOptions
@@ -70,7 +70,7 @@ fun ShowConfirmationDialog(
     cancelButtonText: String = "Cancel",
     confirmEnabled: Boolean = true
 ) {
-    Dialog(onDismissRequest = { onDismiss() }) {
+    ScaledDialog(onDismissRequest = { onDismiss() }) {
         Column(
             modifier = Modifier
                 .heightIn(max = dialogMaxHeight())
@@ -111,7 +111,7 @@ fun ShowExportDialog(
     // single page. The snack went with it, so a swallowed export looked exactly like a tap that
     // never registered. See [rememberAppScope].
     val scope = rememberAppScope()
-    Dialog(onDismissRequest = { onCancel() }) {
+    ScaledDialog(onDismissRequest = { onCancel() }) {
         Column(
             modifier = Modifier
                 .heightIn(max = dialogMaxHeight())

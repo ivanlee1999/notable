@@ -1,5 +1,8 @@
 package com.ethran.notable.ui
 
+import com.ethran.notable.editor.ToolbarAction
+import com.ethran.notable.editor.ToolbarUiState
+import com.ethran.notable.editor.ui.EditorTitleBar
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
@@ -244,6 +247,27 @@ class UiConsistencyComposeTests {
         screenshot("pages-600-large-text-organize")
         compose.onNodeWithText("Done organizing").performClick()
         compose.onNodeWithContentDescription("Open page 1").assertIsEnabled()
+    }
+
+    @Test
+    fun compactEditorKeepsDirectExitAndNoteSwitcherReachableAtLargeText() {
+        val actions = mutableListOf<ToolbarAction>()
+        var switches = 0
+        content(width = 320, fontScale = 1.5f) {
+            EditorTitleBar(
+                uiState = ToolbarUiState(notebookTitle = "Planning and handwritten meeting notes", pageNumberInfo = "2/12"),
+                onAction = { actions.add(it) },
+                onSwitchNotebook = { switches++ },
+            )
+        }
+        compose.onNodeWithContentDescription("Switch notebook or page")
+            .assertIsDisplayed().performClick()
+        assertEquals(1, switches)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        compose.onNodeWithContentDescription(context.getString(com.ethran.notable.R.string.editor_title_bar_back))
+            .assertIsDisplayed().performClick()
+        assertEquals(listOf(ToolbarAction.NavigateToLibrary), actions)
+        screenshot("editor-title-320-large-text")
     }
 
     @Test

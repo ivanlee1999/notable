@@ -97,6 +97,7 @@ data class AppSettings(
     // A settings blob written before the rail became fixed still carries a "toolbarLayout"
     // key; KvProxy decodes with ignoreUnknownKeys, so it is simply dropped on read.
     val toolbarPens: List<ToolbarPen> = ToolbarPen.DEFAULT_PENS,
+    val uiScale: Float = 1.0f, // Scale factor for the entire UI
 
     // Gestures
     val doubleTapAction: GestureAction = GestureAction.Undo,

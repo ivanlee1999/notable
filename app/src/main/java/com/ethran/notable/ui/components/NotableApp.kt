@@ -45,6 +45,7 @@ fun NotableApp(
             QuickNav(
                 appRepository = appRepository,
                 currentPageId = appNavState.currentPageId,
+                initialTab = appNavState.quickNavInitialTab,
                 quickNavSourcePageId = appNavState.quickNavSourcePageId,
                 onClose = { appNavState.closeQuickNav() },
                 goToPage = { pageId -> appNavState.goToPage(appRepository, pageId) },

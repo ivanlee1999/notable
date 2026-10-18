@@ -202,6 +202,8 @@ class PageDataManager @Inject constructor(
     @Volatile
     var pageFromDb: Page? = null
 
+    private val pageRecords = ConcurrentHashMap<String, Page>()
+
     /**
      * Single lock for all cached page state ([entries], [entriesTotalBytes], [backgroundCache] and
      * per-entry fields). A plain monitor (not a suspending Mutex) so hot non-suspend accessors
@@ -269,8 +271,8 @@ class PageDataManager @Inject constructor(
     // lock-safe [PageViewportState.scheduleRemoval], used when evicting — which clears all three,
     // so this view state still dies with its page exactly as it did when zoom lived in the entry.
 
-    private val currentPage: String
-        get() = pageFromDb?.id.orEmpty()
+    @Volatile
+    private var currentPage: String = ""
 
     @Volatile
     private var currentPageNumber = -1
@@ -631,13 +633,14 @@ class PageDataManager @Inject constructor(
     /**
      * Ensures that the page is loaded; suspends until load is finished.
      */
-    suspend fun requestCurrentPageLoadJoin() {
-        val bookId = pageFromDb?.notebookId
-        log.d("requestCurrentPageLoadJoin($currentPage)")
-        getOrStartLoadingJob(currentPage, bookId, isPrefetch = false)?.join()
+    suspend fun requestCurrentPageLoadJoin() = requestPageLoadJoin(currentPage)
+
+    suspend fun requestPageLoadJoin(pageId: String) {
+        val bookId = pageRecords[pageId]?.notebookId
+        getOrStartLoadingJob(pageId, bookId, isPrefetch = false)?.join()
         // Strokes may be cached from a prior visit while the background pool evicted its bitmap;
         // reload it so the current page never draws blank.
-        ensureBackgroundLoaded(currentPage)
+        ensureBackgroundLoaded(pageId)
     }
 
     private suspend fun cancelUnnecessaryLoading(pageId: String, bookId: String) {
@@ -646,7 +649,7 @@ class PageDataManager @Inject constructor(
             appRepository.getNextPageIdFromBookAndPage(pageId = pageId, notebookId = bookId)
         val prevPageId =
             appRepository.getPreviousPageIdFromBookAndPage(pageId = pageId, notebookId = bookId)
-        val keep = listOfNotNull(nextPageId, prevPageId, pageId).toSet()
+        val keep = listOfNotNull(nextPageId, prevPageId, pageId, currentPage).toSet()
 
         synchronized(lock) {
             val toCancel = entries
@@ -660,8 +663,9 @@ class PageDataManager @Inject constructor(
         }
     }
 
-    suspend fun cacheNeighbors() {
-        val bookId = pageFromDb?.notebookId ?: return
+    suspend fun cacheNeighbors(pageId: String = currentPage) {
+        val currentPage = pageId
+        val bookId = pageRecords[pageId]?.notebookId ?: return
         log.d("cacheNeighbors($currentPage)")
         try {
             val nextPageId =
@@ -761,7 +765,7 @@ class PageDataManager @Inject constructor(
      * and reading one here would race the load that is already on its way.
      */
     suspend fun ensureNextPage(pageId: String): String? {
-        val bookId = pageFromDb?.takeIf { it.id == pageId }?.notebookId ?: return null
+        val bookId = pageRecords[pageId]?.notebookId ?: return null
         val nextId = appRepository.getNextPageIdFromBookAndPageOrCreate(
             notebookId = bookId, pageId = pageId
         )
@@ -867,7 +871,7 @@ class PageDataManager @Inject constructor(
             recomputeHeight(pageId, pageWithData.page.sheet())
         } catch (e: CancellationException) {
             log.w("Loading of page $pageId was cancelled.")
-            if (!validatePageDataLoaded(pageId)) removePage(pageId)
+            dropUnfinishedLoad(pageId, myJob)
             throw e  // rethrow cancellation
         } catch (e: Exception) {
             // Anything else (a Room error, a corrupt stroke blob, an OOM decoding a background)
@@ -883,9 +887,17 @@ class PageDataManager @Inject constructor(
                 )
             )
             appEventBus.tryEmit(AppEvent.ActionHint("Could not load page", 3000))
-            removePage(pageId)
+            dropUnfinishedLoad(pageId, myJob)
         } finally {
             log.d("Finished load attempt for page $pageId")
+        }
+    }
+
+    private fun dropUnfinishedLoad(pageId: String, job: Job?) = synchronized(lock) {
+        val entry = entries[pageId] ?: return@synchronized
+        if (entry.loadJob === job && !entry.loaded) {
+            entry.loadJob = null
+            if (pageId != currentPage) removePageLocked(pageId)
         }
     }
 
@@ -1079,15 +1091,18 @@ class PageDataManager @Inject constructor(
     /*
      * Sets current page, and starts loading it from db.
      */
-    suspend fun setPage(pageId: String) {
-        pageFromDb = appRepository.pageRepository.getById(pageId)
-        if (pageFromDb == null) {
+    suspend fun setPage(pageId: String): Page? {
+        currentPage = pageId
+        val record = appRepository.pageRepository.getById(pageId)
+        if (currentPage == pageId) pageFromDb = record
+        if (record == null) {
             log.e("Page($pageId) not found;")
             appEventBus.tryEmit(AppEvent.ActionHint("Page not found", 2000))
             currentPageNumber = -1
-            return
+            return null
         }
-        pageFromDb?.let { page ->
+        record.let { page ->
+            pageRecords[pageId] = page
             val notebookId = page.notebookId
             currentPageNumber = appRepository.getPageNumber(notebookId, pageId)
             // Known before anything clamps a scroll or draws a seam, not only after the full
@@ -1113,11 +1128,17 @@ class PageDataManager @Inject constructor(
             }
         }
         synchronized(lock) { entries[pageId]?.let { touchLocked(it) } }
+        return pageRecords[pageId]
     }
 
+    fun cachedPageRecord(pageId: String): Page? = pageRecords[pageId]
+
+    suspend fun getPageRecord(pageId: String): Page? =
+        appRepository.pageRepository.getById(pageId)?.also { pageRecords[pageId] = it }
+
     private suspend fun refreshPageFromDb(pageId: String) {
-        pageFromDb = appRepository.pageRepository.getById(pageId)
-        log.i("Refresh current page, background: ${pageFromDb?.background}")
+        val record = getPageRecord(pageId)
+        if (currentPage == pageId) pageFromDb = record
     }
 
     fun getCachedBitmap(pageId: String): Bitmap? = synchronized(lock) {
@@ -1137,7 +1158,7 @@ class PageDataManager @Inject constructor(
      * [pageFromDb], which is the page every renderer asks about.
      */
     fun getSheet(pageId: String): PageSize =
-        pageFromDb?.takeIf { it.id == pageId }?.sheet() ?: PageSize.LEGACY_UNDECLARED
+        pageRecords[pageId]?.sheet() ?: PageSize.LEGACY_UNDECLARED
 
     /**
      * The scrollable height: the sheet, or further if the page's content runs past the bottom of
@@ -1225,7 +1246,7 @@ class PageDataManager @Inject constructor(
 
     /** Stored scroll for [pageId], falling back to the page's persisted scroll position. */
     fun getPageScroll(pageId: String): Offset =
-        viewport.scroll(pageId) ?: Offset(0f, pageFromDb?.scroll?.toFloat() ?: 0f)
+        viewport.scroll(pageId) ?: Offset(0f, pageRecords[pageId]?.scroll?.toFloat() ?: 0f)
 
     fun setPageScroll(pageId: String, scroll: Offset) {
         viewport.setScroll(pageId, scroll)
@@ -1719,11 +1740,12 @@ class PageDataManager @Inject constructor(
 
     // Scroll is device-local and deliberately not synced (see RoomCouchStore.applyPage), so this
     // write queues nothing.
-    fun setScrollInDb() {
+    fun setScrollInDb(pageId: String = currentPage) {
+        val scrollY = getPageScroll(pageId).y.toInt()
         launchDbWrite("scroll", emptyList()) {
             appRepository.pageRepository.updateScroll(
-                currentPage,
-                getPageScroll(currentPage).y.toInt()
+                pageId,
+                scrollY
             )
         }
     }
@@ -1787,7 +1809,7 @@ class PageDataManager @Inject constructor(
     private fun armBackgroundWatch(pageId: String, background: CachedBackground) {
         dataScope.launch {
             // we assume that the pageId is in current notebook.
-            val observeBg = appRepository.isObservable(pageFromDb?.notebookId)
+            val observeBg = appRepository.isObservable(appRepository.pageRepository.getById(pageId)?.notebookId)
             if (observeBg) backgroundFileWatcher.watch(pageId, background.path)
         }
     }
@@ -1796,9 +1818,11 @@ class PageDataManager @Inject constructor(
      * Retrieves the cached background for the current page, or a default empty [CachedBackground]
      * if none is linked (prevents null-pointer crashes downstream).
      */
-    fun getCurrentBackground(): CachedBackground {
+    fun getCurrentBackground(): CachedBackground = getBackground(currentPage)
+
+    fun getBackground(pageId: String): CachedBackground {
         return synchronized(lock) {
-            val key = entries[currentPage]?.backgroundKey
+            val key = entries[pageId]?.backgroundKey
             val bg = if (key != null) backgroundCache[key] else null
             bg?.let { it.lastAccessSeq = ++bgAccessSeq }
             log.d("Background for page $currentPage (no. $currentPageNumber): $bg")

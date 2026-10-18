@@ -165,16 +165,12 @@ class SettingsViewModel @Inject constructor(
 
         if (saveToDb) {
             viewModelScope.launch(Dispatchers.IO) {
-                // Retrieve passwords. A blank field means "leave the stored one alone", for both
-                // backends — the UI never holds either secret.
-                val stored = kvProxy.getSyncSettings()
-                val settingWithPassword = newSettings.copy(
-                    password = newSettings.password.ifBlank { stored.password },
-                    couchPassword = newSettings.couchPassword.ifBlank { stored.couchPassword },
-                )
-
+                val settingWithPassword = newSettings
                 try {
-                    kvProxy.setSyncSettings(settingWithPassword)
+                    kvProxy.updateSyncSettings(
+                        newPassword = newSettings.password.takeIf { it.isNotBlank() },
+                        newCouchPassword = newSettings.couchPassword.takeIf { it.isNotBlank() },
+                    ) { newSettings }
 
                     // Reconcile schedule only if relevant parameters changed
                     val scheduleChanged =

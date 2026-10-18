@@ -35,6 +35,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ethran.notable.data.datastore.RecentNotebooks
+import com.ethran.notable.data.datastore.recentNotebooks
+import com.ethran.notable.data.datastore.resumePageId
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ethran.notable.R
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.ui.noRippleClickable
@@ -74,10 +79,8 @@ private data class FileBarRow(
  * you the path you walked; it cannot tell you what else is there, so finding a note two folders
  * sideways meant walking back to the root and down again. The tree is that walk, already done.
  *
- * Folders only. The bar answers *where am I*; what is filed in a folder is the shelf's question,
- * and the shelf answers it with a cover, a page count and a sync badge where a 280dp row could
- * only repeat the title. Listing every note in both columns drew the library twice, and made the
- * column that should stay short exactly as long as the one beside it.
+ * A short recent-notes list sits above the folders, ordered by this device's reading history.
+ * The main shelf still owns the complete notebook listing and management actions.
  *
  * Only above [com.ethran.notable.ui.theme.KALEIDO_WIDE_BREAKPOINT]: a one-handed device has one
  * column's worth of room and spends it on the shelf.
@@ -94,9 +97,14 @@ fun LibraryFileBar(
     onSelectFolder: (String?) -> Unit,
     onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenNotebook: (String, String) -> Unit = { _, _ -> },
 ) {
     var collapsed by rememberSaveable { mutableStateOf(emptySet<String>()) }
 
+    val context = LocalContext.current
+    val history = remember(context) { RecentNotebooks.get(context) }
+    val recentIds by history.ids.collectAsStateWithLifecycle()
+    val recent = remember(recentIds, tree.books) { recentNotebooks(recentIds, tree.books).take(6) }
     val rows = remember(tree, collapsed) { flatten(tree, collapsed) }
 
     Row(modifier.fillMaxHeight().width(FILE_BAR_WIDTH + Kaleido.SectionRule)) {
@@ -119,6 +127,26 @@ fun LibraryFileBar(
                         selected = selectedFolderId == null,
                         onClick = { onSelectFolder(null) },
                     )
+                }
+                item(key = "recent-heading") {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                        SectionHeader("Recent notes")
+                        if (recent.isEmpty()) Text(
+                            "Notes you open appear here.", fontSize = 12.sp,
+                            color = Kaleido.Muted, modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+                items(recent, key = { "recent:${it.id}" }) { book ->
+                    Text(
+                        book.title, fontSize = 14.sp, color = Kaleido.Ink,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth()
+                            .noRippleClickable { book.resumePageId()?.let { onOpenNotebook(it, book.id) } }
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                    )
+                }
+                item(key = "folders-heading") {
                     Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 4.dp)) {
                         SectionHeader(stringResource(R.string.home_folders))
                     }

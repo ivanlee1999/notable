@@ -16,6 +16,8 @@ import com.ethran.notable.ui.SnackDispatcher
 import com.ethran.notable.ui.components.getFolderList
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +26,7 @@ import kotlinx.coroutines.launch
 
 
 /** Which way into the notebook the panel is showing. */
-enum class QuickNavTab { PAGES, OUTLINE, BOOKMARKS, PINNED }
+enum class QuickNavTab { NOTES, PAGES, OUTLINE, BOOKMARKS, PINNED }
 
 data class QuickNavUiState(
     val isLoading: Boolean = true,
@@ -53,7 +55,12 @@ data class QuickNavUiState(
     val currentBookIndex: Int = 0,
     val favoriteIndexesInBook: List<Int> = emptyList(),
     val bookPageIds: List<String> = emptyList()
-)
+) {
+    /** Clear only page-specific state; jumping within a tab must not close that tab. */
+    fun forPage(pageId: String?) = QuickNavUiState(
+        currentPageId = pageId, isLoading = pageId != null, tab = tab,
+    )
+}
 
 
 class QuickNavViewModel(
@@ -70,14 +77,17 @@ class QuickNavViewModel(
     val uiState: StateFlow<QuickNavUiState> = _uiState.asStateFlow()
     private var lastScrubEndTargetPageId: String? = null
 
+    private var loadJob: Job? = null
+
     // Initialize data when the ViewModel is created or when a new page is opened
     fun loadPageData(currentPageId: String?) {
+        loadJob?.cancel()
+        _uiState.update { it.forPage(currentPageId) }
         if (currentPageId == null) return
 
-        _uiState.update { it.copy(isLoading = true, currentPageId = currentPageId) }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val page = runCatching { pageRepository.getById(currentPageId) }.getOrNull()
+        loadJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+            val page = pageRepository.getById(currentPageId)
             // A page is filed wherever its notebook is filed; it has no folder of its own.
             val folderId = page?.getParentFolder(appRepository.bookRepository)
             val folderList = getFolderList(appRepository, folderId)
@@ -90,6 +100,7 @@ class QuickNavViewModel(
             val favoritePagesDb = appRepository.pageRepository.getByIds(favorites)
 
             _uiState.update { state ->
+                if (state.currentPageId != currentPageId) return@update state
                 state.copy(
                     folderId = folderId,
                     breadcrumbFolders = folderList,
@@ -102,6 +113,12 @@ class QuickNavViewModel(
 
             // Load Scrubber data if it belongs to a book
             page?.let { loadBookData(it.notebookId, currentPageId, favorites) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.e("Could not load navigation", e)
+                _uiState.update { if (it.currentPageId == currentPageId) it.copy(isLoading = false) else it }
+            }
         }
     }
 
@@ -117,6 +134,7 @@ class QuickNavViewModel(
         val starred = book.bookmarks.filterNot { it.removed }.map { it.pageId }.toSet()
         val pages = book.pageIds.toSet()
         _uiState.update { state ->
+            if (state.currentPageId != currentPageId) return@update state
             state.copy(
                 bookmarkedPageIds = book.pageIds.filter { it in starred },
                 isCurrentPageBookmarked = currentPageId in starred,
@@ -203,6 +221,7 @@ class QuickNavViewModel(
         // gated on the count by the view that draws it, but the Pages tab needs the page list for a
         // one-page notebook too — and a notebook grows past one page without this being re-read.
         _uiState.update { state ->
+            if (state.currentPageId != currentPageId) return@update state
             state.copy(
                 bookPageCount = book.pageIds.size,
                 currentBookIndex = currentIdx,

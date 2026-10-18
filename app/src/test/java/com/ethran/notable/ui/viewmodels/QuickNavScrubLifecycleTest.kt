@@ -73,6 +73,14 @@ class QuickNavScrubLifecycleTest {
         }
     }
 
+    @Test
+    fun `loading another navigation context keeps the selected tab`() {
+        viewModel.selectTab(QuickNavTab.OUTLINE)
+        viewModel.loadPageData(null)
+        assertEquals(QuickNavTab.OUTLINE, viewModel.uiState.value.tab)
+        assertTrue(viewModel.uiState.value.bookPageIds.isEmpty())
+    }
+
     @After
     fun tearDown() {
         Dispatchers.resetMain()

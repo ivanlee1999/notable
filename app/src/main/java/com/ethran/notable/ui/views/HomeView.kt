@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -206,7 +207,7 @@ fun Library(
     // state — see [requestFullSync].
     val kvProxy = rememberKvProxy()
     val snackState = LocalSnackContext.current
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
 
     LibraryContent(
@@ -223,7 +224,7 @@ fun Library(
             scope.launch {
                 val outcome = requestFullSync(kvProxy, viewModel.syncScheduler)
                 snackState.showOrUpdateSnack(
-                    SnackConf(text = context.getString(outcome.messageRes()), duration = 3000)
+                    SnackConf(text = resources.getString(outcome.messageRes()), duration = 3000)
                 )
             }
         },
@@ -343,6 +344,7 @@ fun LibraryContent(
                 selectedFolderId = uiState.folderId,
                 isSyncing = uiState.isSyncing,
                 onSelectFolder = onNavigateToFolder,
+                onOpenNotebook = onNavigateToEditor,
                 onSyncNow = onSyncNow,
             )
 

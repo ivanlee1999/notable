@@ -129,7 +129,7 @@ object MarkdownBlocks {
      * and interior whitespace is untouched, because both would edit the user's text.
      */
     private fun normalize(source: String): String =
-        source.removePrefix("﻿").replace("\r\n", "\n").replace("\r", "\n")
+        source.removePrefix("\uFEFF").replace("\r\n", "\n").replace("\r", "\n")
 
     /** A separator: nothing on the line but spaces and tabs. */
     private fun isBlank(line: String): Boolean = line.all { it == ' ' || it == '\t' }

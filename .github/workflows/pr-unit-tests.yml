@@ -28,16 +28,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: "21"
           distribution: "temurin"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Unit Tests
         # Replace with your specific unit test task if different
@@ -156,12 +156,9 @@ jobs:
           path: app/schemas
           if-no-files-found: warn
 
-      # Advisory, not a gate. This codebase has never had a lint step, so turning one on as
-      # blocking would fail every PR on pre-existing findings rather than on the change under
-      # review. Report first; tighten once the baseline is clean.
+      # Errors gate the PR; warnings stay visible in the uploaded report.
       - name: Android Lint
         run: ./gradlew lintDebug
-        continue-on-error: true
 
       - name: Upload lint report
         if: always()

@@ -40,7 +40,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.ethran.notable.ui.components.ScaledDialog
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.editor.ui.toolbar.ToolbarButton
@@ -257,7 +257,7 @@ private fun ToolIcon(icon: IconRef?, penColor: Color? = null, onClick: (() -> Un
 
 @Composable
 private fun AddPenDialog(onPick: (Pen) -> Unit, onClose: () -> Unit) {
-    Dialog(onDismissRequest = onClose) {
+    ScaledDialog(onDismissRequest = onClose) {
         Column(
             modifier = Modifier
                 .background(MaterialTheme.colors.background)
@@ -318,7 +318,7 @@ private fun PenEditDialog(
         onClose()
     }
 
-    Dialog(onDismissRequest = ::commitAndClose) {
+    ScaledDialog(onDismissRequest = ::commitAndClose) {
         Column(
             modifier = Modifier
                 .background(MaterialTheme.colors.background)

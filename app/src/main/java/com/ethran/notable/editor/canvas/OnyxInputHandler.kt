@@ -40,6 +40,7 @@ import com.onyx.android.sdk.pen.data.TouchPointList
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.thread
@@ -272,21 +273,22 @@ class OnyxInputHandler(
         if(touchHelper == null) return
         log.i("Update is drawing: $toolbarState.isDrawing")
         if (toolbarState.isDrawing) {
-            touchHelper!!.setRawDrawingEnabled(true)
-            // setRawDrawingEnabled(true) resets the framework stroke config to firmware defaults
-            // (brush channel on, eraser channel off). Re-assert the eraser channel (styled for the
-            // active eraser type) and re-send the active pen style so the next stroke uses the tool.
-            enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
-            updatePenAndStroke()
+            enableRawDrawing()
         } else {
             // A pending resetScreenFreeze resume would re-freeze the screen after we disable
             // raw drawing (e.g. lasso select: the select-stroke refreshUi armed it) — kill it.
             cancelPendingScreenFreezeReset()
             // Check if drawing is completed
             CanvasEventBus.waitForDrawing()
-            // draw to view, before showing drawing, avoid stutter
-            drawCanvas.refreshManager.drawCanvasToView(null)
-            touchHelper!!.setRawDrawingEnabled(false)
+            // The raw layer must outlive the bitmap post, including the main-thread hop.
+            // Recheck the mode in that callback: another toolbar action may have re-enabled
+            // drawing while this frame was queued. A failed post must retain the existing ink.
+            drawCanvas.refreshManager.drawCanvasToView(null) { posted ->
+                handoffPostedFrame(posted, isCurrent = { !toolbarState.isDrawing }) {
+                    cancelPendingScreenFreezeReset()
+                    touchHelper?.setRawDrawingEnabled(false)
+                }
+            }
         }
     }
 
@@ -302,11 +304,31 @@ class OnyxInputHandler(
         const val TEXT_RESIZE_EDGE = 24f
     }
 
+    fun updateEraserTrack() {
+        if (toolbarState.isDrawing) enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
+    }
+
+    private var surfaceSetupJob: Job? = null
+
+    fun enableRawDrawing() {
+        touchHelper?.setRawDrawingEnabled(true)
+        enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
+        updatePenAndStroke()
+        touchHelper?.setRawInputReaderEnable(true)
+    }
+
     fun updateActiveSurface() {
-        // Takes at least 50ms on Note 4c,
-        // and I don't think that we need it immediately
+        // Takes at least 50ms on Note 4c, so bursts (toolbar change + surfaceCreated when the
+        // editor opens) are coalesced: a newer request cancels one that has not started yet.
         log.i("Update editable surface")
-        coroutineScope.launch {
+        surfaceSetupJob?.cancel()
+        surfaceSetupJob = coroutineScope.launch {
+            // Before surfaceCreated there is nothing to set up (no surface, possibly zero size);
+            // surfaceCreated calls this again once the surface exists.
+            if (!drawCanvas.holder.surface.isValid) {
+                log.d("Surface not ready, skipping surface setup")
+                return@launch
+            }
             onSurfaceInit(drawCanvas)
             // The surface is laid out inside the chrome's inset, so its own box is the paper —
             // there is no chrome to measure or exclude here. Showing or hiding the toolbar
@@ -320,7 +342,7 @@ class OnyxInputHandler(
             // pen style here, inside the same coroutine and after the surface is armed: a caller
             // that invokes updatePenAndStroke() right after updateActiveSurface() would otherwise
             // race this launch and have its style overwritten.
-            updatePenAndStroke()
+            if (toolbarState.isDrawing) enableRawDrawing()
         }
     }
     /**

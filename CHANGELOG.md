@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.54.0
+
+- Recent notebooks appear in the library sidebar. Tap a notebook title in the editor
+  to switch notes, with recent notes first. Reading history stays on this device.
+- Back leaves the note directly for its containing folder; page management remains
+  available from the menu. Rapid navigation respects the latest destination, and
+  unfinished text boxes are committed when leaving the editor.
+- Common ink colors are one tap away in the toolbar, with the full palette still
+  available. Toolbar popups and scroll indicators respect UI scaling, and the scale
+  slider supports keyboard and accessibility adjustment.
+- Keep raw ink visible until the replacement bitmap has actually posted. Failed,
+  detached, or stale frames cannot clear a newer stroke; changing tools uses the
+  same ordered handoff.
+- Integrate upstream page ownership and input fixes while retaining this fork's
+  editor, navigation, and sync behavior. Fix merge-related compilation issues.
+
+No database schema or sync-format change in this release.
+
 ## 0.53.0
 
 - Groundwork for daily notes, with nothing yet to see. The sync protocol gains three

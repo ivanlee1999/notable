@@ -25,7 +25,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Icon
@@ -83,6 +82,8 @@ import com.ethran.notable.sync.SyncLogger
 import com.ethran.notable.sync.SyncSettings
 import com.ethran.notable.sync.SyncState
 import com.ethran.notable.sync.SyncStep
+import com.ethran.notable.ui.components.ScaledAlertDialog
+import com.ethran.notable.ui.components.ScaledDialog
 import com.ethran.notable.ui.components.SettingToggleRow
 import com.ethran.notable.ui.components.SettingsDivider
 import com.ethran.notable.ui.theme.InkaTheme
@@ -148,7 +149,7 @@ fun SyncSettings(
 
     // The experimental notice belongs to WebDAV opt-in, not CouchDB or the Off screen.
     if (showWarningDialog && state.syncSettings.backend == SyncBackend.WEBDAV && !state.syncSettings.syncEnabled) {
-        AlertDialog(
+        ScaledAlertDialog(
             // The user can return to backend settings without acknowledging an unrelated action.
             onDismissRequest = { showWarningDialog = false },
             title = {

@@ -4,6 +4,12 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import com.ethran.notable.data.datastore.RecentNotebooks
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
@@ -99,11 +105,29 @@ fun NotableNavHost(
                 val bookId = backStackEntry.arguments?.getString(EditorDestination.BOOK_ID_ARG)
 
                 val currentPageId = appNavigator.resolveAndSyncPageId(backStackEntry)
+                val context = LocalContext.current
+                LaunchedEffect(bookId) {
+                    if (bookId != null) withContext(Dispatchers.IO) {
+                        try {
+                            val book = appRepository.bookRepository.getById(bookId)
+                            if (book != null && book.deletedAt == null) {
+                                RecentNotebooks.get(context).record(bookId)
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            // Reading history is optional; failure must never prevent editing.
+                            log.w("Could not remember recently opened notebook", error)
+                        }
+                    }
+                }
 
                 EditorView(
-                    goToLibrary = {appNavigator.goToLibrary(it)},
+                    goToLibrary = { appNavigator.exitEditor(it) },
+                    onExitRequested = { appNavigator.cancelPendingNavigation() },
                     goToPages = { bookId -> appNavigator.goToPages(bookId) },
                     openQuickNav = { appNavigator.openQuickNav() },
+                    openNoteSwitcher = { appNavigator.openQuickNav(com.ethran.notable.ui.viewmodels.QuickNavTab.NOTES) },
                     goToBugReport = { appNavigator.goToBugReport() },
                     bookId = bookId,
                     initialPageId = currentPageId,

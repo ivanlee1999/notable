@@ -1,0 +1,33 @@
+name: PR Size
+# Advisory size labels only in this fork: keep contributions open for human review.
+# pull_request_target lets this label fork PRs; no PR code is checked out or run.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - id: size
+        uses: pascalgn/size-label-action@v0.5.7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IGNORED: |
+            app/schemas/**
+            docs/**
+            **/*.md
+            **/src/test/**
+            **/src/androidTest/**
+        with:
+          sizes: >
+            {
+              "0": "XS",
+              "10": "S",
+              "100": "M",
+              "300": "L",
+              "1000": "XL"
+            }

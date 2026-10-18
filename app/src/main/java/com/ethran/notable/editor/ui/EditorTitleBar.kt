@@ -30,6 +30,7 @@ import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.theme.kaleidoMetrics
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.FileText
 import compose.icons.feathericons.MoreHorizontal
@@ -51,6 +52,7 @@ import compose.icons.feathericons.MoreHorizontal
 fun EditorTitleBar(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
+    onSwitchNotebook: () -> Unit = { onAction(ToolbarAction.OpenQuickNav) },
 ) {
     val metrics = kaleidoMetrics(LocalConfiguration.current.screenWidthDp.dp)
 
@@ -69,12 +71,12 @@ fun EditorTitleBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Back goes one level out, not all the way home: out of a notebook is its page list.
+            // Exit straight to the containing folder. Page management remains in the menu.
             TitleBarButton(
                 icon = FeatherIcons.ChevronLeft,
                 contentDescription = stringResource(R.string.editor_title_bar_back),
                 hitSize = metrics.hit,
-                onClick = { onAction(ToolbarAction.NavigateToPages) },
+                onClick = { onAction(ToolbarAction.NavigateToLibrary) },
             )
 
             Text(
@@ -85,7 +87,16 @@ fun EditorTitleBar(
                 color = Kaleido.Ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = true),
+                modifier = Modifier.weight(1f, fill = true)
+                    .noRippleClickable(onSwitchNotebook)
+                    .padding(vertical = 12.dp),
+            )
+
+            TitleBarButton(
+                icon = FeatherIcons.ChevronDown,
+                contentDescription = "Switch notebook or page",
+                hitSize = metrics.hit,
+                onClick = onSwitchNotebook,
             )
 
             Text(

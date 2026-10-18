@@ -73,10 +73,7 @@ class CouchSyncHost @Inject constructor(
 
     override suspend fun rememberClockSkew(seconds: Long?) {
         runCatching {
-            val settings = kvProxy.getSyncSettings()
-            if (settings.lastClockSkewSeconds != seconds) {
-                kvProxy.setSyncSettings(settings.copy(lastClockSkewSeconds = seconds))
-            }
+            kvProxy.updateSyncSettings { it.copy(lastClockSkewSeconds = seconds) }
         }.onFailure { SyncLogger.w(TAG, "Could not store the measured clock skew: $it") }
     }
 

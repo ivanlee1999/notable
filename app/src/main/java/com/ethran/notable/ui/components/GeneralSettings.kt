@@ -141,5 +141,16 @@ fun GeneralSettings(
             onValueChange = { choice ->
                 onSettingsChange(settings.copy(telemetryConsent = choice))
             })
+
+        // Zoom Level (UI Scale)
+        SettingSliderRow(
+            label = stringResource(R.string.uiScale),
+            value = settings.uiScale,
+            valueRange = 0.5f..1.5f,
+            steps = 9,
+            onValueChangeFinished = { newValue ->
+                onSettingsChange(settings.copy(uiScale = newValue))
+            }
+        )
     }
 }

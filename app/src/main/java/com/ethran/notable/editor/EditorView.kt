@@ -1,5 +1,6 @@
 package com.ethran.notable.editor
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -36,7 +37,6 @@ import com.ethran.notable.gestures.EditorGestureReceiver
 import com.ethran.notable.navigation.NavigationDestination
 import com.ethran.notable.ui.LocalSnackContext
 import com.ethran.notable.ui.SnackConf
-import com.ethran.notable.ui.convertDpToPixel
 import com.ethran.notable.ui.theme.InkaTheme
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -78,6 +78,8 @@ fun EditorView(
     goToLibrary: (folderId: String?) -> Unit,
     goToPages: (bookId: String) -> Unit,
     openQuickNav: () -> Unit,
+    openNoteSwitcher: () -> Unit = openQuickNav,
+    onExitRequested: () -> Unit = {},
     goToBugReport: () -> Unit,
 
     viewModel: EditorViewModel = hiltViewModel()
@@ -99,6 +101,11 @@ fun EditorView(
         return
     }
 
+    BackHandler(enabled = !isQuickNavOpen) {
+        onExitRequested()
+        viewModel.onToolbarAction(ToolbarAction.NavigateToLibrary)
+    }
+
     // Single point of entry for loading book data based on the pageId from Navigation
     // Should not be used for regular page switching
     LaunchedEffect(initialPageId) {
@@ -113,8 +120,8 @@ fun EditorView(
 
 
     BoxWithConstraints {
-        val height = convertDpToPixel(this.maxHeight, context).toInt()
-        val width = convertDpToPixel(this.maxWidth, context).toInt()
+        val height = constraints.maxHeight
+        val width = constraints.maxWidth
 
         // Here we load initial page into the memory
         val page = remember {
@@ -122,6 +129,7 @@ fun EditorView(
                 context = context,
                 coroutineScope = scope,
                 pageDataManager = viewModel.pageDataManager,
+                appRepository = viewModel.appRepository,
                 initialPageId = initialPageId,
                 viewWidth = width,
                 viewHeight = height,
@@ -267,6 +275,8 @@ fun EditorView(
 
         DisposableEffect(Unit) {
             onDispose {
+                // The draft is not yet a stored block. Commit before the outgoing page is saved.
+                editorControlTower.commitTextBox()
                 viewModel.onDispose(page)
             }
         }
@@ -324,7 +334,11 @@ fun EditorView(
                 Box(Modifier.padding(toolbarInset(true))) {
                     EditorTitleBar(
                         uiState = toolbarState,
-                        onAction = viewModel::onToolbarAction,
+                        onAction = { action ->
+                            if (action == ToolbarAction.NavigateToLibrary) onExitRequested()
+                            viewModel.onToolbarAction(action)
+                        },
+                        onSwitchNotebook = openNoteSwitcher,
                     )
                 }
             }

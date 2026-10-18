@@ -16,6 +16,7 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.EditorDestination
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.utils.refreshScreen
+import com.ethran.notable.ui.viewmodels.QuickNavTab
 import com.ethran.notable.ui.views.BugReportDestination
 import com.ethran.notable.ui.views.LibraryDestination
 import com.ethran.notable.ui.views.PagesDestination
@@ -24,6 +25,7 @@ import com.ethran.notable.ui.views.TrashDestination
 import com.ethran.notable.ui.views.WelcomeDestination
 import com.ethran.notable.utils.hasUsableStorage
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -48,7 +50,11 @@ class NotableNavigator(
     private val hasUsableStorage: Boolean,
     private val coroutineScope: CoroutineScope
 ) {
+    private val navigationRequests = NavigationRequestGuard()
+
     var isQuickNavOpen by mutableStateOf(false)
+    var quickNavInitialTab by mutableStateOf(QuickNavTab.PAGES)
+        private set
     var currentPageId by mutableStateOf<String?>(null)
 
 
@@ -59,7 +65,8 @@ class NotableNavigator(
     val quickNavSourcePageId: String?
         get() = navController.currentBackStackEntry?.savedStateHandle?.get<String>("quickNavSourcePageId")
 
-    fun openQuickNav() {
+    fun openQuickNav(tab: QuickNavTab = QuickNavTab.PAGES) {
+        quickNavInitialTab = tab
         navController.currentBackStackEntry?.savedStateHandle?.set(
             "quickNavSourcePageId", currentPageId
         )
@@ -86,16 +93,7 @@ class NotableNavigator(
             log.e("QuickNav source pageId is null")
             return
         }
-        coroutineScope.launch {
-            val notebookId = runCatching {
-                withContext(Dispatchers.IO) {
-                    appRepository.pageRepository.getById(quickNavSourcePageId ?: return@withContext null)?.notebookId
-                }
-            }.onFailure {
-                log.w("Failed to load page $quickNavSourcePageId", it)
-            }.getOrNull()
-            navController.navigate(EditorDestination.createRoute(targetPageId, notebookId))
-        }
+        goToPage(appRepository, targetPageId)
     }
 
     fun shouldAnchorBeVisible(): Boolean {
@@ -110,50 +108,83 @@ class NotableNavigator(
         }
     }
 
+    /** Invalidate lookup results immediately, before resolving the exit folder asynchronously. */
+    fun cancelPendingNavigation() {
+        navigationRequests.begin()
+    }
+
     fun goToLibrary(folderId: String?) {
+        navigationRequests.begin()
         navController.navigate(LibraryDestination.createRoute(folderId))
     }
 
+    /** Leave the note directly, removing editor/page-manager entries above the library. */
+    fun exitEditor(folderId: String?) {
+        navigationRequests.begin()
+        navController.navigate(LibraryDestination.createRoute(folderId)) {
+            popUpTo(navController.graph.id) { inclusive = false }
+            launchSingleTop = true
+        }
+    }
+
     fun goToEditor(pageId: String, bookId: String?) {
+        navigationRequests.begin()
         navController.navigate(EditorDestination.createRoute(pageId, bookId))
     }
 
     fun goBack() {
+        navigationRequests.begin()
         navController.popBackStack()
     }
 
     fun goToWelcome() {
+        navigationRequests.begin()
         navController.navigate(WelcomeDestination.route)
     }
 
     fun goToSystemInfo() {
+        navigationRequests.begin()
         navController.navigate(SystemInformationDestination.route)
     }
 
     fun goToTrash() {
+        navigationRequests.begin()
         navController.navigate(TrashDestination.route)
     }
 
     fun goToBugReport(){
+        navigationRequests.begin()
         navController.navigate(BugReportDestination.route)
     }
 
     fun goToPages(bookId: String) {
+        navigationRequests.begin()
         navController.navigate(PagesDestination.createRoute(bookId))
     }
 
     fun goToPage(appRepository: AppRepository, pageId: String) {
+        val request = navigationRequests.begin()
+        if (pageId == currentPageId) return
         coroutineScope.launch {
-            val bookId = runCatching {
+            val page = try {
                 withContext(Dispatchers.IO) {
-                    appRepository.pageRepository.getById(pageId)?.notebookId
+                    val target = appRepository.pageRepository.getById(pageId) ?: return@withContext null
+                    val book = appRepository.bookRepository.getById(target.notebookId)
+                    if (book == null || book.deletedAt != null || pageId !in book.pageIds) {
+                        return@withContext null
+                    }
+                    target
                 }
-            }.onFailure {
-                log.d("failed to resolve bookId for $pageId", it)
-            }.getOrNull()
-            val url = EditorDestination.createRoute(pageId, bookId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                log.w("Failed to resolve navigation target $pageId", error)
+                null
+            } ?: return@launch
+            if (!navigationRequests.isCurrent(request)) return@launch
+            val url = EditorDestination.createRoute(pageId, page.notebookId)
             log.d("navigate -> $url")
-            navController.navigate(url)
+            navController.navigate(url) { launchSingleTop = true }
         }
     }
 
@@ -165,10 +196,12 @@ class NotableNavigator(
      * and can be recovered from the Trash. None of which a loose page could do.
      */
     fun onCreateNewNote(appRepository: AppRepository, folderId: String?) {
+        val request = navigationRequests.begin()
         coroutineScope.launch {
             val (bookId, pageId) = withContext(Dispatchers.IO) {
                 appRepository.createNewNote(parentFolderId = folderId)
             } ?: return@launch
+            if (!navigationRequests.isCurrent(request)) return@launch
             navController.navigate(EditorDestination.createRoute(pageId, bookId))
         }
     }
