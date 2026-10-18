@@ -343,6 +343,7 @@ fun LibraryContent(
                 selectedFolderId = uiState.folderId,
                 isSyncing = uiState.isSyncing,
                 onSelectFolder = onNavigateToFolder,
+                onOpenNotebook = onNavigateToEditor,
                 onSyncNow = onSyncNow,
             )
 

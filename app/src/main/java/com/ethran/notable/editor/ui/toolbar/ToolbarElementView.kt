@@ -31,7 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
+import com.ethran.notable.ui.components.ScaledPopup
 import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.BUTTON_SIZE
@@ -228,7 +228,7 @@ private fun ShapeSubmenu(
 ) {
     val placement = toolbarPopupPlacement()
 
-    Popup(
+    ScaledPopup(
         offset = placement.offset,
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
@@ -321,7 +321,7 @@ internal fun eraserDescription(eraser: Eraser): String =
 private fun EraserSubmenu(onAction: (ToolbarAction) -> Unit) {
     val placement = toolbarPopupPlacement()
 
-    Popup(
+    ScaledPopup(
         offset = placement.offset,
         onDismissRequest = { onAction(ToolbarAction.ToggleEraserManu(false)) },
         properties = PopupProperties(focusable = true),

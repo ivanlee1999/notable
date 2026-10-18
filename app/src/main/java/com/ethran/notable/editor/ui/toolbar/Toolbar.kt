@@ -38,7 +38,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
+import com.ethran.notable.ui.components.ScaledPopup
 import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.BUTTON_SIZE
@@ -240,6 +240,7 @@ private fun HorizontalRail(
                     .horizontalScroll(rememberScrollState())
             ) {
                 renderGroup(groups.tools)
+                QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()
                 renderGroup(groups.history)
@@ -313,7 +314,7 @@ private fun InkSwatch(
         )
     }
 
-    if (isOpen) Popup(
+    if (isOpen) ScaledPopup(
         offset = placement.offset,
         onDismissRequest = { isOpen = false },
         properties = PopupProperties(focusable = true),
@@ -407,6 +408,7 @@ private fun VerticalRail(
                     .verticalScroll(rememberScrollState())
             ) {
                 renderGroup(groups.tools)
+                QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()
                 renderGroup(groups.history)
@@ -505,6 +507,42 @@ private fun NibCell(
                 .size(diameter)
                 .background(if (selected) Kaleido.Paper else Kaleido.Ink, CircleShape)
         )
+    }
+}
+
+/** Stable one-tap inks, alongside the full palette. Never reorder on selection. */
+internal fun quickInkOptions(inks: List<Int>): List<Int> {
+    val preferred = listOf(0x201E1D, 0x000000, 0x1B4FA0, 0xAE1800)
+        .mapNotNull { rgb -> inks.firstOrNull { it and 0xFFFFFF == rgb } }
+    return (preferred + inks).distinct().take(3)
+}
+
+@Composable
+private fun QuickInkSwatches(uiState: ToolbarUiState, onAction: (ToolbarAction) -> Unit) {
+    val (current, inks) = inkOptions(uiState) ?: return
+    ToolbarDivider()
+    for (ink in quickInkOptions(inks)) {
+        val selected = current.color == ink
+        Box(
+            Modifier
+                .size(BUTTON_SIZE.dp)
+                .semantics {
+                    contentDescription = "Quick " + inkDescription(ink).replaceFirst("Ink:", "ink:")
+                    this.selected = selected
+                }
+                .noRippleClickable {
+                    onAction(ToolbarAction.ChangePenSetting(
+                        uiState.penPresetId, PenSetting(current.strokeSize, ink)
+                    ))
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(29.dp)
+                .border(if (selected) 2.dp else 0.dp, Kaleido.Ink, CircleShape)
+                .padding(4.dp)
+                .background(Color(ink), CircleShape)
+                .border(1.dp, Kaleido.Edge, CircleShape))
+        }
     }
 }
 

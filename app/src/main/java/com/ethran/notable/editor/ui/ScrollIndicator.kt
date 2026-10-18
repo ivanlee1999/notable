@@ -15,12 +15,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ethran.notable.editor.EditorViewModel
 import com.ethran.notable.editor.PageView
-import com.ethran.notable.ui.convertDpToPixel
 
 /**
  * Vertical scroll indicator (right side).
@@ -35,7 +33,7 @@ fun ScrollIndicator(viewModel: EditorViewModel, page: PageView) {
             .width(5.dp)
             .fillMaxHeight()
     ) {
-        val viewportHeightPx = convertDpToPixel(this.maxHeight, LocalContext.current).toInt()
+        val viewportHeightPx = constraints.maxHeight
 
         // All page units inside — the viewport's pixel extent only means anything on the page
         // once divided by the zoom. See [ScrollIndicatorGeometry].
@@ -78,7 +76,7 @@ fun HorizontalScrollIndicator(viewModel: EditorViewModel, page: PageView) {
                 .height(5.dp)
                 .fillMaxWidth()
         ) {
-            val viewportWidthPx = convertDpToPixel(this.maxWidth, LocalContext.current).toInt()
+            val viewportWidthPx = constraints.maxWidth
 
             // The extent is deliberately the page's own sheet rather than the ink extent
             // (PageDataManager.computeWidth): that takes a lock and walks every stroke, which is

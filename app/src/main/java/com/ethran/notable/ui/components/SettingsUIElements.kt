@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.components
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -10,6 +11,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.remember
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.ethran.notable.ui.theme.Kaleido
@@ -22,7 +33,6 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -140,7 +150,8 @@ fun SettingSliderRow(
             valueRange = valueRange,
             steps = steps,
             onValueChange = { draft = it },
-            onValueChangeFinished = { onValueChangeFinished(draft) }
+            onValueChangeFinished = { onValueChangeFinished(draft) },
+            modifier = Modifier.semantics { contentDescription = label }
         )
     }
 
@@ -191,6 +202,30 @@ private fun StepSlider(
         modifier = modifier
             .fillMaxWidth()
             .height(SliderHeight)
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange, steps)
+                setProgress { requested ->
+                    val index = ((requested - valueRange.start) / span * intervals)
+                        .roundToInt().coerceIn(0, intervals)
+                    currentOnValueChange(valueRange.start + index * span / intervals)
+                    currentOnValueChangeFinished()
+                    true
+                }
+            }
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                val next = when (event.key) {
+                    Key.DirectionRight, Key.DirectionUp -> value + span / intervals
+                    Key.DirectionLeft, Key.DirectionDown -> value - span / intervals
+                    Key.MoveHome -> valueRange.start
+                    Key.MoveEnd -> valueRange.endInclusive
+                    else -> return@onKeyEvent false
+                }
+                currentOnValueChange(next.coerceIn(valueRange))
+                currentOnValueChangeFinished()
+                true
+            }
+            .focusable()
             .pointerInput(valueRange, steps) {
                 detectTapGestures { offset ->
                     currentOnValueChange(valueAt(offset.x))

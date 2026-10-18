@@ -10,13 +10,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.BUTTON_SIZE
 import com.ethran.notable.data.datastore.GlobalAppSettings
-import com.ethran.notable.ui.convertDpToPixel
 import com.ethran.notable.ui.theme.Kaleido
 
 /**
@@ -37,9 +36,9 @@ data class ToolbarPopupPlacement(
 
 @Composable
 fun toolbarPopupPlacement(): ToolbarPopupPlacement {
-    val context = LocalContext.current
+    val density = LocalDensity.current
     // One button plus a hairline: enough to clear the rail without floating free of it.
-    val gap = convertDpToPixel(43.dp, context).toInt()
+    val gap = with(density) { 43.dp.roundToPx() }
     val clear = (BUTTON_SIZE + 5).dp
 
     return when (GlobalAppSettings.current.toolbarPosition) {
@@ -69,10 +68,10 @@ fun toolbarPopupPlacement(): ToolbarPopupPlacement {
  */
 @Composable
 fun toolbarMenuPlacement(): ToolbarPopupPlacement {
-    val context = LocalContext.current
-    val drop = convertDpToPixel(50.dp, context).toInt()
-    val inset = convertDpToPixel(10.dp, context).toInt()
-    val gap = convertDpToPixel(43.dp, context).toInt()
+    val density = LocalDensity.current
+    val drop = with(density) { 50.dp.roundToPx() }
+    val inset = with(density) { 10.dp.roundToPx() }
+    val gap = with(density) { 43.dp.roundToPx() }
     val clear = (BUTTON_SIZE + 5).dp
 
     return when (GlobalAppSettings.current.toolbarPosition) {

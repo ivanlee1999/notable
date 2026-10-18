@@ -264,6 +264,21 @@ class ToolRailTest {
     }
 
     @Test
+    fun quickBlueInkChangesColorInOneTapWithoutOpeningThePalette() {
+        val actions = rail(state(), position = AppSettings.Position.Left)
+        val target = Kaleido.Inks[8]
+        composeRule.onNodeWithContentDescription("Quick ink: Blue")
+            .performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        val change = actions.filterIsInstance<ToolbarAction.ChangePenSetting>().single()
+        assertEquals(ballpen.id, change.presetId)
+        assertEquals(target, change.setting.color)
+        assertEquals(ballpen.size, change.setting.strokeSize)
+        assertEquals(0, countMatching { it.startsWith("Ink:") })
+    }
+
+    @Test
     fun tappingAnInkWritesItToThePenInHand() {
         val actions = rail(state(), position = AppSettings.Position.Left)
         val target = Kaleido.Inks.last()

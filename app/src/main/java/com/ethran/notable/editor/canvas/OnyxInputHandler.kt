@@ -280,9 +280,15 @@ class OnyxInputHandler(
             cancelPendingScreenFreezeReset()
             // Check if drawing is completed
             CanvasEventBus.waitForDrawing()
-            // draw to view, before showing drawing, avoid stutter
-            drawCanvas.refreshManager.drawCanvasToView(null)
-            touchHelper!!.setRawDrawingEnabled(false)
+            // The raw layer must outlive the bitmap post, including the main-thread hop.
+            // Recheck the mode in that callback: another toolbar action may have re-enabled
+            // drawing while this frame was queued. A failed post must retain the existing ink.
+            drawCanvas.refreshManager.drawCanvasToView(null) { posted ->
+                handoffPostedFrame(posted, isCurrent = { !toolbarState.isDrawing }) {
+                    cancelPendingScreenFreezeReset()
+                    touchHelper?.setRawDrawingEnabled(false)
+                }
+            }
         }
     }
 

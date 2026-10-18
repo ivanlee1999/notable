@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenPageTest {
 
     private fun loaded(id: String, background: String) =
-        OpenPage(id, Page(id = id, background = background), pageNumber = 0)
+        OpenPage(id, Page(id = id, notebookId = "book", background = background), pageNumber = 0)
 
     @Test
     fun load_for_the_shown_page_is_published() {

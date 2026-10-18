@@ -22,7 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
+import com.ethran.notable.ui.components.ScaledPopup
 import androidx.compose.ui.window.PopupProperties
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.BUTTON_SIZE
@@ -45,7 +45,7 @@ fun ToolbarMenu(
 ) {
     val placement = toolbarMenuPlacement()
 
-    Popup(
+    ScaledPopup(
         alignment = placement.alignment,
         onDismissRequest = {
                 onAction(ToolbarAction.ToggleMenu)

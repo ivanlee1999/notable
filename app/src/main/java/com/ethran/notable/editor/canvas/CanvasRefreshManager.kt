@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import android.os.Handler
 import android.os.Looper
 import com.ethran.notable.data.model.SimplePointF
 import com.ethran.notable.editor.EditorViewModel
@@ -14,11 +15,11 @@ import com.ethran.notable.editor.utils.DeviceCompat
 import com.ethran.notable.editor.utils.pointsToPath
 import com.ethran.notable.editor.utils.refreshScreenRegion
 import com.ethran.notable.editor.utils.resetScreenFreeze
-import com.ethran.notable.utils.logCallStack
 import com.onyx.android.sdk.api.device.epd.EpdController
 import com.onyx.android.sdk.pen.TouchHelper
 import io.shipbook.shipbooksdk.Log
 import io.shipbook.shipbooksdk.ShipBook
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 
 class CanvasRefreshManager(
@@ -28,45 +29,42 @@ class CanvasRefreshManager(
     private val touchHelper: TouchHelper?
 ) {
     private val log = ShipBook.getLogger("DrawCanvas")
+    private val frameHandler = Handler(Looper.getMainLooper())
 
     fun refreshUi(dirtyRect: Rect?) {
         log.d("refreshUi: scroll: ${page.scroll}, zoom: ${page.zoomLevel.value}")
 
-        // post what page drawn to visible surface
-        drawCanvasToView(dirtyRect)
-        if (CanvasEventBus.drawingInProgress.isLocked)
-            log.w("Drawing is still in progress there might be a bug.")
-
-        // Use only if you have confidence that there are no strokes being drawn at the moment
-        if (!viewModel.toolbarState.value.isDrawing) {
-            log.w("Not in drawing mode, skipping unfreezing")
-            return
-        }
-        // reset screen freeze
-        resetScreenFreeze(touchHelper)
-        log.d("refreshUi: done")
+        postRefresh(dirtyRect)
     }
 
     suspend fun refreshUiSuspend() {
-        // Do not use, if refresh need to be preformed without delay.
-        // This function waits for strokes to be fully rendered.
-        if (!viewModel.toolbarState.value.isDrawing) {
-            CanvasEventBus.waitForDrawing()
-            drawCanvasToView(null)
-            log.w("Not in drawing mode -- refreshUi ")
-            return
-        }
-        if (Looper.getMainLooper().isCurrentThread) {
-            log.w(
-                "refreshUiSuspend() is called from the main thread."
-            )
-            logCallStack("refreshUiSuspend_main_thread")
-        } else log.v(
-            "refreshUiSuspend() is called from the non-main thread."
-        )
+        // Wait for both the stroke work and the actual SurfaceHolder post. Merely scheduling
+        // View.post leaves the old bitmap on screen while the firmware ink is cleared.
         CanvasEventBus.waitForDrawing()
-        drawCanvasToView(null)
-        resetScreenFreeze(touchHelper)
+        val completed = CompletableDeferred<Unit>()
+        postRefresh(null) { completed.complete(Unit) }
+        completed.await()
+    }
+
+    private fun postRefresh(dirtyRect: Rect?, onComplete: () -> Unit = {}) {
+        val pageId = page.currentPageId
+        val inkGeneration = page.inkHandoffGuard.generation
+        drawCanvasToView(dirtyRect) { posted ->
+            try {
+                // Recheck mode here: selection/page transitions can happen while this frame
+                // is queued. Never clear the raw layer if no replacement frame was posted.
+                if (posted && page.currentPageId == pageId &&
+                    viewModel.toolbarState.value.isDrawing &&
+                    !CanvasEventBus.drawingInProgress.isLocked
+                ) {
+                    page.inkHandoffGuard.runIfIdle(inkGeneration) {
+                        resetScreenFreeze(touchHelper)
+                    }
+                }
+            } finally {
+                onComplete()
+            }
+        }
     }
 
     /**
@@ -132,54 +130,35 @@ class CanvasRefreshManager(
         }
     }
 
-    fun drawCanvasToView(dirtyRect: Rect?, onPosted: (() -> Unit)? = null) {
-        drawCanvas.post {
-            val zoneToRedraw = dirtyRect ?: Rect(0, 0, page.viewWidth, page.viewHeight)
-            var canvas: Canvas? = null
-            try {
-                log.v("Canvas refresh started, dirtyRect: $zoneToRedraw, bitmap: ${page.windowedBitmap.hashCode()}, thread: ${Thread.currentThread().name}")
-                // Lock the canvas only for the dirtyRect region
-                canvas = drawCanvas.holder.lockCanvas(zoneToRedraw)
-                if (canvas == null) {
-                    log.e(
-                        "FAILED to lock canvas (surface invalid/destroyed or locked by another " +
-                            "thread). page=${page.currentPageId}, dirtyRect=$zoneToRedraw, " +
-                            "surfaceValid=${drawCanvas.holder.surface?.isValid}, " +
-                            "thread=${Thread.currentThread().name}"
-                    )
-                    return@post
-                }
-                canvas.drawBitmap(page.windowedBitmap, zoneToRedraw, zoneToRedraw, Paint())
-
-                if (viewModel.toolbarState.value.mode == Mode.Select) {
-                    // render selection, but only within dirtyRect
-                    viewModel.selectionState.firstPageCut?.let { cutPoints ->
-                        log.i("render cut")
-                        val path = pointsToPath(cutPoints.map {
-                            SimplePointF(
-                                it.x - page.scroll.x, it.y - page.scroll.y
-                            )
-                        })
-                        canvas.drawPath(path, selectPaint)
-                    }
-                }
-            } catch (e: IllegalStateException) {
-                log.w("Surface released during draw", e)
-                // ignore — surface is gone
-            } finally {
-                try {
-                    if (canvas != null) {
-                        log.d("drawCanvasToView: page=${page.currentPageId} bitmap=${page.windowedBitmap.hashCode()}")
-                        drawCanvas.holder.unlockCanvasAndPost(canvas)
-                    }
-                    log.v("Canvas refreshed")
-                } catch (e: IllegalStateException) {
-                    log.w("Surface released during unlock", e)
-                } finally {
-                    onPosted?.invoke()
-                }
-            }
-        }
+    /** [onPosted] reports whether drawing AND posting succeeded, including queue rejection. */
+    fun drawCanvasToView(dirtyRect: Rect?, onPosted: ((Boolean) -> Unit)? = null) {
+        val dirty = dirtyRect?.let(::Rect)
+        enqueueSurfaceFrame(
+            // View.post retains work until reattachment. A destroyed editor may never
+            // reattach, so use the main looper and explicitly reject detached surfaces.
+            enqueue = { frame -> frameHandler.post { frame() } },
+            render = render@{
+                if (!drawCanvas.isAttachedToWindow) return@render false
+                val zoneToRedraw = dirty ?: Rect(0, 0, page.viewWidth, page.viewHeight)
+                postSurfaceFrame(
+                    lock = { drawCanvas.holder.lockCanvas(zoneToRedraw) },
+                    draw = { canvas ->
+                        canvas.drawBitmap(page.windowedBitmap, zoneToRedraw, zoneToRedraw, Paint())
+                        if (viewModel.toolbarState.value.mode == Mode.Select) {
+                            viewModel.selectionState.firstPageCut?.let { cutPoints ->
+                                val path = pointsToPath(cutPoints.map {
+                                    SimplePointF(it.x - page.scroll.x, it.y - page.scroll.y)
+                                })
+                                canvas.drawPath(path, selectPaint)
+                            }
+                        }
+                    },
+                    unlockAndPost = { drawCanvas.holder.unlockCanvasAndPost(it) },
+                    onFailure = { log.w("Surface released during bitmap post", it) },
+                )
+            },
+            onPosted = { onPosted?.invoke(it) },
+        )
     }
 
 

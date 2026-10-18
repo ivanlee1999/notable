@@ -344,8 +344,10 @@ fun resetScreenFreeze(touchHelper: TouchHelper?, view: View? = null) {
     // Cancel any pending resume and re-arm. While calls keep arriving (e.g. during a scroll)
     // raw drawing stays disabled; only the last call's delay completes and re-enables it once.
     screenFreezeResetJob?.cancel()
+    // Clear synchronously with the validated bitmap handoff. Scheduling this clear on a
+    // background dispatcher can erase the start of the next stroke after the check passed.
+    touchHelper.isRawDrawingRenderEnabled = false
     screenFreezeResetJob = screenFreezeScope.launch {
-        touchHelper.isRawDrawingRenderEnabled = false
         DeviceCompat.delayBeforeResumingDrawing()
         touchHelper.isRawDrawingRenderEnabled = true
     }

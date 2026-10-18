@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 
 
 /** Which way into the notebook the panel is showing. */
-enum class QuickNavTab { PAGES, OUTLINE, BOOKMARKS, PINNED }
+enum class QuickNavTab { NOTES, PAGES, OUTLINE, BOOKMARKS, PINNED }
 
 data class QuickNavUiState(
     val isLoading: Boolean = true,
@@ -55,7 +55,12 @@ data class QuickNavUiState(
     val currentBookIndex: Int = 0,
     val favoriteIndexesInBook: List<Int> = emptyList(),
     val bookPageIds: List<String> = emptyList()
-)
+) {
+    /** Clear only page-specific state; jumping within a tab must not close that tab. */
+    fun forPage(pageId: String?) = QuickNavUiState(
+        currentPageId = pageId, isLoading = pageId != null, tab = tab,
+    )
+}
 
 
 class QuickNavViewModel(
@@ -77,7 +82,7 @@ class QuickNavViewModel(
     // Initialize data when the ViewModel is created or when a new page is opened
     fun loadPageData(currentPageId: String?) {
         loadJob?.cancel()
-        _uiState.value = QuickNavUiState(currentPageId = currentPageId, isLoading = currentPageId != null)
+        _uiState.update { it.forPage(currentPageId) }
         if (currentPageId == null) return
 
         loadJob = viewModelScope.launch(Dispatchers.IO) {

@@ -171,8 +171,10 @@ class PageView(
         return if (record === shown.record) shown else shown.copy(record = record)
     }
 
+    // Identity belongs to this view; reading it must not copy cached page metadata on
+    // every stroke/scroll access. Metadata consumers can still use the openPage snapshot.
     val currentPageId: String
-        get() = openPage.pageId
+        get() = openPageRef.get().pageId
 
 
     // scroll is observed by ui, represents top left corner
@@ -197,14 +199,18 @@ class PageView(
     val currentViewport: InkViewport
         get() = InkViewport(scroll, zoomLevel.value)
 
+    internal val inkHandoffGuard = com.ethran.notable.editor.canvas.InkHandoffGuard()
+
     /** Pen down: hold the view the firmware is about to paint this stroke onto. */
     fun beginInkCapture() {
+        inkHandoffGuard.begin()
         strokeViewport = currentViewport
     }
 
     /** Pen up, cancelled, or the page changed under the stroke: stop holding a view. */
     fun endInkCapture() {
         strokeViewport = null
+        inkHandoffGuard.end()
     }
 
     /**

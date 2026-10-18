@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.dialogs
 
+import com.ethran.notable.ui.components.ScaledDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement

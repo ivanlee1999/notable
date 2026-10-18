@@ -1,6 +1,7 @@
 package com.ethran.notable.ui.dialogs
 
 
+import com.ethran.notable.ui.components.ScaledDialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

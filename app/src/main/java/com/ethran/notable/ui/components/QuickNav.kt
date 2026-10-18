@@ -1,5 +1,13 @@
 package com.ethran.notable.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.lazy.items
+import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.datastore.RecentNotebooks
+import com.ethran.notable.data.datastore.recentNotebooks
+import com.ethran.notable.data.datastore.resumePageId
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -94,7 +102,9 @@ fun QuickNav(
     onClose: () -> Unit,
     goToPage: (String) -> Unit,
     goToFolder: (String?) -> Unit,
+    initialTab: QuickNavTab = QuickNavTab.PAGES,
 ) {
+    BackHandler(onBack = onClose)
     val context = LocalContext.current
     val entryPoint = remember(context) {
         EntryPoints.get(context.applicationContext, QuickNavEntryPoint::class.java)
@@ -117,6 +127,8 @@ fun QuickNav(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     // Load data when the page changes
+    LaunchedEffect(initialTab) { viewModel.selectTab(initialTab) }
+
     LaunchedEffect(currentPageId) {
         viewModel.loadPageData(currentPageId)
     }
@@ -233,6 +245,14 @@ fun QuickNavContent(
             // forty pages must not grow it until the page underneath is gone.
             Box(Modifier.heightIn(min = 140.dp, max = 320.dp)) {
                 when (uiState.tab) {
+                    QuickNavTab.NOTES -> NotesTab(
+                        appRepository = appRepository,
+                        currentBookId = uiState.bookId,
+                        onSelect = { pageId ->
+                            goToPage(pageId)
+                            onClose()
+                        },
+                    )
                     QuickNavTab.PAGES -> PagesTab(
                         pageIds = uiState.bookPageIds,
                         currentPageId = uiState.currentPageId,
@@ -372,16 +392,17 @@ private fun QuickNavHeaderRow(
 @Composable
 private fun QuickNavTabRow(selected: QuickNavTab, onSelect: (QuickNavTab) -> Unit) {
     val tabs = listOf(
+        QuickNavTab.NOTES to "Notes",
         QuickNavTab.PAGES to "Pages",
         QuickNavTab.OUTLINE to "Outline",
         QuickNavTab.BOOKMARKS to "Bookmarks",
         QuickNavTab.PINNED to "Pinned",
     )
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         tabs.forEach { (tab, label) ->
             Column(
                 modifier = Modifier
-                    .weight(1f)
+                    .width(100.dp)
                     .noRippleClickable { onSelect(tab) },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -390,7 +411,8 @@ private fun QuickNavTabRow(selected: QuickNavTab, onSelect: (QuickNavTab) -> Uni
                     fontSize = 13.sp,
                     fontWeight = if (tab == selected) FontWeight.Bold else FontWeight.Normal,
                     color = Color.Black,
-                    modifier = Modifier.padding(bottom = 5.dp)
+                    modifier = Modifier.padding(vertical = 14.dp),
+                    maxLines = 1
                 )
                 Box(
                     Modifier
@@ -398,6 +420,49 @@ private fun QuickNavTabRow(selected: QuickNavTab, onSelect: (QuickNavTab) -> Uni
                         .height(if (tab == selected) 2.dp else 1.dp)
                         .background(if (tab == selected) Color.Black else Color.LightGray)
                 )
+            }
+        }
+    }
+}
+
+/** Switch notes without a trip through the library. Recent first, then all other live notes. */
+@Composable
+private fun NotesTab(
+    appRepository: AppRepository?,
+    currentBookId: String?,
+    onSelect: (String) -> Unit,
+) {
+    if (appRepository == null) return
+    val context = LocalContext.current
+    val history = remember(context) { RecentNotebooks.get(context) }
+    val ids by history.ids.collectAsStateWithLifecycle()
+    val booksFlow = remember(appRepository) { appRepository.bookRepository.getAllFlow() }
+    val books by booksFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val ordered = remember(ids, books) {
+        val recent = recentNotebooks(ids, books)
+        val recentIds = recent.map { it.id }.toSet()
+        recent + books.filter { it.id !in recentIds && it.deletedAt == null && it.resumePageId() != null }
+            .sortedWith(compareBy<Notebook> { it.title.lowercase() }.thenBy { it.id })
+    }
+    if (ordered.isEmpty()) {
+        QuickNavEmpty("No notebooks to open yet.")
+        return
+    }
+    LazyColumn(Modifier.fillMaxWidth().autoEInkAnimationOnScroll()) {
+        items(ordered, key = { it.id }) { book ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .noRippleClickable { book.resumePageId()?.let(onSelect) }
+                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    book.title, modifier = Modifier.weight(1f),
+                    fontWeight = if (book.id == currentBookId) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                if (book.id == currentBookId) Text("Open", fontSize = 12.sp)
+                else if (book.id in ids) Text("Recent", fontSize = 12.sp)
             }
         }
     }
