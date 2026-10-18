@@ -156,12 +156,9 @@ jobs:
           path: app/schemas
           if-no-files-found: warn
 
-      # Advisory, not a gate. This codebase has never had a lint step, so turning one on as
-      # blocking would fail every PR on pre-existing findings rather than on the change under
-      # review. Report first; tighten once the baseline is clean.
+      # Errors gate the PR; warnings stay visible in the uploaded report.
       - name: Android Lint
         run: ./gradlew lintDebug
-        continue-on-error: true
 
       - name: Upload lint report
         if: always()

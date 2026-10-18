@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -102,6 +103,7 @@ fun NotebookConfigDialog(
     val couchSync = rememberCouchSyncController()
     val kvProxy = rememberKvProxy()
     val context = LocalContext.current
+    val resources = LocalResources.current
 
     // `update` records the outbox entry in the same transaction as the row, so every write below
     // is durably queued whether or not anything here remembers to say so. The call after it is
@@ -420,7 +422,7 @@ fun NotebookConfigDialog(
                     scope.launch {
                         val outcome = requestNotebookSync(kvProxy, syncScheduler, bookId)
                         snackManager.displaySnack(
-                            SnackConf(text = context.getString(outcome.messageRes()), duration = 3000)
+                            SnackConf(text = resources.getString(outcome.messageRes()), duration = 3000)
                         )
                     }
                 }

@@ -93,6 +93,7 @@ class CouchEndToEndTest {
     private lateinit var observed: File
     private lateinit var client: CouchDbClient
     private lateinit var database: String
+    private var databaseCreated = false
 
     @Before
     fun setUp() {
@@ -102,6 +103,7 @@ class CouchEndToEndTest {
         // "this peer had nothing to push back" would be answering for the whole class.
         database = "notable-e2e-${UUID.randomUUID().toString().take(12)}"
         admin("PUT", "$url/$database")
+        databaseCreated = true
         // The sync account has to be able to read and write it, or every request is a 401.
         admin(
             "PUT", "$url/$database/_security",
@@ -117,12 +119,21 @@ class CouchEndToEndTest {
 
     @After
     fun tearDown() {
-        if (url == null) return
-        db.close()
-        images.deleteRecursively()
-        backgrounds.deleteRecursively()
-        observed.deleteRecursively()
-        admin("DELETE", "$url/$database")
+        // Setup may fail before Room or the temporary folders exist. Still release every
+        // resource that was created, without hiding the original failure behind lateinit.
+        val errors = mutableListOf<Throwable>()
+        fun cleanUp(action: () -> Unit) {
+            runCatching(action).exceptionOrNull()?.let { errors.add(it) }
+        }
+        if (::db.isInitialized) cleanUp { db.close() }
+        if (::images.isInitialized) cleanUp { images.deleteRecursively() }
+        if (::backgrounds.isInitialized) cleanUp { backgrounds.deleteRecursively() }
+        if (::observed.isInitialized) cleanUp { observed.deleteRecursively() }
+        if (databaseCreated) cleanUp { admin("DELETE", "$url/$database") }
+        errors.firstOrNull()?.let { first ->
+            errors.drop(1).forEach { first.addSuppressed(it) }
+            throw first
+        }
     }
 
     // region Fixtures
@@ -749,6 +760,8 @@ class CouchEndToEndTest {
         fun admin(method: String, target: String, body: String? = null) {
             val connection = (URL(target).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
+                connectTimeout = 15_000
+                readTimeout = 30_000
                 val credentials = Base64.getEncoder()
                     .encodeToString("$adminUser:$adminPassword".toByteArray())
                 setRequestProperty("Authorization", "Basic $credentials")
