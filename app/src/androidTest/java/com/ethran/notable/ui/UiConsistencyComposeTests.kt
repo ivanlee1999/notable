@@ -33,6 +33,8 @@ import androidx.compose.material.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -71,10 +73,10 @@ class UiConsistencyComposeTests {
     private val compose = createComposeRule()
     @get:Rule val composeGate = ComposeUiSupportRule(compose)
 
-    private fun content(width: Int = 320, fontScale: Float = 1f, body: @Composable () -> Unit) {
+    private fun content(width: Int = 320, fontScale: Float = 1f, height: Int = 900, body: @Composable () -> Unit) {
         compose.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(width.dp, 900.dp)) then
+                DeviceConfigurationOverride.ForcedSize(DpSize(width.dp, height.dp)) then
                     DeviceConfigurationOverride.FontScale(fontScale)
             ) {
                 CompositionLocalProvider(LocalInspectionMode provides true) {
@@ -363,6 +365,7 @@ class UiConsistencyComposeTests {
             )
         }
         compose.onNodeWithText("Pages").assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
         compose.onNodeWithText("Notebooks").performClick().assertIsSelected()
         compose.onNodeWithText("Pages").assertIsNotSelected().performClick()
         compose.onNodeWithContentDescription("Close navigation")
@@ -370,6 +373,40 @@ class UiConsistencyComposeTests {
         assertEquals(1, closes)
         assertEquals(0, navigations)
         screenshot("navigation-sheet-320-large-text")
+    }
+
+    @Test
+    fun shortNavigationKeepsCloseTabsScrubberAndEveryPageReachable() {
+        val opened = mutableListOf<String>()
+        var closed = false
+        content(width = 600, height = 320, fontScale = 1.5f) {
+            QuickNavContent(
+                appRepository = null,
+                uiState = QuickNavUiState(isLoading = false, tab = QuickNavTab.PAGES,
+                    bookId = "book", currentPageId = "p1", bookPageCount = 12,
+                    bookPageIds = (1..12).map { "p$it" }),
+                onClose = { closed = true }, onNavigateBreadcrumb = {}, onSelectTab = {},
+                onToggleBookmark = {}, onSetBookmark = { _, _ -> }, onTogglePinned = {},
+                onAddOutlineEntry = { _, _ -> }, onRenameOutlineEntry = { _, _ -> },
+                onChangeOutlineDepth = { _, _ -> }, onRemoveOutlineEntry = {}, onMoveOutlineEntry = { _, _ -> },
+                onGenerateBookPreviews = {}, onScrubStart = {}, onScrubPreview = {}, onScrubEnd = {},
+                onReturnClick = {}, goToPage = opened::add,
+            )
+        }
+        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
+        compose.onNodeWithText("Pages").assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+        compose.onNodeWithTag("navigation-page-scrubber").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(11)
+        compose.onNodeWithContentDescription("Open page 12").assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(listOf("p12"), opened)
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Open page 1").assertIsDisplayed().performClick()
+        assertEquals(listOf("p12", "p1"), opened)
+        screenshot("navigation-sheet-short-large-text")
+        compose.onNodeWithContentDescription("Close navigation").performClick()
+        assertTrue(closed)
     }
 
     @Test
