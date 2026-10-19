@@ -110,9 +110,10 @@ class ToolRailTest {
         width: Dp? = null,
         height: Dp? = null,
         position: AppSettings.Position = AppSettings.Position.Top,
+        greyscale: Boolean = false,
     ): MutableList<ToolbarAction> {
         val actions = mutableListOf<ToolbarAction>()
-        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position))
+        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position, greyscaleInks = greyscale))
         composeRule.setContent {
             var modifier: Modifier = Modifier
             if (width != null) modifier = modifier.width(width)
@@ -361,6 +362,17 @@ class ToolRailTest {
         composeRule.onNodeWithContentDescription("Choose ink").performClick()
         composeRule.onNodeWithContentDescription("Ink: Blue").assertIsDisplayed()
         screenshot("editor-palette-narrow", popup = true)
+    }
+
+    @Test
+    fun greyscalePaletteUsesReadableNamesForEveryBuiltInInk() {
+        rail(state(), width = NARROW_WIDTH, greyscale = true)
+        composeRule.onNodeWithContentDescription("Choose ink").performClick()
+        listOf("Black", "Dark grey", "Grey", "Light grey", "White").forEach { name ->
+            composeRule.onNodeWithContentDescription("Ink: $name").assertIsDisplayed()
+            composeRule.onNodeWithText(name).assertIsDisplayed()
+        }
+        screenshot("editor-palette-greyscale", popup = true)
     }
 
     /** How many nodes carry [description] — the overflow puts several behind the same one. */
