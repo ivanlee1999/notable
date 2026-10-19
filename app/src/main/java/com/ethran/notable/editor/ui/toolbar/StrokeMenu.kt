@@ -3,7 +3,8 @@ package com.ethran.notable.editor.ui.toolbar
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import com.ethran.notable.ui.noRippleClickable
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +31,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -68,7 +76,7 @@ fun StrokeMenu(
                 .padding(placement.padding) // keeps the menu on screen against the docked edge
         ) {
 
-            val widthOfPicker = (35 * colorOptions.size.coerceAtLeast(5))
+            val widthOfPicker = (48 * colorOptions.size.coerceAtLeast(5)).coerceAtMost(320)
             val heightOfPicker = 40
 
             // Docked at the bottom the menu grows upwards, so the sizes — the thing the
@@ -92,7 +100,7 @@ fun StrokeMenu(
                     value = value,
                     onChange = onChange,
                     colorOptions = colorOptions,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                    modifier = Modifier.align(Alignment.CenterHorizontally).width(widthOfPicker.dp)
                 )
             } else {
                 // Original order: colors first, then size
@@ -100,7 +108,7 @@ fun StrokeMenu(
                     value = value,
                     onChange = onChange,
                     colorOptions = colorOptions,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                    modifier = Modifier.align(Alignment.CenterHorizontally).width(widthOfPicker.dp)
                 )
 
                 Spacer(Modifier.height(6.dp))
@@ -135,7 +143,7 @@ fun ColumnScope.StrokeSizePicker(
             value,
             onChange,
             sizeOptions,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
+            modifier = Modifier.align(Alignment.CenterHorizontally).width(widthOfPicker.dp)
         )
     } else {
         val sizes = sizeOptions.map { it.second }
@@ -154,6 +162,7 @@ fun ColumnScope.StrokeSizePicker(
                 .width(widthOfPicker.dp)   // shorter than full width
                 .height(heightOfPicker.dp)   // compact height
                 .padding(horizontal = 10.dp, vertical = 8.dp)
+                .semantics { contentDescription = "Stroke width" }
         )
     }
 }
@@ -176,26 +185,22 @@ private fun ColorPicker(
             .height(IntrinsicSize.Max)
     }
 
-    Row(rowModifier) {
-        colorOptions.map { color ->
+    Row(rowModifier.horizontalScroll(rememberScrollState())) {
+        colorOptions.forEach { color ->
+            val ink = color.toArgb()
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(48.dp)
                     .background(color)
                     .border(
                         3.dp, if (color == Color(value.color)) Color.Black else Color.Transparent
                     )
-                    .clickable {
-                        onChange(
-                            PenSetting(
-                                strokeSize = value.strokeSize, color = android.graphics.Color.argb(
-                                    (color.alpha * 255).toInt(),
-                                    (color.red * 255).toInt(),
-                                    (color.green * 255).toInt(),
-                                    (color.blue * 255).toInt()
-                                )
-                            )
-                        )
+                    .semantics {
+                        contentDescription = inkDescription(ink)
+                        selected = ink == value.color
+                    }
+                    .noRippleClickable {
+                        onChange(PenSetting(strokeSize = value.strokeSize, color = ink))
                     }
                     .padding(8.dp))
         }
@@ -220,7 +225,8 @@ private fun ThicknessPicker(
     Row(
         modifier = modifier
             .background(Color.White)
-            .border(1.dp, Color.Black),
+            .border(1.dp, Color.Black)
+            .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.Center
     ) {
         sizeOptions.forEach {
@@ -253,6 +259,9 @@ private fun DiscreteThicknessSlider(
     modifier: Modifier = Modifier,
 ) {
     if (values.size < 2) return // Require at least two values to define a range
+    // Pointer handlers survive ink changes when the range is unchanged. Keep their callback
+    // current so changing the width cannot restore a color captured when the popup opened.
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
 
     // Use only sorted, distinct values
     val displayValues = values.distinct().sorted()
@@ -285,13 +294,13 @@ private fun DiscreteThicknessSlider(
             .pointerInput(displayValues) {
                 detectTapGestures { offset ->
                     val w = size.width.coerceAtLeast(1)
-                    onValueChange(snapToNearestInt(offset.x / w))
+                    currentOnValueChange(snapToNearestInt(offset.x / w))
                 }
             }
             .pointerInput(displayValues) {
                 detectDragGestures(onDrag = { change, _ ->
                     val w = size.width.coerceAtLeast(1)
-                    onValueChange(snapToNearestInt(change.position.x / w))
+                    currentOnValueChange(snapToNearestInt(change.position.x / w))
                 })
             }) {
         Canvas(modifier = Modifier.matchParentSize()) {

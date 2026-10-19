@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.55.1
+
+- Name every built-in monochrome ink, including dark and light grey, in the palette.
+- Keep every discrete stroke width reachable on narrow screens when the continuous
+  stroke slider is disabled.
+- Size page-preview rows around both the thumbnail and its label, including large
+  text and intermediate-height navigation sheets.
+
+No database schema or sync-format change. Physical BOOX behavior remains unverified.
+
 ## 0.55.0
 
 - Give document navigation its own compact title bar, with direct exit, notebook

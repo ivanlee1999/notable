@@ -1,11 +1,15 @@
 package com.ethran.notable.gestures
 
 import android.graphics.Rect
+import android.view.View
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -49,11 +53,7 @@ class EditorGestureReceiverComposeTest {
     @Test
     fun quickSingleMoveSwipeReachesContinuousScrollAction() {
         val actions = RecordingGestureActions()
-        composeRule.setContent {
-            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
-                EditorGestureReceiver(actions)
-            }
-        }
+        showFocusedReceiver(actions)
 
         // Deliberately one MOVE event. This is the short e-ink-panel gesture that used to cross
         // the smooth-scroll threshold, establish its movement reference there, then lift with the
@@ -79,11 +79,7 @@ class EditorGestureReceiverComposeTest {
     @Test
     fun sidewaysSwipeDoesNotTurnThePageUnderContinuousScrolling() {
         val actions = RecordingGestureActions()
-        composeRule.setContent {
-            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
-                EditorGestureReceiver(actions)
-            }
-        }
+        showFocusedReceiver(actions)
 
         composeRule.onNodeWithTag("gesture-area").performTouchInput {
             down(Offset(width * 0.9f, center.y))
@@ -104,11 +100,7 @@ class EditorGestureReceiverComposeTest {
             )
         )
         val actions = RecordingGestureActions()
-        composeRule.setContent {
-            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
-                EditorGestureReceiver(actions)
-            }
-        }
+        showFocusedReceiver(actions)
 
         // Swipe left = next page, the paged default mapping.
         composeRule.onNodeWithTag("gesture-area").performTouchInput {
@@ -119,6 +111,33 @@ class EditorGestureReceiverComposeTest {
         composeRule.waitForIdle()
 
         assertTrue("a sideways swipe is Pagination's page turn", actions.nextPageCalls == 1)
+    }
+
+    private fun showFocusedReceiver(actions: GestureActions) {
+        var receiverView: View? = null
+        composeRule.setContent {
+            val view = LocalView.current
+            SideEffect { receiverView = view }
+            Box(Modifier.fillMaxSize().testTag("gesture-area")) {
+                EditorGestureReceiver(actions)
+            }
+        }
+        // Compose being idle does not mean the Activity's window has received focus yet.
+        // The production receiver rejects unfocused input, so establish its actual precondition
+        // before injecting the single gesture. Do not retry the gesture or weaken its assertions.
+        var hostState = "host has not been composed"
+        try {
+            composeRule.waitUntil(timeoutMillis = 5_000) {
+                composeRule.runOnIdle {
+                    val attached = receiverView?.isAttachedToWindow == true
+                    val focused = receiverView?.hasWindowFocus() == true
+                    hostState = "hostPresent=${receiverView != null}, attached=$attached, windowFocused=$focused"
+                    attached && focused
+                }
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            throw AssertionError("Gesture host did not become input-ready within 5000ms: $hostState", timeout)
+        }
     }
 
     private class RecordingGestureActions : GestureActions {
