@@ -151,6 +151,10 @@ private fun PenElementView(
 
     Box {
         ToolbarButton(
+            modifier = Modifier.semantics {
+                stateDescription = "${inkDescription(penSetting.color)}, width ${penSetting.strokeSize}" +
+                    if (isSelected) ", tap for pen options" else ""
+            },
             isSelected = isSelected,
             onSelect = {
                 if (isSelected) isStrokeMenuOpen = !isStrokeMenuOpen

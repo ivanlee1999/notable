@@ -13,6 +13,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +27,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import com.ethran.notable.ui.theme.Kaleido
+import androidx.compose.material.Icon
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
@@ -195,122 +207,135 @@ fun QuickNavContent(
 ) {
     var namingOutlineEntry by remember { mutableStateOf(false) }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .fillMaxHeight()
-    ) {
-        // Tap outside to dismiss
-        Spacer(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .noRippleClickable(onClick = onClose)
-        )
-
-        // Top divider above the sheet
-        Box(
-            modifier = Modifier
-                .height(1.dp)
-                .fillMaxWidth()
-                .background(Color.Black)
-        )
-
+    BoxWithConstraints(Modifier.fillMaxWidth().fillMaxHeight()) {
+        val compactHeight = maxHeight < 480.dp
         Column(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
-                .background(Color.White)
-                .padding(10.dp)
+                .fillMaxHeight()
         ) {
-
-            QuickNavHeaderRow(
-                folders = uiState.breadcrumbFolders,
-                isBookmarked = uiState.isCurrentPageBookmarked,
-                canToggleBookmark = uiState.currentPageId != null && uiState.bookId != null,
-                canGeneratePreviews = uiState.bookPageIds.isNotEmpty(),
-                canAddOutlineEntry = uiState.currentPageId != null && uiState.bookId != null,
-                onNavigateBreadcrumb = onNavigateBreadcrumb,
-                onToggleBookmark = onToggleBookmark,
-                onAddOutlineEntry = { namingOutlineEntry = true },
-                onGenerateBookPreviews = onGenerateBookPreviews
+            // Tap outside to dismiss
+            Spacer(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .noRippleClickable(onClick = onClose)
             )
 
-            Spacer(Modifier.height(8.dp))
+            // Top divider above the sheet
+            Box(
+                modifier = Modifier
+                    .height(1.dp)
+                    .fillMaxWidth()
+                    .background(Color.Black)
+            )
 
-            QuickNavTabRow(selected = uiState.tab, onSelect = onSelectTab)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .padding(10.dp)
+            ) {
 
-            Spacer(Modifier.height(10.dp))
-
-            // A fixed ceiling, not a weight: this sheet sits over the canvas, and a notebook of
-            // forty pages must not grow it until the page underneath is gone.
-            Box(Modifier.heightIn(min = 140.dp, max = 320.dp)) {
-                when (uiState.tab) {
-                    QuickNavTab.NOTES -> NotesTab(
-                        appRepository = appRepository,
-                        currentBookId = uiState.bookId,
-                        onSelect = { pageId ->
-                            goToPage(pageId)
-                            onClose()
-                        },
-                    )
-                    QuickNavTab.PAGES -> PagesTab(
-                        pageIds = uiState.bookPageIds,
-                        currentPageId = uiState.currentPageId,
-                        bookmarkedPageIds = uiState.bookmarkedPageIds,
-                        onSelectPage = goToPage,
-                        onSetBookmark = onSetBookmark,
-                        onAddOutlineEntry = onAddOutlineEntry,
-                    )
-
-                    QuickNavTab.OUTLINE -> OutlineTab(
-                        entries = uiState.outline,
-                        pageIds = uiState.bookPageIds,
-                        currentPageId = uiState.currentPageId,
-                        onSelectPage = goToPage,
-                        onRename = onRenameOutlineEntry,
-                        onChangeDepth = onChangeOutlineDepth,
-                        onRemove = onRemoveOutlineEntry,
-                        onMove = onMoveOutlineEntry,
-                    )
-
-                    QuickNavTab.BOOKMARKS -> BookmarksTab(
-                        pageIds = uiState.bookmarkedPageIds,
-                        allPageIds = uiState.bookPageIds,
-                        currentPageId = uiState.currentPageId,
-                        onSelectPage = goToPage,
-                        onRemoveBookmark = { onSetBookmark(it, false) },
-                    )
-
-                    QuickNavTab.PINNED -> PinnedTab(
-                        appRepository = appRepository,
-                        pages = uiState.pinnedPages,
-                        currentPageId = uiState.currentPageId,
-                        isCurrentPagePinned = uiState.isCurrentPagePinned,
-                        canPin = uiState.currentPageId != null,
-                        onTogglePinned = onTogglePinned,
-                        onSelectPage = goToPage,
-                    )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Navigate", fontSize = 18.sp, fontWeight = FontWeight.Medium,
+                        color = Kaleido.Ink, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    ToolbarButton(imageVector = Icons.Filled.Close,
+                        contentDescription = "Close navigation", onSelect = onClose)
                 }
-            }
 
-            // Below the tabs, not inside one: the scrubber crosses the notebook whichever tab is
-            // showing, and it is the fastest way to move on a panel that redraws slowly.
-            if (uiState.bookPageCount >= 2) {
-                Spacer(modifier = Modifier.height(12.dp))
+                if (uiState.tab != QuickNavTab.NOTES) QuickNavHeaderRow(
+                    folders = uiState.breadcrumbFolders,
+                    isBookmarked = uiState.isCurrentPageBookmarked,
+                    canToggleBookmark = uiState.currentPageId != null && uiState.bookId != null,
+                    canGeneratePreviews = uiState.bookPageIds.isNotEmpty(),
+                    canAddOutlineEntry = uiState.currentPageId != null && uiState.bookId != null,
+                    onNavigateBreadcrumb = onNavigateBreadcrumb,
+                    onToggleBookmark = onToggleBookmark,
+                    onAddOutlineEntry = { namingOutlineEntry = true },
+                    onGenerateBookPreviews = onGenerateBookPreviews
+                )
 
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    PageHorizontalSliderWithReturn(
-                        pageCount = uiState.bookPageCount,
-                        currentIndex = uiState.currentBookIndex,
-                        favIndexes = uiState.favoriteIndexesInBook,
-                        onDragStart = onScrubStart,
-                        onPreviewIndexChanged = onScrubPreview,
-                        onDragEnd = onScrubEnd,
-                        onReturnClick = onReturnClick
-                    )
+                Spacer(Modifier.height(8.dp))
+
+                QuickNavTabRow(selected = uiState.tab, onSelect = onSelectTab)
+
+                Spacer(Modifier.height(10.dp))
+
+                // Measure fixed controls first. The list gets the space left on short windows,
+                // and stays capped on tablets so the sheet does not cover all of the canvas.
+                Box(Modifier.weight(1f, fill = false).heightIn(max = 320.dp)) {
+                    when (uiState.tab) {
+                        QuickNavTab.NOTES -> NotesTab(
+                            appRepository = appRepository,
+                            currentBookId = uiState.bookId,
+                            onSelect = { pageId ->
+                                goToPage(pageId)
+                                onClose()
+                            },
+                        )
+                        QuickNavTab.PAGES -> PagesTab(
+                            pageIds = uiState.bookPageIds,
+                            currentPageId = uiState.currentPageId,
+                            bookmarkedPageIds = uiState.bookmarkedPageIds,
+                            onSelectPage = goToPage,
+                            onSetBookmark = onSetBookmark,
+                            onAddOutlineEntry = onAddOutlineEntry,
+                        )
+
+                        QuickNavTab.OUTLINE -> OutlineTab(
+                            entries = uiState.outline,
+                            pageIds = uiState.bookPageIds,
+                            currentPageId = uiState.currentPageId,
+                            onSelectPage = goToPage,
+                            onRename = onRenameOutlineEntry,
+                            onChangeDepth = onChangeOutlineDepth,
+                            onRemove = onRemoveOutlineEntry,
+                            onMove = onMoveOutlineEntry,
+                        )
+
+                        QuickNavTab.BOOKMARKS -> BookmarksTab(
+                            pageIds = uiState.bookmarkedPageIds,
+                            allPageIds = uiState.bookPageIds,
+                            currentPageId = uiState.currentPageId,
+                            onSelectPage = goToPage,
+                            onRemoveBookmark = { onSetBookmark(it, false) },
+                        )
+
+                        QuickNavTab.PINNED -> PinnedTab(
+                            appRepository = appRepository,
+                            pages = uiState.pinnedPages,
+                            currentPageId = uiState.currentPageId,
+                            isCurrentPagePinned = uiState.isCurrentPagePinned,
+                            canPin = uiState.currentPageId != null,
+                            onTogglePinned = onTogglePinned,
+                            onSelectPage = goToPage,
+                        )
+                    }
+                }
+
+                // Below the tabs, not inside one: the scrubber crosses the notebook whichever tab is
+                // showing, and it is the fastest way to move on a panel that redraws slowly.
+                if (uiState.bookPageCount >= 2) {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        PageHorizontalSliderWithReturn(
+                            modifier = Modifier.testTag("navigation-page-scrubber"),
+                            showPageIndicator = !compactHeight,
+                            pageCount = uiState.bookPageCount,
+                            currentIndex = uiState.currentBookIndex,
+                            favIndexes = uiState.favoriteIndexesInBook,
+                            onDragStart = onScrubStart,
+                            onPreviewIndexChanged = onScrubPreview,
+                            onDragEnd = onScrubEnd,
+                            onReturnClick = onReturnClick
+                        )
+                    }
                 }
             }
         }
+
     }
 
     if (namingOutlineEntry) {
@@ -346,12 +371,12 @@ private fun QuickNavHeaderRow(
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         BreadCrumb(
-            folders = folders, fontSize = 16, onSelectFolderId = onNavigateBreadcrumb
+            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            folders = folders, fontSize = 14, onSelectFolderId = onNavigateBreadcrumb
         )
 
-        Spacer(modifier = Modifier.weight(1f))
-
         ToolbarButton(
+            contentDescription = if (isBookmarked) "Remove bookmark" else "Bookmark this page",
             imageVector = if (isBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
             onSelect = {
                 if (canToggleBookmark) {
@@ -367,6 +392,7 @@ private fun QuickNavHeaderRow(
         // toggle now — the two things you do to the page you are looking at.
         ToolbarButton(
             imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+            contentDescription = "Add to outline",
             onSelect = {
                 if (canAddOutlineEntry) {
                     onAddOutlineEntry()
@@ -377,6 +403,7 @@ private fun QuickNavHeaderRow(
 
         ToolbarButton(
             imageVector = Icons.Filled.Image,
+            contentDescription = "Refresh page previews",
             onSelect = {
                 if (canGeneratePreviews) {
                     onGenerateBookPreviews()
@@ -392,7 +419,7 @@ private fun QuickNavHeaderRow(
 @Composable
 private fun QuickNavTabRow(selected: QuickNavTab, onSelect: (QuickNavTab) -> Unit) {
     val tabs = listOf(
-        QuickNavTab.NOTES to "Notes",
+        QuickNavTab.NOTES to "Notebooks",
         QuickNavTab.PAGES to "Pages",
         QuickNavTab.OUTLINE to "Outline",
         QuickNavTab.BOOKMARKS to "Bookmarks",
@@ -402,7 +429,9 @@ private fun QuickNavTabRow(selected: QuickNavTab, onSelect: (QuickNavTab) -> Uni
         tabs.forEach { (tab, label) ->
             Column(
                 modifier = Modifier
-                    .width(100.dp)
+                    .width(if (tab == QuickNavTab.NOTES) 116.dp else 100.dp)
+                    .heightIn(min = 48.dp)
+                    .semantics { this.selected = tab == selected; role = Role.Tab }
                     .noRippleClickable { onSelect(tab) },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -444,27 +473,58 @@ private fun NotesTab(
         recent + books.filter { it.id !in recentIds && it.deletedAt == null && it.resumePageId() != null }
             .sortedWith(compareBy<Notebook> { it.title.lowercase() }.thenBy { it.id })
     }
-    if (ordered.isEmpty()) {
+    NotebookSwitcherList(ordered, ids, currentBookId, onSelect)
+}
+
+/** Stateless presentation also used by the real-screen regression tests. */
+@Composable
+internal fun NotebookSwitcherList(
+    books: List<Notebook>,
+    recentIds: List<String>,
+    currentBookId: String?,
+    onSelect: (String) -> Unit,
+) {
+    if (books.isEmpty()) {
         QuickNavEmpty("No notebooks to open yet.")
         return
     }
+    val recent = books.filter { it.id in recentIds }
+    val others = books.filterNot { it.id in recentIds }
     LazyColumn(Modifier.fillMaxWidth().autoEInkAnimationOnScroll()) {
-        items(ordered, key = { it.id }) { book ->
-            Row(
-                Modifier.fillMaxWidth()
-                    .noRippleClickable { book.resumePageId()?.let(onSelect) }
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    book.title, modifier = Modifier.weight(1f),
-                    fontWeight = if (book.id == currentBookId) FontWeight.Bold else FontWeight.Normal,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                if (book.id == currentBookId) Text("Open", fontSize = 12.sp)
-                else if (book.id in ids) Text("Recent", fontSize = 12.sp)
+        fun androidx.compose.foundation.lazy.LazyListScope.section(title: String, notebooks: List<Notebook>) {
+            if (notebooks.isEmpty()) return
+            item(key = "section-$title") {
+                Text(title, color = Kaleido.Muted, fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp))
+            }
+            items(notebooks, key = { it.id }) { book ->
+                val current = book.id == currentBookId
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                        .semantics { selected = current }
+                        .noRippleClickable { book.resumePageId()?.let(onSelect) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    // A narrow notebook outline, not a colorful card, keeps the list quiet.
+                    Box(Modifier.width(22.dp).height(30.dp).border(1.dp, Kaleido.Ink)) {
+                        Box(Modifier.width(4.dp).fillMaxHeight().background(Kaleido.Ink))
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(book.title, fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
+                            color = Kaleido.Ink, fontSize = 15.sp,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val page = book.pageIds.indexOf(book.resumePageId()).coerceAtLeast(0) + 1
+                        Text("Page $page of ${book.pageIds.size}", fontSize = 12.sp, color = Kaleido.Muted)
+                    }
+                    if (current) Text("Open", fontSize = 12.sp, color = Kaleido.Ink)
+                }
+                RowRule()
             }
         }
+        section("Recent", recent)
+        section("All notebooks", others)
     }
 }
 
@@ -490,26 +550,55 @@ private fun PagesTab(
 
     var outliningPageId by remember { mutableStateOf<String?>(null) }
 
-    // Two rows that scroll sideways, not a vertical grid: the sheet is short by design, and this
-    // keeps the page you are on reachable without the sheet growing over the canvas.
-    LazyHorizontalGrid(
-        rows = GridCells.Fixed(2),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp)
-            .autoEInkAnimationOnScroll()
-    ) {
-        gridItemsIndexed(pageIds) { index, pageId ->
-            PageThumbnail(
-                pageId = pageId,
-                label = "${index + 1}",
-                isCurrent = pageId == currentPageId,
-                isBookmarked = pageId in bookmarkedPageIds,
-                onClick = { onSelectPage(pageId) },
-                onLongClick = { outliningPageId = pageId },
-            )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxHeight < 200.dp) {
+            // A thumbnail squeezed into a short row loses both its label and usable target.
+            // Compact windows keep every page accessible as a scrollable, named 48dp row.
+            LazyColumn(Modifier.fillMaxWidth().autoEInkAnimationOnScroll()) {
+                itemsIndexed(pageIds, key = { _, id -> id }) { index, pageId ->
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .semantics {
+                                contentDescription = "Open page ${index + 1}"
+                                selected = pageId == currentPageId
+                            }
+                            .combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null, role = Role.Button,
+                                onClick = { onSelectPage(pageId) },
+                                onLongClick = { outliningPageId = pageId },
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Page ${index + 1}", modifier = Modifier.weight(1f), color = Kaleido.Ink)
+                        if (pageId == currentPageId) Text("Open", color = Kaleido.Ink, fontSize = 12.sp)
+                    }
+                }
+            }
+        } else {
+            // Two rows that scroll sideways, not a vertical grid: the sheet is short by design, and this
+            // keeps the page you are on reachable without the sheet growing over the canvas.
+            LazyHorizontalGrid(
+                rows = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .autoEInkAnimationOnScroll()
+            ) {
+                gridItemsIndexed(pageIds) { index, pageId ->
+                    PageThumbnail(
+                        pageId = pageId,
+                        label = "${index + 1}",
+                        isCurrent = pageId == currentPageId,
+                        isBookmarked = pageId in bookmarkedPageIds,
+                        onClick = { onSelectPage(pageId) },
+                        onLongClick = { outliningPageId = pageId },
+                    )
+                }
+            }
         }
     }
 
@@ -663,30 +752,31 @@ private fun OutlineRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = (entry.depth * 16).dp, bottom = 6.dp),
+                    .padding(start = (entry.depth * 16).dp, bottom = 6.dp)
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ToolbarButton(imageVector = Icons.Filled.Edit, onSelect = onRename)
+                ToolbarButton(imageVector = Icons.Filled.Edit, contentDescription = "Rename outline entry", onSelect = onRename)
                 if (entry.depth > 0) {
                     ToolbarButton(
-                        imageVector = Icons.Filled.KeyboardArrowLeft, onSelect = onOutdent
+                        imageVector = Icons.Filled.KeyboardArrowLeft, contentDescription = "Outdent outline entry", onSelect = onOutdent
                     )
                 }
                 if (entry.depth < CouchOutlineEntry.MAX_DEPTH) {
                     ToolbarButton(
-                        imageVector = Icons.Filled.KeyboardArrowRight, onSelect = onIndent
+                        imageVector = Icons.Filled.KeyboardArrowRight, contentDescription = "Indent outline entry", onSelect = onIndent
                     )
                 }
                 if (canMoveUp) {
-                    ToolbarButton(imageVector = Icons.Filled.KeyboardArrowUp, onSelect = onMoveUp)
+                    ToolbarButton(imageVector = Icons.Filled.KeyboardArrowUp, contentDescription = "Move outline entry up", onSelect = onMoveUp)
                 }
                 if (canMoveDown) {
                     ToolbarButton(
-                        imageVector = Icons.Filled.KeyboardArrowDown, onSelect = onMoveDown
+                        imageVector = Icons.Filled.KeyboardArrowDown, contentDescription = "Move outline entry down", onSelect = onMoveDown
                     )
                 }
-                Spacer(Modifier.weight(1f))
-                ToolbarButton(imageVector = Icons.Filled.Delete, onSelect = onRemove)
+                Spacer(Modifier.width(8.dp))
+                ToolbarButton(imageVector = Icons.Filled.Delete, contentDescription = "Remove outline entry", onSelect = onRemove)
             }
         }
 

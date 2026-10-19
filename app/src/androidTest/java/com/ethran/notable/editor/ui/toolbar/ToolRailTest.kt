@@ -1,5 +1,13 @@
 package com.ethran.notable.editor.ui.toolbar
 
+import android.content.Context
+import android.graphics.Bitmap
+import androidx.test.core.app.ApplicationProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.onRoot
+import java.io.File
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -8,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -218,20 +227,14 @@ class ToolRailTest {
         )
     }
 
-    /**
-     * On a one-handed panel the rail cannot hold everything at once, and what it gives up must
-     * be room in the scroller — never the way out of the editor.
-     *
-     * The menu is the only route to the page's own actions, so a rail that pushes it off the
-     * edge strands the user. 0.19.0 did exactly that: with the tools, the nibs and the history
-     * outside the scroller, their fixed width left the weighted overflow nothing, and the menu,
-     * the library and the inks were clipped away. A tablet never sees it — at 800dp across,
-     * every arrangement fits and looks correct.
-     */
     @Test
-    fun theMenuSurvivesARailTooNarrowToHoldEverything() {
+    fun historySurvivesARailTooNarrowToHoldEverything() {
         rail(state(), width = NARROW_WIDTH)
-        composeRule.onNodeWithContentDescription("menu").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("undo").assertIsDisplayed()
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        composeRule.onNodeWithContentDescription("redo").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("menu").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Pages").assertDoesNotExist()
     }
 
     /**
@@ -279,6 +282,15 @@ class ToolRailTest {
     }
 
     @Test
+    fun namedPaletteMarksTheCurrentInkWithoutRelyingOnColor() {
+        rail(state())
+        composeRule.onNodeWithContentDescription("Choose ink").performClick()
+        composeRule.onNodeWithContentDescription(inkDescription(ballpen.color)).assertIsSelected()
+        composeRule.onNodeWithContentDescription("Ink: Blue").assertIsNotSelected()
+        composeRule.onNodeWithText("Blue", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
     fun tappingAnInkWritesItToThePenInHand() {
         val actions = rail(state(), position = AppSettings.Position.Left)
         val target = Kaleido.Inks.last()
@@ -295,21 +307,12 @@ class ToolRailTest {
         assertEquals(ballpen.size, change.setting.strokeSize)
     }
 
-    /**
-     * The vertical counterpart of [theMenuSurvivesARailTooNarrowToHoldEverything], and the
-     * reason the palette is inside the scroller rather than pinned under it.
-     *
-     * Twelve swatches are 119dp of rail. Fixed below the pinned group, they pushed it off the
-     * bottom of a portrait panel — the menu is the only route to the page's own actions, so a
-     * rail that loses it strands the user exactly as 0.19.0 did across the other axis. The
-     * height here is well under any device's, because a pinned size may only ever shrink the
-     * window: forcing one taller puts the rail's tail outside it and every assertion about
-     * being displayed fails for reasons that have nothing to do with the rail.
-     */
     @Test
-    fun theMenuSurvivesARailTooShortToHoldEverything() {
+    fun historySurvivesARailTooShortToHoldEverything() {
         rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Left)
-        composeRule.onNodeWithContentDescription("menu").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("undo").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("redo").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("menu").assertDoesNotExist()
     }
 
     /** And the palette it gave the room to is still reachable, by scrolling to it. */
@@ -320,6 +323,44 @@ class ToolRailTest {
         composeRule.onNodeWithContentDescription(inkDescription(Kaleido.Inks.last()))
             .performScrollTo()
             .assertIsDisplayed()
+    }
+
+    private fun screenshot(name: String, popup: Boolean = false) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val directory = File(context.getExternalFilesDir(null), "ui-review").apply { mkdirs() }
+        composeRule.waitForIdle()
+        val root = if (popup) composeRule.onNode(isPopup()) else composeRule.onRoot()
+        val bitmap = root.captureToImage().asAndroidBitmap()
+        File(directory, "$name.png").outputStream().use {
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+    }
+
+    @Test
+    fun reviewLeftRailAndNamedPalette() {
+        rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Left)
+        screenshot("editor-rail-left")
+        composeRule.onNodeWithContentDescription("Choose ink").performScrollTo().performClick()
+        composeRule.onNodeWithContentDescription("Ink: Blue").assertIsDisplayed()
+        screenshot("editor-palette-left", popup = true)
+    }
+
+    @Test
+    fun reviewRightRailAndNamedPalette() {
+        rail(state(), height = SHORT_HEIGHT, position = AppSettings.Position.Right)
+        screenshot("editor-rail-right")
+        composeRule.onNodeWithContentDescription("Choose ink").performScrollTo().performClick()
+        composeRule.onNodeWithContentDescription("Ink: Blue").assertIsDisplayed()
+        screenshot("editor-palette-right", popup = true)
+    }
+
+    @Test
+    fun reviewNarrowRailAndNamedPalette() {
+        rail(state(), width = NARROW_WIDTH)
+        screenshot("editor-rail-narrow")
+        composeRule.onNodeWithContentDescription("Choose ink").performClick()
+        composeRule.onNodeWithContentDescription("Ink: Blue").assertIsDisplayed()
+        screenshot("editor-palette-narrow", popup = true)
     }
 
     /** How many nodes carry [description] — the overflow puts several behind the same one. */

@@ -3,6 +3,10 @@ package com.ethran.notable.editor.ui.toolbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import com.ethran.notable.data.datastore.BUTTON_SIZE
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
@@ -30,22 +34,20 @@ fun ToolbarButton(
     penColor: Color? = null,
     contentDescription: String = ""
 ) {
-    val bgColor = if (isSelected) (penColor ?: Color.Black) else (penColor ?: Color.Transparent)
-    val tint = when {
-        (penColor == Color.Black || penColor == Color.DarkGray) -> Color.White
-        isSelected -> Color.White
-        else -> Color.Black
-    }
+    val bgColor = if (isSelected) Color.Black else Color.Transparent
+    val tint = if (isSelected) Color.White else Color.Black
 
     Box(
         Modifier
             .then(modifier)
+            .size(BUTTON_SIZE.dp)
             .semantics { selected = isSelected }
             .noRippleClickable { onSelect() }
             .background(
-                color = bgColor, shape = if (!isSelected) CircleShape else RectangleShape
+                color = bgColor, shape = RectangleShape
             )
-            .padding(7.dp)
+            .padding(7.dp),
+        contentAlignment = Alignment.Center,
     ) {
         when {
             iconId != null -> {
@@ -69,6 +71,14 @@ fun ToolbarButton(
                     text, fontSize = 20.sp, color = if (isSelected) Color.White else Color.Black
                 )
             }
+        }
+        // Keep presets recognizable without painting every button in its ink color.
+        if (penColor != null) {
+            Box(
+                Modifier.align(Alignment.BottomEnd).size(8.dp)
+                    .background(penColor, CircleShape)
+                    .border(1.dp, tint, CircleShape)
+            )
         }
     }
 }

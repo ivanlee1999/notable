@@ -1,13 +1,17 @@
 package com.ethran.notable.editor.ui
 
 import android.content.Context
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -15,7 +19,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -60,7 +63,7 @@ fun SelectedBitmap(
         controlTower.page.applyZoom(selectionState.selectionStartOffset ?: IntOffset(0, 0))
 
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .noRippleClickable {
@@ -101,78 +104,100 @@ fun SelectedBitmap(
                 )
         )
 
-        // TODO: improve this code
-
+        val density = LocalDensity.current
         val buttonCount = if (selectionState.isResizable()) 7 else 5
-        val toolbarPadding = 4
-
-        // If we can calculate offset of buttons show selection handling tools
-        selectionStartOffset.let { startOffset ->
-            selectionDisplaceOffset.let { displaceOffset ->
-                // TODO: I think the toolbar is still not in the center.
-                val xPos = selectionRect.let { rect ->
-                    (rect.right - rect.left) / 2 - buttonCount * (BUTTON_SIZE + 5 * toolbarPadding)
-                }
-                val offset = startOffset + displaceOffset + IntOffset(x = xPos, y = -100)
-                // Overlay buttons near the selection box
-                Row(
-                    modifier = Modifier
-                        .offset { offset }
-                        .background(Color.White.copy(alpha = 0.8f))
-                        .padding(toolbarPadding.dp)
-                        .height(BUTTON_SIZE.dp)
-                ) {
-                    ToolbarButton(
-                        vectorIcon = FeatherIcons.Share2,
-                        isSelected = false,
-                        onSelect = {
-                            shareBitmap(context, controlTower.getSelectedBitmap())
-                        },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                    ToolbarButton(
-                        iconId = R.drawable.delete,
-                        isSelected = false,
-                        onSelect = {
-                            controlTower.deleteSelection()
-                        },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                    if (selectionState.isResizable()) {
-                        ToolbarButton(
-                            iconId = R.drawable.plus,
-                            isSelected = false,
-                            onSelect = { controlTower.changeSizeOfSelection(10) },
-                            modifier = Modifier.height(BUTTON_SIZE.dp)
-                        )
-                        ToolbarButton(
-                            iconId = R.drawable.minus,
-                            isSelected = false,
-                            onSelect = { controlTower.changeSizeOfSelection(-10) },
-                            modifier = Modifier.height(BUTTON_SIZE.dp)
-                        )
-                    }
-                    ToolbarButton(
-                        vectorIcon = FeatherIcons.Scissors,
-                        isSelected = false,
-                        onSelect = { controlTower.cutSelectionToClipboard(context) },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                    ToolbarButton(
-                        vectorIcon = FeatherIcons.Clipboard,
-                        isSelected = false,
-                        onSelect = { controlTower.copySelectionToClipboard(context) },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                    ToolbarButton(
-                        vectorIcon = FeatherIcons.Copy,
-                        isSelected = false,
-                        onSelect = { controlTower.duplicateSelection() },
-                        modifier = Modifier.height(BUTTON_SIZE.dp)
-                    )
-                }
+        val toolbarPadding = 4.dp
+        val toolbarWidthPx = minOf(constraints.maxWidth,
+            with(density) { (BUTTON_SIZE.dp * buttonCount + toolbarPadding * 2).roundToPx() })
+        val toolbarHeightPx = with(density) { (BUTTON_SIZE.dp + toolbarPadding * 2).roundToPx() }
+        val offset = selectionToolbarOffset(
+            selectionOrigin = selectionStartOffset + selectionDisplaceOffset,
+            selectionSize = IntSize(selectionRect.width(), selectionRect.height()),
+            viewport = IntSize(constraints.maxWidth, constraints.maxHeight),
+            toolbarSize = IntSize(toolbarWidthPx, toolbarHeightPx),
+            gapPx = with(density) { 8.dp.roundToPx() },
+        )
+        Row(
+            modifier = Modifier
+                .offset { offset }
+                .width(with(density) { toolbarWidthPx.toDp() })
+                .background(Color.White)
+                .horizontalScroll(rememberScrollState())
+                .padding(toolbarPadding)
+                .height(BUTTON_SIZE.dp)
+        ) {
+            ToolbarButton(
+                vectorIcon = FeatherIcons.Share2,
+                contentDescription = "Share selection",
+                isSelected = false,
+                onSelect = {
+                    shareBitmap(context, controlTower.getSelectedBitmap())
+                },
+                modifier = Modifier.height(BUTTON_SIZE.dp)
+            )
+            ToolbarButton(
+                iconId = R.drawable.delete,
+                contentDescription = "Delete selection",
+                isSelected = false,
+                onSelect = {
+                    controlTower.deleteSelection()
+                },
+                modifier = Modifier.height(BUTTON_SIZE.dp)
+            )
+            if (selectionState.isResizable()) {
+                ToolbarButton(
+                    iconId = R.drawable.plus,
+                    contentDescription = "Enlarge selection",
+                    isSelected = false,
+                    onSelect = { controlTower.changeSizeOfSelection(10) },
+                    modifier = Modifier.height(BUTTON_SIZE.dp)
+                )
+                ToolbarButton(
+                    iconId = R.drawable.minus,
+                    contentDescription = "Shrink selection",
+                    isSelected = false,
+                    onSelect = { controlTower.changeSizeOfSelection(-10) },
+                    modifier = Modifier.height(BUTTON_SIZE.dp)
+                )
             }
+            ToolbarButton(
+                vectorIcon = FeatherIcons.Scissors,
+                contentDescription = "Cut selection",
+                isSelected = false,
+                onSelect = { controlTower.cutSelectionToClipboard(context) },
+                modifier = Modifier.height(BUTTON_SIZE.dp)
+            )
+            ToolbarButton(
+                vectorIcon = FeatherIcons.Clipboard,
+                contentDescription = "Copy selection",
+                isSelected = false,
+                onSelect = { controlTower.copySelectionToClipboard(context) },
+                modifier = Modifier.height(BUTTON_SIZE.dp)
+            )
+            ToolbarButton(
+                vectorIcon = FeatherIcons.Copy,
+                contentDescription = "Duplicate selection",
+                isSelected = false,
+                onSelect = { controlTower.duplicateSelection() },
+                modifier = Modifier.height(BUTTON_SIZE.dp)
+            )
         }
-
     }
+}
+
+/** All arguments are physical pixels; only the floating controls move, never the selection. */
+internal fun selectionToolbarOffset(
+    selectionOrigin: IntOffset,
+    selectionSize: IntSize,
+    viewport: IntSize,
+    toolbarSize: IntSize,
+    gapPx: Int,
+): IntOffset {
+    val centeredX = selectionOrigin.x + (selectionSize.width - toolbarSize.width) / 2
+    val aboveY = selectionOrigin.y - toolbarSize.height - gapPx
+    val preferredY = if (aboveY >= 0) aboveY else selectionOrigin.y + selectionSize.height + gapPx
+    return IntOffset(
+        centeredX.coerceIn(0, (viewport.width - toolbarSize.width).coerceAtLeast(0)),
+        preferredY.coerceIn(0, (viewport.height - toolbarSize.height).coerceAtLeast(0)),
+    )
 }

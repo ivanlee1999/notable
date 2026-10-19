@@ -3,6 +3,22 @@ package com.ethran.notable.ui
 import com.ethran.notable.editor.ToolbarAction
 import com.ethran.notable.editor.ToolbarUiState
 import com.ethran.notable.editor.ui.EditorTitleBar
+import com.ethran.notable.ui.components.NotebookSwitcherList
+import com.ethran.notable.ui.components.QuickNavContent
+import com.ethran.notable.ui.viewmodels.QuickNavUiState
+import com.ethran.notable.ui.viewmodels.QuickNavTab
+import com.ethran.notable.data.db.Notebook
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import com.ethran.notable.data.datastore.GlobalAppSettings
+import com.ethran.notable.editor.ui.toolbar.ToolbarContent
+import com.ethran.notable.editor.ui.toolbar.toolbarInset
+import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.editor.state.Mode
+import com.ethran.notable.editor.utils.Pen
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
@@ -17,6 +33,8 @@ import androidx.compose.material.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -55,10 +73,10 @@ class UiConsistencyComposeTests {
     private val compose = createComposeRule()
     @get:Rule val composeGate = ComposeUiSupportRule(compose)
 
-    private fun content(width: Int = 320, fontScale: Float = 1f, body: @Composable () -> Unit) {
+    private fun content(width: Int = 320, fontScale: Float = 1f, height: Int = 900, body: @Composable () -> Unit) {
         compose.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(width.dp, 900.dp)) then
+                DeviceConfigurationOverride.ForcedSize(DpSize(width.dp, height.dp)) then
                     DeviceConfigurationOverride.FontScale(fontScale)
             ) {
                 CompositionLocalProvider(LocalInspectionMode provides true) {
@@ -261,13 +279,155 @@ class UiConsistencyComposeTests {
             )
         }
         compose.onNodeWithContentDescription("Switch notebook or page")
-            .assertIsDisplayed().performClick()
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         assertEquals(1, switches)
+        compose.onNodeWithContentDescription("Pages").assertIsDisplayed()
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(ToolbarAction.OpenQuickNav, actions.removeAt(0))
+        // A useful title remains, rather than one letter between five separate buttons.
+        compose.onNodeWithText("Planning and handwritten meeting notes", useUnmergedTree = true)
+            .assertWidthIsAtLeast(96.dp)
         val context = ApplicationProvider.getApplicationContext<Context>()
         compose.onNodeWithContentDescription(context.getString(com.ethran.notable.R.string.editor_title_bar_back))
             .assertIsDisplayed().performClick()
         assertEquals(listOf(ToolbarAction.NavigateToLibrary), actions)
         screenshot("editor-title-320-large-text")
+    }
+
+    private fun compactEditorChrome(position: AppSettings.Position, name: String) {
+        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position))
+        val state = ToolbarUiState(
+            isToolbarOpen = true, notebookTitle = "Field notes", notebookId = "book",
+            pageNumberInfo = "2/12", mode = Mode.Draw, pen = Pen.BALLPEN,
+            penPresetId = "ball", penSettings = ToolbarPen.defaultPenSettings,
+        )
+        content(width = 320, fontScale = 1.5f) {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.align(if (position == AppSettings.Position.Right) Alignment.TopEnd else Alignment.TopStart)) {
+                    ToolbarContent(state, {}, {})
+                }
+                Box(Modifier.padding(toolbarInset(true))) { EditorTitleBar(state, {}) }
+            }
+        }
+        compose.onNodeWithContentDescription("Switch notebook or page")
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithContentDescription("Pages").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
+        compose.onNodeWithContentDescription("undo").assertIsDisplayed()
+        screenshot(name)
+    }
+
+    @Test
+    fun leftRailAndTitleKeepIndependentTargetsAtLargeText() =
+        compactEditorChrome(AppSettings.Position.Left, "editor-left-320-large-text")
+
+    @Test
+    fun rightRailAndTitleKeepIndependentTargetsAtLargeText() =
+        compactEditorChrome(AppSettings.Position.Right, "editor-right-320-large-text")
+
+    @Test
+    fun notebookSwitcherShowsRecentAndCurrentWithoutLosingResumePage() {
+        val opened = mutableListOf<String>()
+        val books = listOf(
+            Notebook(id = "planning", title = "Planning and handwritten meeting notes",
+                pageIds = listOf("p1", "p2", "p3"), openPageId = "p2"),
+            Notebook(id = "ideas", title = "Ideas", pageIds = listOf("idea")),
+            Notebook(id = "reading", title = "Reading journal", pageIds = listOf("r1", "r2")),
+        )
+        content(width = 320, fontScale = 1.5f) {
+            Column(Modifier.heightIn(max = 700.dp)) {
+                NotebookSwitcherList(books, listOf("planning", "ideas"), "planning", opened::add)
+            }
+        }
+        compose.onNodeWithText("Recent").assertIsDisplayed()
+        compose.onNodeWithText("All notebooks").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Planning and handwritten meeting notes")
+            .performScrollTo().assertIsSelected().performClick()
+        assertEquals(listOf("p2"), opened)
+        compose.onNodeWithText("Ideas").performScrollTo().performClick()
+        assertEquals(listOf("p2", "idea"), opened)
+        screenshot("notebook-switcher-320-large-text")
+    }
+
+    @Test
+    fun navigationSheetClosesWithoutChangingThePageAndExposesSelectedTabs() {
+        var closes = 0
+        var navigations = 0
+        content(width = 320, fontScale = 1.5f) {
+            var tab by remember { mutableStateOf(QuickNavTab.PAGES) }
+            QuickNavContent(
+                appRepository = null, uiState = QuickNavUiState(isLoading = false, tab = tab),
+                onClose = { closes++ }, onNavigateBreadcrumb = { navigations++ },
+                onSelectTab = { tab = it }, onToggleBookmark = {}, onSetBookmark = { _, _ -> },
+                onTogglePinned = {}, onAddOutlineEntry = { _, _ -> }, onRenameOutlineEntry = { _, _ -> },
+                onChangeOutlineDepth = { _, _ -> }, onRemoveOutlineEntry = {}, onMoveOutlineEntry = { _, _ -> },
+                onGenerateBookPreviews = {}, onScrubStart = {}, onScrubPreview = {}, onScrubEnd = {},
+                onReturnClick = {}, goToPage = { navigations++ },
+            )
+        }
+        compose.onNodeWithText("Pages").assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+        compose.onNodeWithText("Notebooks").performClick().assertIsSelected()
+        compose.onNodeWithText("Pages").assertIsNotSelected().performClick()
+        compose.onNodeWithContentDescription("Close navigation")
+            .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(1, closes)
+        assertEquals(0, navigations)
+        screenshot("navigation-sheet-320-large-text")
+    }
+
+    @Test
+    fun shortNavigationKeepsCloseTabsScrubberAndEveryPageReachable() {
+        val opened = mutableListOf<String>()
+        var closed = false
+        content(width = 600, height = 320, fontScale = 1.5f) {
+            QuickNavContent(
+                appRepository = null,
+                uiState = QuickNavUiState(isLoading = false, tab = QuickNavTab.PAGES,
+                    bookId = "book", currentPageId = "p1", bookPageCount = 12,
+                    bookPageIds = (1..12).map { "p$it" }),
+                onClose = { closed = true }, onNavigateBreadcrumb = {}, onSelectTab = {},
+                onToggleBookmark = {}, onSetBookmark = { _, _ -> }, onTogglePinned = {},
+                onAddOutlineEntry = { _, _ -> }, onRenameOutlineEntry = { _, _ -> },
+                onChangeOutlineDepth = { _, _ -> }, onRemoveOutlineEntry = {}, onMoveOutlineEntry = { _, _ -> },
+                onGenerateBookPreviews = {}, onScrubStart = {}, onScrubPreview = {}, onScrubEnd = {},
+                onReturnClick = {}, goToPage = opened::add,
+            )
+        }
+        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
+        compose.onNodeWithText("Pages").assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+        compose.onNodeWithTag("navigation-page-scrubber").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(11)
+        compose.onNodeWithContentDescription("Open page 12").assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp).performClick()
+        assertEquals(listOf("p12"), opened)
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Open page 1").assertIsDisplayed().performClick()
+        assertEquals(listOf("p12", "p1"), opened)
+        screenshot("navigation-sheet-short-large-text")
+        compose.onNodeWithContentDescription("Close navigation").performClick()
+        assertTrue(closed)
+    }
+
+    @Test
+    fun titleMenuKeepsPaperSettingsReachableWithoutCrowdingTheTitle() {
+        val actions = mutableListOf<ToolbarAction>()
+        content(width = 320, fontScale = 1.5f) {
+            var menuOpen by remember { mutableStateOf(false) }
+            EditorTitleBar(
+                ToolbarUiState(notebookTitle = "Field notes", notebookId = "book", pageNumberInfo = "3/24", isMenuOpen = menuOpen),
+                onAction = { action ->
+                    actions.add(action)
+                    if (action == ToolbarAction.ToggleMenu) menuOpen = !menuOpen
+                },
+            )
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        compose.onNodeWithContentDescription(context.getString(com.ethran.notable.R.string.toolbar_element_menu)).performClick()
+        compose.onNodeWithText(context.getString(com.ethran.notable.R.string.change_background))
+            .assertIsDisplayed().performClick()
+        assertTrue(actions.contains(ToolbarAction.ToggleBackgroundSelector(true)))
+        compose.onNodeWithText(context.getString(com.ethran.notable.R.string.change_background)).assertDoesNotExist()
     }
 
     @Test

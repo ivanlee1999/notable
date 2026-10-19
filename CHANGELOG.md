@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.55.0
+
+- Give document navigation its own compact title bar, with direct exit, notebook
+  switching, page access, and document settings. Keep undo and redo visible in the
+  writing rail without duplicating navigation controls.
+- Use calm monochrome tool selection, named ink swatches, and larger touch targets.
+  Pen settings adapt to narrow screens and large text without hiding color or size
+  choices.
+- Make the notebook switcher show recent notes, the current notebook, and the page
+  to resume. Keep navigation controls and page selection reachable in short windows.
+- Keep selection actions inside the viewport at different display densities; the
+  selected drawing itself does not move when the controls are repositioned.
+
+No database schema or sync-format change. Physical BOOX ghosting and pen latency
+have not been verified for this release; emulator checks cannot establish them.
+
 ## 0.54.0
 
 - Recent notebooks appear in the library sidebar. Tap a notebook title in the editor

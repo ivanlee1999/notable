@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.components
 
+import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -8,6 +9,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import com.ethran.notable.editor.ui.toolbar.inkDescription
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -48,8 +57,9 @@ import com.ethran.notable.editor.ui.toolbar.model.IconRef
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElements
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.editor.utils.Pen
+import com.ethran.notable.ui.dialogs.dialogMaxHeight
 import com.ethran.notable.ui.theme.InkaTheme
-import android.graphics.Color as AndroidColor
+import com.ethran.notable.ui.noRippleClickable
 
 /**
  * The "Toolbar" settings panel: the pens the rail writes with.
@@ -297,7 +307,7 @@ private fun AddPenDialog(onPick: (Pen) -> Unit, onClose: () -> Unit) {
  * color/size is clamped to a surviving option so it never falls off its own palette.
  */
 @Composable
-private fun PenEditDialog(
+internal fun PenEditDialog(
     preset: ToolbarPen,
     onChange: (ToolbarPen) -> Unit,
     onClose: () -> Unit,
@@ -321,8 +331,11 @@ private fun PenEditDialog(
     ScaledDialog(onDismissRequest = ::commitAndClose) {
         Column(
             modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = minOf(560.dp, dialogMaxHeight()))
                 .background(MaterialTheme.colors.background)
                 .border(1.dp, MaterialTheme.colors.onSurface)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -342,41 +355,35 @@ private fun PenEditDialog(
                 style = MaterialTheme.typography.subtitle2,
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
             )
-            ToolbarPen.COLOR_CANDIDATES.chunked(7).forEach { rowColors ->
-                Row {
-                    rowColors.forEach { colorInt ->
-                        val included = colorInt in includedColors
-                        Box(
-                            modifier = Modifier
-                                .padding(2.dp)
-                                .size(36.dp)
-                                .background(Color(colorInt))
-                                .border(
-                                    if (included) 3.dp else 1.dp,
-                                    Color.Black,
-                                )
-                                .clickable {
-                                    // Re-added colors append at the end: the user's
-                                    // stored palette order is preserved, not re-sorted
-                                    // to candidate order.
-                                    val updated =
-                                        if (included) includedColors - colorInt
-                                        else includedColors + colorInt
-                                    if (updated.isNotEmpty())
-                                        edited = edited.copy(colorOptions = updated)
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (included) Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = if (colorInt == AndroidColor.BLACK ||
-                                    colorInt == AndroidColor.DKGRAY ||
-                                    colorInt == AndroidColor.BLUE
-                                ) Color.White else Color.Black,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ToolbarPen.COLOR_CANDIDATES.forEach { colorInt ->
+                    val included = colorInt in includedColors
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(Color(colorInt))
+                            .border(if (included) 3.dp else 1.dp, Color.Black)
+                            .semantics {
+                                contentDescription = inkDescription(colorInt)
+                                selected = included
+                            }
+                            .noRippleClickable {
+                                // Preserve the stored palette order when re-adding an ink.
+                                val updated = if (included) includedColors - colorInt
+                                    else includedColors + colorInt
+                                if (updated.isNotEmpty()) edited = edited.copy(colorOptions = updated)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (included) Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color.Black,
+                            modifier = Modifier.background(Color.White, CircleShape).size(20.dp),
+                        )
                     }
                 }
             }
@@ -386,23 +393,36 @@ private fun PenEditDialog(
                 style = MaterialTheme.typography.subtitle2,
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
             )
-            ToolbarPen.SIZE_CANDIDATES.chunked(7).forEach { rowSizes ->
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    rowSizes.forEach { size ->
-                        val included = size in includedSizes
-                        ToolbarButton(
-                            text = ToolbarElements.sizeLabel(size),
-                            isSelected = included,
-                            onSelect = {
-                                val updated =
-                                    if (included) includedSizes - size
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ToolbarPen.SIZE_CANDIDATES.forEach { size ->
+                    val included = size in includedSizes
+                    Box(
+                        Modifier.widthIn(min = 48.dp).heightIn(min = 48.dp)
+                            .background(if (included) Color.Black else Color.Transparent)
+                            .border(1.dp, Color.Black)
+                            .semantics {
+                                contentDescription = "Nib size ${ToolbarElements.sizeLabel(size)}"
+                                selected = included
+                            }
+                            .noRippleClickable {
+                                val updated = if (included) includedSizes - size
                                     else (includedSizes + size).sorted()
-                                if (updated.isNotEmpty())
-                                    edited = edited.copy(sizeOptions = updated)
-                            },
-                        )
+                                if (updated.isNotEmpty()) edited = edited.copy(sizeOptions = updated)
+                            }
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(ToolbarElements.sizeLabel(size),
+                            color = if (included) Color.White else Color.Black)
                     }
                 }
+            }
+            Spacer(Modifier.height(16.dp))
+            EInkButton(onClick = ::commitAndClose, modifier = Modifier.fillMaxWidth()) {
+                Text("Done")
             }
         }
     }
