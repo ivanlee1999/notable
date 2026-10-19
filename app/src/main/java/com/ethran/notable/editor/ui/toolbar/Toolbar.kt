@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +20,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,13 +73,13 @@ import com.ethran.notable.ui.theme.Kaleido
  * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the palette has no
  * room to lie down, so the same choice becomes a single [InkSwatch] and a popover.
  *
- * Everything but the last group scrolls. Whatever does not fit has to be reachable by
+ * Everything but history scrolls. Whatever does not fit has to be reachable by
  * scrolling rather than clipped off the end, and the group that must never be scrolled away
- * from is the one holding the way out.
+ * from is undo/redo. Document navigation lives in the title bar.
  *
  * The order of the groups is the rail's whole argument, and it does not vary:
  *
- *     tools │ nibs │ history │ overflow… │ inks │ pinned
+ *     tools │ inks │ nibs │ overflow… │ undo / redo
  *
  * The four implements, then how broad the nib is, then undo — the sequence of a single
  * stroke, left where the hand already is. A user-ordered rail could express that too, but it
@@ -170,8 +172,6 @@ data class RailGroups(
     /** Everything that is neither an implement nor a rail fixture; scrolls when short. */
     val overflow: List<ToolbarElement>,
     val history: List<ToolbarElement>,
-    /** Where the rail ends: where you are, and the way out. */
-    val pinned: List<ToolbarElement>,
 ) {
     companion object {
         fun of(pens: List<ToolbarPen>): RailGroups = RailGroups(
@@ -190,12 +190,6 @@ data class RailGroups(
             history = listOf(
                 ToolbarElements.of(ToolbarElementId.UNDO),
                 ToolbarElements.of(ToolbarElementId.REDO),
-            ),
-            pinned = listOf(
-                ToolbarElements.of(ToolbarElementId.PAGE_NAV),
-                ToolbarElements.of(ToolbarElementId.QUICK_NAV),
-                ToolbarElements.of(ToolbarElementId.HOME),
-                ToolbarElements.of(ToolbarElementId.MENU),
             ),
         )
     }
@@ -243,14 +237,12 @@ private fun HorizontalRail(
                 QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()
-                renderGroup(groups.history)
-                ToolbarDivider()
                 renderGroup(groups.overflow)
             }
 
-            // Outside the scroller, so the way out of the editor is always at the trailing edge.
+            // Undo and redo are always available without scrolling.
             ToolbarDivider()
-            renderGroup(groups.pinned)
+            renderGroup(groups.history)
 
             InkSwatch(uiState = uiState, onAction = onAction)
         }
@@ -320,8 +312,8 @@ private fun InkSwatch(
         properties = PopupProperties(focusable = true),
         alignment = placement.alignment,
     ) {
-        // Three columns keep every ink reachable with full-size targets in either orientation.
-        // The popup scrolls on short displays without changing the drawing exclusion band.
+        // Names and a separate checkmark remain legible on monochrome displays.
+        // Three columns keep the full default palette visible on a tablet without scrolling.
         Column(
             Modifier
                 .padding(placement.padding)
@@ -330,33 +322,46 @@ private fun InkSwatch(
                 .heightIn(max = 320.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(5.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             inks.chunked(3).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     row.forEach { ink ->
                         val selected = ink == current.color
-                        Box(
+                        Column(
                             Modifier
-                                .size(48.dp)
-                                .background(Color(ink))
-                                .border(
-                                    width = if (selected) 2.dp else 1.dp,
-                                    color = if (selected) Kaleido.Ink else Kaleido.Edge
-                                )
+                                .size(width = 64.dp, height = 64.dp)
+                                .border(if (selected) 2.dp else 1.dp,
+                                    if (selected) Kaleido.Ink else Kaleido.Edge)
                                 .noRippleClickable {
-                                    onAction(
-                                        ToolbarAction.ChangePenSetting(
-                                            uiState.penPresetId,
-                                            PenSetting(current.strokeSize, ink)
-                                        )
-                                    )
+                                    onAction(ToolbarAction.ChangePenSetting(
+                                        uiState.penPresetId, PenSetting(current.strokeSize, ink)
+                                    ))
                                     isOpen = false
                                 }
-                                .semantics { contentDescription = inkDescription(ink); this.selected = selected }
-                        )
+                                .semantics(mergeDescendants = true) {
+                                    contentDescription = inkDescription(ink)
+                                    this.selected = selected
+                                }
+                                .padding(4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(24.dp).background(Color(ink))
+                                    .border(1.dp, Kaleido.Ink))
+                                Text(if (selected) "✓" else "", modifier = Modifier.width(18.dp),
+                                    color = Kaleido.Ink, fontSize = 16.sp)
+                            }
+                            Text(
+                                inkDescription(ink).removePrefix("Ink: "),
+                                color = Kaleido.Ink,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                            )
+                        }
                     }
-                    if (row.size == 1) Spacer(Modifier.size(48.dp))
                 }
             }
         }
@@ -394,14 +399,7 @@ private fun VerticalRail(
             )
             ToolbarDivider()
 
-            // As on the horizontal rail: one scroller holding the groups in rail order, so a
-            // short screen scrolls rather than clipping whatever falls past its bottom edge.
-            //
-            // The inks are inside it. They used to sit below the pinned group as a fixed foot,
-            // which worked while there were four of them; twelve is 119dp of rail, and a column
-            // that tall cannot be fixed — a portrait 10" panel laid the last four swatches out
-            // past the bottom edge and took the menu button with them. Everything that can be
-            // scrolled to is scrolled to, and only the way out is nailed down.
+            // Tools and ink controls scroll together; history stays fixed below them.
             Column(
                 Modifier
                     .weight(1f)
@@ -411,16 +409,13 @@ private fun VerticalRail(
                 QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()
-                renderGroup(groups.history)
-                ToolbarDivider()
                 renderGroup(groups.overflow)
                 InkStrip(uiState = uiState, onAction = onAction)
             }
 
-            // Outside the scroller, so the way out of the editor is always at the foot of the
-            // rail however long the rest of it gets.
+            // Undo and redo stay at the foot even on a short display.
             ToolbarDivider()
-            Column { renderGroup(groups.pinned) }
+            Column { renderGroup(groups.history) }
         }
         if (position == AppSettings.Position.Left) ToolbarEdgeRule(vertical = true)
     }

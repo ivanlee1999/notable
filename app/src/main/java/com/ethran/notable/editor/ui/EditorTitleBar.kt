@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
 import com.ethran.notable.editor.ToolbarAction
 import com.ethran.notable.editor.ToolbarUiState
+import com.ethran.notable.editor.ui.toolbar.ToolbarMenu
 import com.ethran.notable.ui.components.RowRule
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
@@ -32,7 +36,6 @@ import com.ethran.notable.ui.theme.kaleidoMetrics
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronLeft
-import compose.icons.feathericons.FileText
 import compose.icons.feathericons.MoreHorizontal
 
 /**
@@ -66,75 +69,84 @@ fun EditorTitleBar(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(metrics.hit)
-                .padding(horizontal = 10.dp),
+                .height(48.dp)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             // Exit straight to the containing folder. Page management remains in the menu.
             TitleBarButton(
                 icon = FeatherIcons.ChevronLeft,
                 contentDescription = stringResource(R.string.editor_title_bar_back),
-                hitSize = metrics.hit,
+                hitSize = 48.dp,
                 onClick = { onAction(ToolbarAction.NavigateToLibrary) },
             )
 
-            Text(
-                // Empty only for the frame before the page has loaded.
-                text = uiState.notebookTitle.orEmpty(),
-                fontSize = metrics.bodySize,
-                fontWeight = FontWeight.Bold,
-                color = Kaleido.Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = true)
-                    .noRippleClickable(onSwitchNotebook)
-                    .padding(vertical = 12.dp),
-            )
+            // The name and chevron form one generous target. Separate chevron/template
+            // buttons used to consume nearly the whole narrow header and reduce the name
+            // to one character. Document settings remain in the menu.
+            Row(
+                Modifier.weight(1f).height(48.dp)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "Switch notebook or page"
+                        stateDescription = uiState.notebookTitle.orEmpty()
+                    }
+                    .noRippleClickable(onSwitchNotebook),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = uiState.notebookTitle.orEmpty(),
+                    fontSize = metrics.bodySize,
+                    fontWeight = FontWeight.Medium,
+                    color = Kaleido.Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(FeatherIcons.ChevronDown, contentDescription = null,
+                    tint = Kaleido.Muted, modifier = Modifier.size(14.dp))
+            }
 
-            TitleBarButton(
-                icon = FeatherIcons.ChevronDown,
-                contentDescription = "Switch notebook or page",
-                hitSize = metrics.hit,
-                onClick = onSwitchNotebook,
-            )
+            Box(
+                Modifier.size(48.dp)
+                    .semantics {
+                        contentDescription = "Pages"
+                        stateDescription = "Page ${uiState.pageNumberInfo.replace("/", " of ")}"
+                    }
+                    .noRippleClickable { onAction(ToolbarAction.OpenQuickNav) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = uiState.pageNumberInfo.replace("/", " / "),
+                    fontSize = 11.sp,
+                    color = Kaleido.Muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
-            Text(
-                text = uiState.pageNumberInfo.replace("/", " / "),
-                fontSize = 11.sp,
-                color = Kaleido.Muted,
-                maxLines = 1,
-            )
-
-            TitleBarButton(
-                icon = FeatherIcons.FileText,
-                contentDescription = stringResource(R.string.change_background),
-                hitSize = metrics.hit,
-                onClick = { onAction(ToolbarAction.ToggleBackgroundSelector(true)) },
-            )
-            TitleBarButton(
-                icon = FeatherIcons.MoreHorizontal,
-                contentDescription = stringResource(R.string.toolbar_element_menu),
-                hitSize = metrics.hit,
-                onClick = { onAction(ToolbarAction.ToggleMenu) },
-            )
+            Box {
+                TitleBarButton(
+                    icon = FeatherIcons.MoreHorizontal,
+                    contentDescription = stringResource(R.string.toolbar_element_menu),
+                    hitSize = 48.dp,
+                    onClick = { onAction(ToolbarAction.ToggleMenu) },
+                )
+                if (uiState.isMenuOpen) ToolbarMenu(uiState, onAction, fromTitleBar = true)
+            }
         }
         RowRule()
     }
 }
 
 /**
- * Everything the bar covers: a row at the size step the screen is drawn at — the same hit
- * target the rail and the Library use, so nothing in the chrome is smaller than the minimum
- * touch edge — plus the hairline that closes it. The rule is part of the band because a
- * stroke laid across it would otherwise sit on top of the chrome's own edge.
- *
- * Taken from [android.content.res.Configuration.screenWidthDp] rather than a measured
- * constraint so the drawing surface, which is armed off the composition, can work out the
- * band to exclude and arrive at the same answer.
+ * Shared with the raw-drawing exclusion band and overlay insets. Keep one fixed 48dp
+ * interactive row at every window width; UI density scales the row and canvas exclusion
+ * together. The width argument remains for callers that already pass configuration width.
  */
-fun editorTitleBarHeight(screenWidthDp: Int): Dp =
-    kaleidoMetrics(screenWidthDp.dp).hit + Kaleido.RowRule
+fun editorTitleBarHeight(@Suppress("UNUSED_PARAMETER") screenWidthDp: Int): Dp =
+    48.dp + Kaleido.RowRule
 
 /** The compact icon keeps the same finger-sized target as the rest of the chrome. */
 @Composable

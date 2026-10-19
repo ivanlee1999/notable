@@ -38,7 +38,7 @@ data class ToolbarPopupPlacement(
 fun toolbarPopupPlacement(): ToolbarPopupPlacement {
     val density = LocalDensity.current
     // One button plus a hairline: enough to clear the rail without floating free of it.
-    val gap = with(density) { 43.dp.roundToPx() }
+    val gap = with(density) { (BUTTON_SIZE + 3).dp.roundToPx() }
     val clear = (BUTTON_SIZE + 5).dp
 
     return when (GlobalAppSettings.current.toolbarPosition) {
@@ -69,9 +69,9 @@ fun toolbarPopupPlacement(): ToolbarPopupPlacement {
 @Composable
 fun toolbarMenuPlacement(): ToolbarPopupPlacement {
     val density = LocalDensity.current
-    val drop = with(density) { 50.dp.roundToPx() }
+    val drop = with(density) { (BUTTON_SIZE + 10).dp.roundToPx() }
     val inset = with(density) { 10.dp.roundToPx() }
-    val gap = with(density) { 43.dp.roundToPx() }
+    val gap = with(density) { (BUTTON_SIZE + 3).dp.roundToPx() }
     val clear = (BUTTON_SIZE + 5).dp
 
     return when (GlobalAppSettings.current.toolbarPosition) {

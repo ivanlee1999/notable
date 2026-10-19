@@ -19,6 +19,9 @@ import com.ethran.notable.ui.components.RowRule
 import com.ethran.notable.ui.components.Kicker
 import com.ethran.notable.ui.theme.Kaleido
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -42,8 +45,12 @@ import com.ethran.notable.io.ExportFormat
 fun ToolbarMenu(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
+    fromTitleBar: Boolean = false,
 ) {
-    val placement = toolbarMenuPlacement()
+    val density = LocalDensity.current
+    val placement = if (fromTitleBar) ToolbarPopupPlacement(
+        Alignment.TopEnd, IntOffset(0, with(density) { 48.dp.roundToPx() }), PaddingValues()
+    ) else toolbarMenuPlacement()
 
     ScaledPopup(
         alignment = placement.alignment,

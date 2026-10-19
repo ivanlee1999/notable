@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 // Define the target page size (A4 in points: 595 x 842)
 const val A4_WIDTH = 595
 const val A4_HEIGHT = 842
-const val BUTTON_SIZE = 37
+const val BUTTON_SIZE = 48
 
 /**
  * The docked rail measured across its short edge — one button plus the rule that closes it.

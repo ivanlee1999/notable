@@ -1,5 +1,6 @@
 package com.ethran.notable.editor.ui.toolbar
 
+import com.ethran.notable.data.datastore.BUTTON_SIZE
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.editor.ui.toolbar.model.ERASER_BASE_WIDTH
 import com.ethran.notable.editor.ui.toolbar.model.NibWidth
@@ -39,37 +40,29 @@ class RailGroupsTest {
     }
 
     @Test
-    fun `undo comes before redo, and the way out is last`() {
+    fun `undo comes before redo in the pinned history group`() {
         val groups = RailGroups.of(pens)
         assertEquals(
             listOf(ToolbarElementId.UNDO, ToolbarElementId.REDO),
             groups.history.map { it.id },
         )
-        assertEquals(ToolbarElementId.MENU, groups.pinned.last().id)
     }
 
-    /**
-     * The panel of previews, outline and bookmarks was reachable only by a three-finger swipe up —
-     * a gesture nothing on screen mentions — so to a reader who did not know it, the feature was
-     * not there at all. Its button is what makes it exist; losing it from the rail would be the
-     * same regression, silently.
-     */
     @Test
-    fun `the navigation panel has a button, beside the page counter`() {
-        val pinned = RailGroups.of(pens).pinned.map { it.id }
-
-        assertTrue(ToolbarElementId.QUICK_NAV in pinned)
-        assertEquals(
-            pinned.indexOf(ToolbarElementId.PAGE_NAV) + 1,
-            pinned.indexOf(ToolbarElementId.QUICK_NAV),
-        )
+    fun `document navigation belongs to the title bar rather than the writing rail`() {
+        val groups = RailGroups.of(pens)
+        val ids = (groups.tools + groups.overflow + groups.history).map { it.id }
+        for (id in listOf(ToolbarElementId.PAGE_NAV, ToolbarElementId.QUICK_NAV,
+            ToolbarElementId.HOME, ToolbarElementId.MENU)) {
+            assertFalse("Duplicate document action: $id", id in ids)
+        }
     }
 
     @Test
     fun `the arrangement does not depend on which presets the user has`() {
         val mine = listOf(ToolbarPen("mine", Pen.CALLIGRAPHY, android.graphics.Color.BLACK, 5f))
         val ids = { p: List<ToolbarPen> ->
-            RailGroups.of(p).let { it.tools.map(::idOf) + it.history.map(::idOf) + it.pinned.map(::idOf) }
+            RailGroups.of(p).let { it.tools.map(::idOf) + it.history.map(::idOf) }
         }
         assertEquals(ids(pens), ids(mine))
     }
@@ -159,6 +152,18 @@ class RailGroupsTest {
     fun `an unknown persisted step falls back rather than throwing`() {
         assertEquals(NibWidth.MEDIUM, NibWidth.fromKeyOrDefault("from-a-newer-build"))
         assertEquals(NibWidth.MEDIUM, NibWidth.fromKeyOrDefault(null))
+    }
+
+    @Test
+    fun `rail controls reserve accessible touch targets`() {
+        assertTrue(BUTTON_SIZE >= 48)
+    }
+
+    @Test
+    fun `default inks have distinct readable names`() {
+        val names = Kaleido.Inks.map(::inkDescription)
+        assertEquals(names.size, names.distinct().size)
+        assertTrue(names.none { it.contains("#") })
     }
 
     // --- the palette ---
