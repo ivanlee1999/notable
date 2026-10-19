@@ -200,6 +200,8 @@ class CouchOutboxTest {
         assertEquals(setOf(CouchDocId.notebook(copyId)) + copy.pageIds.map(CouchDocId::page), queued())
         assertEquals(original.pageIds, repository.bookRepository.getById(bookId)!!.pageIds)
         assertEquals(second, repository.bookRepository.getById(bookId)!!.bookmarks.single().pageId)
+        assertEquals(second, repository.bookRepository.getById(bookId)!!.openPageId)
+        assertEquals(original.outline, repository.bookRepository.getById(bookId)!!.outline)
     }
 
     @Test
@@ -233,6 +235,19 @@ class CouchOutboxTest {
         clearQueue()
         assertNull(repository.duplicateNotebook(bookId))
         assertEquals(listOf(bookId), repository.bookRepository.getAll().map { it.id })
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    @Test
+    fun notebook_copy_refuses_a_manifest_page_owned_by_another_notebook() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val (otherId, foreignPage) = seedNotebook()
+        val original = repository.bookRepository.getById(bookId)!!
+        repository.bookRepository.update(original.copy(pageIds = listOf(first, foreignPage)))
+        clearQueue()
+        assertNull(repository.duplicateNotebook(bookId))
+        assertEquals(setOf(bookId, otherId), repository.bookRepository.getAll().map { it.id }.toSet())
+        assertEquals(otherId, repository.pageRepository.getById(foreignPage)!!.notebookId)
         assertEquals(emptySet<String>(), queued())
     }
 

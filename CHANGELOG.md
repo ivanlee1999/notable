@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.55.2
+
+- Duplicate notebooks as one transaction, keeping bookmarks, outline entries, and
+  the resume page attached to the new pages. Missing source pages or failed writes
+  cannot leave a partial copy or queued fragments behind.
+- Refuse page duplication when the source is no longer in its notebook manifest.
+- Make the eraser setting readable at large text sizes with a labeled, finger-sized
+  checkbox. Continuous stroke width supports screen-reader and keyboard adjustment
+  and a larger touch target while preserving the selected ink.
+
+No database schema or sync-format change. Physical BOOX behavior remains unverified.
+
 ## 0.55.1
 
 - Name every built-in monochrome ink, including dark and light grey, in the palette.

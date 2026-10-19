@@ -167,12 +167,15 @@ class AppRepository @Inject constructor(
         return book.pageIds[index - 1]
     }
 
-    suspend fun duplicatePage(pageId: String) {
+    suspend fun duplicatePage(pageId: String) = db.withTransaction {
         val pageWithData = pageRepository.getWithDataById(pageId)
         if (pageWithData == null) {
             log.w("duplicatePage: Missing page Data.")
-            return
+            return@withTransaction
         }
+        val book = bookRepository.getById(pageWithData.page.notebookId) ?: return@withTransaction
+        val pageIndex = book.getPageIndex(pageId)
+        if (pageIndex == -1) return@withTransaction
         val duplicatedPage = pageWithData.page.copy(
             id = UUID.randomUUID().toString(),
             scroll = 0,
@@ -181,36 +184,30 @@ class AppRepository @Inject constructor(
         )
         // One transaction, so the duplicate and the manifest that names it are either both here or
         // neither is — and so their outbox entries land with them rather than after them.
-        db.withTransaction {
-            pageRepository.create(duplicatedPage)
-            // The strokes' new names, so an ink block on the copy can be told which of them it
-            // groups — see [copyBlocks].
-            val strokeIds = pageWithData.strokes.associate { it.id to UUID.randomUUID().toString() }
-            strokeRepository.create(pageWithData.strokes.map {
-                it.copy(
-                    id = strokeIds.getValue(it.id),
-                    pageId = duplicatedPage.id,
-                    updatedAt = SyncClock.nowDate(),
-                    createdAt = SyncClock.nowDate()
-                )
-            })
-            imageRepository.create(pageWithData.images.map {
-                it.copy(
-                    id = UUID.randomUUID().toString(),
-                    pageId = duplicatedPage.id,
-                    updatedAt = SyncClock.nowDate(),
-                    createdAt = SyncClock.nowDate()
-                )
-            })
-            blockRepository.upsertAll(copyBlocks(pageWithData.blocks, duplicatedPage.id, strokeIds))
-            val book = bookRepository.getById(pageWithData.page.notebookId)
-                ?: return@withTransaction
-            val pageIndex = book.getPageIndex(pageWithData.page.id)
-            if (pageIndex == -1) return@withTransaction
-            val pageIds = book.pageIds.toMutableList()
-            pageIds.add(pageIndex + 1, duplicatedPage.id)
-            bookRepository.update(book.copy(pageIds = pageIds))
-        }
+        pageRepository.create(duplicatedPage)
+        // The strokes' new names, so an ink block on the copy can be told which of them it
+        // groups — see [copyBlocks].
+        val strokeIds = pageWithData.strokes.associate { it.id to UUID.randomUUID().toString() }
+        strokeRepository.create(pageWithData.strokes.map {
+            it.copy(
+                id = strokeIds.getValue(it.id),
+                pageId = duplicatedPage.id,
+                updatedAt = SyncClock.nowDate(),
+                createdAt = SyncClock.nowDate()
+            )
+        })
+        imageRepository.create(pageWithData.images.map {
+            it.copy(
+                id = UUID.randomUUID().toString(),
+                pageId = duplicatedPage.id,
+                updatedAt = SyncClock.nowDate(),
+                createdAt = SyncClock.nowDate()
+            )
+        })
+        blockRepository.upsertAll(copyBlocks(pageWithData.blocks, duplicatedPage.id, strokeIds))
+        val pageIds = book.pageIds.toMutableList()
+        pageIds.add(pageIndex + 1, duplicatedPage.id)
+        bookRepository.update(book.copy(pageIds = pageIds))
     }
 
     /**
@@ -245,14 +242,24 @@ class AppRepository @Inject constructor(
      *
      * @return the new notebook's id, or null if the source is gone.
      */
-    suspend fun duplicateNotebook(notebookId: String): String? {
-        val source = bookRepository.getById(notebookId) ?: return null
+    suspend fun duplicateNotebook(notebookId: String): String? = db.withTransaction {
+        val source = bookRepository.getById(notebookId) ?: return@withTransaction null
+        // Resolve a complete source snapshot before creating anything. A missing sync page is
+        // not an empty page: silently skipping it would produce an apparently successful copy.
+        for (pageId in source.pageIds) {
+            val page = pageRepository.getById(pageId) ?: return@withTransaction null
+            if (page.notebookId != source.id) return@withTransaction null
+        }
+        val pageIds = source.pageIds.associateWith { UUID.randomUUID().toString() }
+        val copiedAt = SyncClock.nowIso()
 
         val copy = source.copy(
             id = UUID.randomUUID().toString(),
             title = "${source.title} copy",
             pageIds = listOf(),
             openPageId = null,
+            bookmarks = emptyList(),
+            outline = emptyList(),
             // Not linked: a linked notebook exports itself over a file on disk, and two notebooks
             // pointed at the same file would overwrite each other.
             linkedExternalUri = null,
@@ -263,9 +270,11 @@ class AppRepository @Inject constructor(
 
         val newPageIds = mutableListOf<String>()
         for (pageId in source.pageIds) {
-            val data = pageRepository.getWithDataById(pageId) ?: continue
+            // Keep only one page's ink in memory. The encompassing transaction keeps the
+            // validated source stable; a failed read aborts rather than commits a partial copy.
+            val data = checkNotNull(pageRepository.getWithDataById(pageId))
             val newPage = data.page.copy(
-                id = UUID.randomUUID().toString(),
+                id = pageIds.getValue(data.page.id),
                 notebookId = copy.id,
                 createdAt = SyncClock.nowDate(),
                 updatedAt = SyncClock.nowDate(),
@@ -288,9 +297,20 @@ class AppRepository @Inject constructor(
             newPageIds += newPage.id
         }
 
-        bookRepository.update(copy.copy(pageIds = newPageIds, openPageId = newPageIds.firstOrNull()))
+        bookRepository.update(copy.copy(
+            pageIds = newPageIds,
+            openPageId = pageIds[source.openPageId] ?: newPageIds.firstOrNull(),
+            bookmarks = source.bookmarks.filterNot { it.removed }.mapNotNull { bookmark ->
+                pageIds[bookmark.pageId]?.let { bookmark.copy(pageId = it, updatedAt = copiedAt) }
+            }.sortedBy { it.pageId },
+            outline = source.outline.filterNot { it.removed }.mapNotNull { entry ->
+                pageIds[entry.pageId]?.let {
+                    entry.copy(id = UUID.randomUUID().toString(), pageId = it, updatedAt = copiedAt)
+                }
+            },
+        ))
         log.i("Duplicated notebook $notebookId as ${copy.id} with ${newPageIds.size} page(s)")
-        return copy.id
+        copy.id
     }
 
     /**
