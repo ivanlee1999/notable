@@ -8,6 +8,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import com.ethran.notable.ui.theme.Kaleido
@@ -112,6 +116,28 @@ class StrokeOptionsTest {
         compose.onNodeWithContentDescription("Stroke width").assertIsDisplayed()
             .performTouchInput { click(Offset(width - 1f, height / 2f)) }
         assertEquals(PenSetting(13f, ink), changes.last())
+    }
+
+    @Test
+    fun continuousWidthSupportsAccessibleAndKeyboardAdjustment() {
+        val changes = fullPopup(continuous = true)
+        val ink = Kaleido.Inks.last()
+        compose.onNodeWithContentDescription(inkDescription(ink)).performScrollTo().performClick()
+        val slider = compose.onNodeWithContentDescription("Stroke width")
+        slider.assertHeightIsAtLeast(48.dp)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo,
+                ProgressBarRangeInfo(1f, 1f..13f, 11)))
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { it(99f) }
+        assertEquals(PenSetting(13f, ink), changes.last())
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { it(-10f) }
+        assertEquals(PenSetting(1f, ink), changes.last())
+        slider.performSemanticsAction(SemanticsActions.RequestFocus) { it() }
+        slider.performKeyInput { pressKey(Key.DirectionRight) }
+        assertEquals(PenSetting(2f, ink), changes.last())
+        slider.performKeyInput { pressKey(Key.DirectionLeft) }
+        assertEquals(PenSetting(1f, ink), changes.last())
+        slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo,
+            ProgressBarRangeInfo(1f, 1f..13f, 11)))
     }
 
     @Test fun discreteSizesRemainReachableAt320dp() = everyDiscreteSizeIsReachable(320)

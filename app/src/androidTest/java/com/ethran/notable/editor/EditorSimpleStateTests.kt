@@ -1,5 +1,7 @@
 package com.ethran.notable.editor
 
+import com.ethran.notable.testing.EditorTestLifecycle
+import com.ethran.notable.testing.mockEditorSettingsForTest
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -47,6 +49,7 @@ import com.ethran.notable.testing.trashRepositoryFor
 @RunWith(AndroidJUnit4::class)
 class EditorSimpleStateTests {
 
+    private val lifecycle = EditorTestLifecycle()
     private lateinit var db: AppDatabase
 
     @Before
@@ -57,6 +60,7 @@ class EditorSimpleStateTests {
 
     @After
     fun tearDown() {
+        lifecycle.close()
         db.close()
     }
 
@@ -180,7 +184,7 @@ class EditorSimpleStateTests {
         appRepository: AppRepository = repositoryFor(context, db),
     ): EditorViewModel {
         val kvRepository = KvRepository(db.kvDao(), context)
-        val editorSettingCacheManager = EditorSettingCacheManager(kvRepository)
+        val editorSettingCacheManager = mockEditorSettingsForTest()
 
         val exportEngine = mockk<ExportEngine>(relaxed = true)
         val pageDataManager = mockk<PageDataManager>(relaxed = true)
@@ -201,7 +205,7 @@ class EditorSimpleStateTests {
             snackDispatcher = snackDispatcher,
             historyFactory = historyFactory,
             appScope = appScope,
-        )
+        ).also { lifecycle.track(it, appScope) }
     }
 
     /** The same database the view model reads, so a test can seed it and read it back. */

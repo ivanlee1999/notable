@@ -1,5 +1,7 @@
 package com.ethran.notable.editor
 
+import com.ethran.notable.testing.EditorTestLifecycle
+import com.ethran.notable.testing.mockEditorSettingsForTest
 import android.content.Context
 import android.os.Looper
 import androidx.compose.runtime.snapshots.Snapshot
@@ -67,6 +69,7 @@ import com.ethran.notable.testing.trashRepositoryFor
 @RunWith(AndroidJUnit4::class)
 class EditorSelectionThreadSafetyTests {
 
+    private val lifecycle = EditorTestLifecycle()
     private lateinit var db: AppDatabase
 
     @Before
@@ -77,6 +80,7 @@ class EditorSelectionThreadSafetyTests {
 
     @After
     fun tearDown() {
+        lifecycle.close()
         db.close()
     }
 
@@ -193,7 +197,7 @@ class EditorSelectionThreadSafetyTests {
             db = db,
         )
 
-        val editorSettingCacheManager = EditorSettingCacheManager(kvRepository)
+        val editorSettingCacheManager = mockEditorSettingsForTest()
 
         val exportEngine = mockk<ExportEngine>(relaxed = true)
         val pageDataManager = mockk<PageDataManager>(relaxed = true)
@@ -219,7 +223,7 @@ class EditorSelectionThreadSafetyTests {
             snackDispatcher = snackDispatcher,
             historyFactory = historyFactory,
             appScope = appScope,
-        )
+        ).also { lifecycle.track(it, appScope) }
     }
 
     private fun dummyStroke(pageId: String): Stroke {

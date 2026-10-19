@@ -1,5 +1,14 @@
 package com.ethran.notable.editor.ui.toolbar
 
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import com.ethran.notable.ui.noRippleClickable
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -160,8 +170,7 @@ fun ColumnScope.StrokeSizePicker(
             modifier = Modifier
                 .align(Alignment.CenterHorizontally)
                 .width(widthOfPicker.dp)   // shorter than full width
-                .height(heightOfPicker.dp)   // compact height
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .height(heightOfPicker.coerceAtLeast(48).dp)
                 .semantics { contentDescription = "Stroke width" }
         )
     }
@@ -262,6 +271,7 @@ private fun DiscreteThicknessSlider(
     // Pointer handlers survive ink changes when the range is unchanged. Keep their callback
     // current so changing the width cannot restore a color captured when the popup opened.
     val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val horizontalInsetPx = with(LocalDensity.current) { 10.dp.toPx() }
 
     // Use only sorted, distinct values
     val displayValues = values.distinct().sorted()
@@ -291,19 +301,44 @@ private fun DiscreteThicknessSlider(
 
     Box(
         modifier = modifier
-            .pointerInput(displayValues) {
-                detectTapGestures { offset ->
-                    val w = size.width.coerceAtLeast(1)
-                    currentOnValueChange(snapToNearestInt(offset.x / w))
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    thumbInt.toFloat(), minVal.toFloat()..maxVal.toFloat(),
+                    (maxVal - minVal - 1).coerceAtLeast(0),
+                )
+                setProgress { requested ->
+                    if (!requested.isFinite()) false else {
+                        currentOnValueChange(requested.coerceIn(minVal.toFloat(), maxVal.toFloat())
+                            .roundToInt().toFloat())
+                        true
+                    }
                 }
             }
-            .pointerInput(displayValues) {
+            .onKeyEvent { event ->
+                val delta = when (event.key) {
+                    Key.DirectionRight, Key.DirectionUp -> 1
+                    Key.DirectionLeft, Key.DirectionDown -> -1
+                    else -> return@onKeyEvent false
+                }
+                if (event.type == KeyEventType.KeyDown) {
+                    currentOnValueChange((thumbInt + delta).coerceIn(minVal, maxVal).toFloat())
+                }
+                true
+            }
+            .focusable()
+            .pointerInput(displayValues, horizontalInsetPx) {
+                detectTapGestures { offset ->
+                    val w = (size.width - 2 * horizontalInsetPx).coerceAtLeast(1f)
+                    currentOnValueChange(snapToNearestInt((offset.x - horizontalInsetPx) / w))
+                }
+            }
+            .pointerInput(displayValues, horizontalInsetPx) {
                 detectDragGestures(onDrag = { change, _ ->
-                    val w = size.width.coerceAtLeast(1)
-                    currentOnValueChange(snapToNearestInt(change.position.x / w))
+                    val w = (size.width - 2 * horizontalInsetPx).coerceAtLeast(1f)
+                    currentOnValueChange(snapToNearestInt((change.position.x - horizontalInsetPx) / w))
                 })
             }) {
-        Canvas(modifier = Modifier.matchParentSize()) {
+        Canvas(modifier = Modifier.matchParentSize().padding(horizontal = 10.dp, vertical = 8.dp)) {
             val w = size.width
             val h = size.height
             val centerY = h / 2f

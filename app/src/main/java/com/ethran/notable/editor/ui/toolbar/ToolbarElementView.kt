@@ -2,7 +2,11 @@ package com.ethran.notable.editor.ui.toolbar
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -336,34 +340,38 @@ private fun EraserSubmenu(onAction: (ToolbarAction) -> Unit) {
                 .padding(placement.padding) // keeps the menu on screen against the docked edge
                 .background(Color.White)
                 .border(1.dp, Color.Black)
-                .height(IntrinsicSize.Max)
         ) {
+            val initialState = GlobalAppSettings.current.scribbleToEraseEnabled
+            var isChecked by remember { mutableStateOf(initialState) }
             Row(
                 modifier = Modifier
-                    .padding(4.dp)
-                    .height(26.dp)
-                    .width(IntrinsicSize.Min)
-                    .background(Color.White),
+                    .widthIn(min = 48.dp, max = 280.dp)
+                    // Prefer complete lines, but let the label wrap naturally at the width cap.
+                    .width(IntrinsicSize.Max)
+                    .heightIn(min = 48.dp)
+                    .toggleable(
+                        value = isChecked,
+                        role = Role.Checkbox,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onValueChange = {
+                            isChecked = it
+                            onAction(ToolbarAction.ToggleScribbleToErase(it))
+                        },
+                    )
+                    .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 BasicText(
                     text = stringResource(R.string.toolbar_scribble_to_erase_two_lined_short),
-                    modifier = Modifier.padding(end = 6.dp),
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
                     style = TextStyle(color = Color.Black, fontSize = 13.sp)
                 )
-                // Reflects the global flag; ToggleScribbleToErase persists it.
-                val initialState = GlobalAppSettings.current.scribbleToEraseEnabled
-                var isChecked by remember { mutableStateOf(initialState) }
-
                 Box(
                     modifier = Modifier
-                        .size(15.dp, 15.dp)
+                        .size(20.dp)
                         .border(1.dp, Color.Black)
                         .background(if (isChecked) Color.Black else Color.White)
-                        .clickable {
-                            isChecked = !isChecked
-                            onAction(ToolbarAction.ToggleScribbleToErase(isChecked))
-                        }
                 )
             }
         }

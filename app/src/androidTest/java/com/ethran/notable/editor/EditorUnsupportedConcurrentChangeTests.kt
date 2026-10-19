@@ -1,5 +1,6 @@
 package com.ethran.notable.editor
 
+import com.ethran.notable.testing.EditorTestLifecycle
 import android.content.Context
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.test.core.app.ApplicationProvider
@@ -37,6 +38,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class EditorUnsupportedConcurrentChangeTests {
 
+    private val lifecycle = EditorTestLifecycle()
     private lateinit var db: AppDatabase
 
     @Before
@@ -49,6 +51,7 @@ class EditorUnsupportedConcurrentChangeTests {
 
     @After
     fun tearDown() {
+        lifecycle.close()
         db.close()
     }
 
@@ -73,6 +76,7 @@ class EditorUnsupportedConcurrentChangeTests {
         val viewModel = createEditorViewModelForTest(
             context = ApplicationProvider.getApplicationContext(),
             db = db,
+            lifecycle = lifecycle,
         )
 
         // Load initial toolbar state (suspend Room I/O; runs on this test thread, off the main thread).

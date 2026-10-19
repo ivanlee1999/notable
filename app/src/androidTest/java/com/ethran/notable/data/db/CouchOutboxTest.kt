@@ -176,6 +176,92 @@ class CouchOutboxTest {
         )
     }
 
+    @Test
+    fun notebook_copy_remaps_navigation_to_new_pages_and_preserves_resume_position() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val second = repository.newPageInBook(bookId, index = 1)!!
+        repository.bookRepository.setBookmark(bookId, second, true)
+        repository.bookRepository.addOutlineEntry(bookId, second, "Chapter two", depth = 1)
+        val original = repository.bookRepository.getById(bookId)!!.copy(openPageId = second)
+        repository.bookRepository.update(original)
+        clearQueue()
+
+        val copyId = repository.duplicateNotebook(bookId)!!
+        val copy = repository.bookRepository.getById(copyId)!!
+        assertEquals(2, copy.pageIds.size)
+        assertTrue(copy.pageIds.none { it == first || it == second })
+        assertEquals(copy.pageIds[1], copy.openPageId)
+        assertEquals(copy.pageIds[1], copy.bookmarks.single().pageId)
+        val entry = copy.outline.single()
+        assertEquals(copy.pageIds[1], entry.pageId)
+        assertEquals("Chapter two", entry.title)
+        assertEquals(1, entry.depth)
+        assertTrue(entry.id != original.outline.single().id)
+        assertEquals(setOf(CouchDocId.notebook(copyId)) + copy.pageIds.map(CouchDocId::page), queued())
+        assertEquals(original.pageIds, repository.bookRepository.getById(bookId)!!.pageIds)
+        assertEquals(second, repository.bookRepository.getById(bookId)!!.bookmarks.single().pageId)
+        assertEquals(second, repository.bookRepository.getById(bookId)!!.openPageId)
+        assertEquals(original.outline, repository.bookRepository.getById(bookId)!!.outline)
+    }
+
+    @Test
+    fun interrupted_notebook_copy_rolls_back_all_rows_and_outbox_entries() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val second = repository.newPageInBook(bookId, index = 1)!!
+        repository.pageRepository.rename(second, "Fail second copy")
+        clearQueue()
+        db.openHelper.writableDatabase.execSQL("""
+            CREATE TRIGGER reject_second_copy BEFORE INSERT ON page
+            WHEN NEW.notebookId != '$bookId' AND NEW.title = 'Fail second copy'
+            BEGIN SELECT RAISE(ABORT, 'simulated copy failure'); END
+        """.trimIndent())
+        var failed = false
+        try {
+            repository.duplicateNotebook(bookId)
+        } catch (_: android.database.sqlite.SQLiteException) {
+            failed = true
+        }
+        assertTrue("the injected second-page failure must execute", failed)
+        assertEquals(listOf(bookId), repository.bookRepository.getAll().map { it.id })
+        assertEquals(setOf(first, second), repository.pageRepository.getPageIdsForNotebook(bookId).toSet())
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    @Test
+    fun notebook_copy_refuses_missing_source_pages_without_a_partial_copy() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val original = repository.bookRepository.getById(bookId)!!
+        repository.bookRepository.update(original.copy(pageIds = listOf(first, "missing-page")))
+        clearQueue()
+        assertNull(repository.duplicateNotebook(bookId))
+        assertEquals(listOf(bookId), repository.bookRepository.getAll().map { it.id })
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    @Test
+    fun notebook_copy_refuses_a_manifest_page_owned_by_another_notebook() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val (otherId, foreignPage) = seedNotebook()
+        val original = repository.bookRepository.getById(bookId)!!
+        repository.bookRepository.update(original.copy(pageIds = listOf(first, foreignPage)))
+        clearQueue()
+        assertNull(repository.duplicateNotebook(bookId))
+        assertEquals(setOf(bookId, otherId), repository.bookRepository.getAll().map { it.id }.toSet())
+        assertEquals(otherId, repository.pageRepository.getById(foreignPage)!!.notebookId)
+        assertEquals(emptySet<String>(), queued())
+    }
+
+    @Test
+    fun duplicating_a_page_outside_its_manifest_does_not_create_an_orphan() = runBlocking {
+        val (bookId, first) = seedNotebook()
+        val detached = Page(notebookId = bookId)
+        repository.pageRepository.create(detached)
+        clearQueue()
+        repository.duplicatePage(detached.id)
+        assertEquals(setOf(first, detached.id), repository.pageRepository.getPageIdsForNotebook(bookId).toSet())
+        assertEquals(emptySet<String>(), queued())
+    }
+
     /**
      * Reorder is the case the "never sent" scan can never rescue: the notebook is one the server
      * already holds, so nothing about it looks unsent, and only the order of `pageIds` moved.
