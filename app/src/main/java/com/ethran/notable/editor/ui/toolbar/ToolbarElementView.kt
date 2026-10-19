@@ -340,14 +340,14 @@ private fun EraserSubmenu(onAction: (ToolbarAction) -> Unit) {
                 .padding(placement.padding) // keeps the menu on screen against the docked edge
                 .background(Color.White)
                 .border(1.dp, Color.Black)
-                .height(IntrinsicSize.Max)
         ) {
             val initialState = GlobalAppSettings.current.scribbleToEraseEnabled
             var isChecked by remember { mutableStateOf(initialState) }
             Row(
                 modifier = Modifier
                     .widthIn(min = 48.dp, max = 280.dp)
-                    .width(IntrinsicSize.Min)
+                    // Prefer complete lines, but let the label wrap naturally at the width cap.
+                    .width(IntrinsicSize.Max)
                     .heightIn(min = 48.dp)
                     .toggleable(
                         value = isChecked,
