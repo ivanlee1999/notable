@@ -65,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -550,8 +551,9 @@ private fun PagesTab(
 
     var outliningPageId by remember { mutableStateOf<String?>(null) }
 
+    val thumbnailHeight = pageThumbnailHeight()
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxHeight < 200.dp) {
+        if (maxHeight < thumbnailHeight) {
             // A thumbnail squeezed into a short row loses both its label and usable target.
             // Compact windows keep every page accessible as a scrollable, named 48dp row.
             LazyColumn(Modifier.fillMaxWidth().autoEInkAnimationOnScroll()) {
@@ -577,15 +579,17 @@ private fun PagesTab(
                 }
             }
         } else {
-            // Two rows that scroll sideways, not a vertical grid: the sheet is short by design, and this
-            // keeps the page you are on reachable without the sheet growing over the canvas.
+            // Two rows only when both previews AND scalable labels fit. Intermediate-height
+            // windows use one row rather than constraining away the page numbers.
+            val rows = if (maxHeight >= thumbnailHeight * 2 + 8.dp) 2 else 1
+            val gridHeight = thumbnailHeight * rows + if (rows == 2) 8.dp else 0.dp
             LazyHorizontalGrid(
-                rows = GridCells.Fixed(2),
+                rows = GridCells.Fixed(rows),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(300.dp)
+                    .height(gridHeight)
                     .autoEInkAnimationOnScroll()
             ) {
                 gridItemsIndexed(pageIds) { index, pageId ->
@@ -816,7 +820,7 @@ private fun BookmarksTab(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp)
+            .height(pageThumbnailHeight())
             .autoEInkAnimationOnScroll()
     ) {
         gridItems(pageIds) { pageId ->
@@ -889,6 +893,15 @@ private fun PinnedTab(
 
 // region Shared
 
+private val PAGE_THUMBNAIL_WIDTH = 100.dp
+private const val PAGE_THUMBNAIL_ASPECT = 3f / 4f
+private val PAGE_THUMBNAIL_LABEL_HEIGHT = 16.sp
+
+/** Reserve the full preview, scalable label and gap, including pixel-rounding slack. */
+@Composable
+private fun pageThumbnailHeight() = PAGE_THUMBNAIL_WIDTH / PAGE_THUMBNAIL_ASPECT +
+    2.dp + with(LocalDensity.current) { PAGE_THUMBNAIL_LABEL_HEIGHT.toDp() } + 1.dp
+
 /** One page, as a thumbnail. A starred page carries a solid tab in its corner. */
 @Composable
 private fun PageThumbnail(
@@ -899,13 +912,18 @@ private fun PageThumbnail(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    Column(Modifier.width(100.dp)) {
+    val labelHeight = with(LocalDensity.current) { PAGE_THUMBNAIL_LABEL_HEIGHT.toDp() }
+    Column(Modifier.width(PAGE_THUMBNAIL_WIDTH)) {
         Box {
             PagePreview(
                 modifier = Modifier
+                    .semantics {
+                        contentDescription = "Open page $label"
+                        selected = isCurrent
+                    }
                     .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                     .fillMaxWidth()
-                    .aspectRatio(3f / 4f)
+                    .aspectRatio(PAGE_THUMBNAIL_ASPECT)
                     .border(if (isCurrent) 4.dp else 1.dp, Color.Black, RectangleShape),
                 pageId = pageId,
             )
@@ -922,7 +940,9 @@ private fun PageThumbnail(
             }
         }
         Spacer(Modifier.height(2.dp))
-        Text(text = label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = label, modifier = Modifier.height(labelHeight),
+            fontSize = 11.sp, lineHeight = PAGE_THUMBNAIL_LABEL_HEIGHT,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

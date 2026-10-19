@@ -554,6 +554,8 @@ internal fun inkDescription(ink: Int): String {
         0xAE1800 -> "Red"
         0xDD2B0F -> "Coral"
         0x888888 -> "Grey"
+        0x4A4A4A -> "Dark grey"
+        0xC4C4C4 -> "Light grey"
         0xC2610A -> "Orange"
         0x96700A -> "Gold"
         0x2E7D32 -> "Green"
