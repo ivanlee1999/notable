@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.components
 
+import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
