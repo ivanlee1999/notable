@@ -1,5 +1,9 @@
 package com.ethran.notable.testing
 
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import android.content.Context
 import android.os.Looper
 import androidx.compose.runtime.snapshots.Snapshot
@@ -48,7 +52,9 @@ import java.util.concurrent.ConcurrentLinkedQueue
  */
 
 /** Builds a real [EditorViewModel] backed by an in-memory Room DB, mocking side-effecting deps. */
-internal fun createEditorViewModelForTest(context: Context, db: AppDatabase): EditorViewModel {
+internal fun createEditorViewModelForTest(
+    context: Context, db: AppDatabase, lifecycle: EditorTestLifecycle,
+): EditorViewModel {
     val bookRepository = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
     val pageRepository = PageRepository(db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
     val strokeRepository = StrokeRepository(db.strokeDao())
@@ -80,7 +86,7 @@ internal fun createEditorViewModelForTest(context: Context, db: AppDatabase): Ed
         db = db,
     )
 
-    val editorSettingCacheManager = EditorSettingCacheManager(kvRepository)
+    val editorSettingCacheManager = mockEditorSettingsForTest()
 
     val exportEngine = mockk<ExportEngine>(relaxed = true)
     val pageDataManager = mockk<PageDataManager>(relaxed = true)
@@ -106,7 +112,7 @@ internal fun createEditorViewModelForTest(context: Context, db: AppDatabase): Ed
         snackDispatcher = snackDispatcher,
         historyFactory = historyFactory,
         appScope = appScope,
-    )
+    ).also { lifecycle.track(it, appScope) }
 }
 
 internal fun dummyStroke(pageId: String): Stroke {
@@ -179,5 +185,35 @@ private fun SelectionState.delegate(fieldName: String): Any? {
     } catch (e: Exception) {
         android.util.Log.e("EditorTest", "Could not find delegate field: $fieldName", e)
         null
+    }
+}
+
+/** Own the test's asynchronous work for exactly as long as its Room database is open. */
+internal class EditorTestLifecycle {
+    private val jobs = mutableListOf<Job>()
+
+    fun track(viewModel: EditorViewModel, applicationScope: CoroutineScope) {
+        jobs += viewModel.viewModelScope.coroutineContext[Job]!!
+        jobs += applicationScope.coroutineContext[Job]!!
+    }
+
+    fun close() = runBlocking {
+        // Cancel all roots first: no producer can enqueue more work while another is joining.
+        jobs.forEach { it.cancel() }
+        withTimeout(5_000) { jobs.forEach { it.join() } }
+        jobs.clear()
+    }
+}
+
+/** These tests exercise editor state, not the singleton cache's independent persistence scope. */
+internal fun mockEditorSettingsForTest(): EditorSettingCacheManager {
+    val settings = java.util.concurrent.atomic.AtomicReference<EditorSettingCacheManager.EditorSettings?>()
+    return mockk(relaxed = true) {
+        every { getEditorSettings() } answers { settings.get() }
+        every { setEditorSettings(any(), any()) } answers {
+            settings.set(firstArg())
+            Unit
+        }
+        coEvery { init() } returns Unit
     }
 }

@@ -1,5 +1,6 @@
 package com.ethran.notable.editor
 
+import com.ethran.notable.testing.EditorTestLifecycle
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,6 +22,7 @@ import org.junit.runner.RunWith
 /** Proves the page-turn action used by both vertical-navigation modes persists and enters page 2. */
 @RunWith(AndroidJUnit4::class)
 class VerticalPageCreationTest {
+    private val lifecycle = EditorTestLifecycle()
     private lateinit var db: AppDatabase
 
     @Before
@@ -32,6 +34,7 @@ class VerticalPageCreationTest {
 
     @After
     fun tearDown() {
+        lifecycle.close()
         db.close()
     }
 
@@ -44,6 +47,7 @@ class VerticalPageCreationTest {
         val viewModel = createEditorViewModelForTest(
             context = ApplicationProvider.getApplicationContext(),
             db = db,
+            lifecycle = lifecycle,
         )
         runBlocking { viewModel.loadToolbarState(seeded.notebookId, firstPage) }
 

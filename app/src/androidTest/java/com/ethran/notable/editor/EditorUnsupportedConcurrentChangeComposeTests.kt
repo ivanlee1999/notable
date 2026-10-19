@@ -1,5 +1,6 @@
 package com.ethran.notable.editor
 
+import com.ethran.notable.testing.EditorTestLifecycle
 import androidx.compose.material.Text
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,6 +46,7 @@ class EditorUnsupportedConcurrentChangeComposeTests {
     @get:Rule
     val composeGate = ComposeUiSupportRule(composeRule)
 
+    private val lifecycle = EditorTestLifecycle()
     private lateinit var db: AppDatabase
 
     @Before
@@ -54,6 +56,7 @@ class EditorUnsupportedConcurrentChangeComposeTests {
 
     @After
     fun tearDown() {
+        lifecycle.close()
         db.close()
     }
 
@@ -66,6 +69,7 @@ class EditorUnsupportedConcurrentChangeComposeTests {
         val viewModel = createEditorViewModelForTest(
             context = ApplicationProvider.getApplicationContext(),
             db = db,
+            lifecycle = lifecycle,
         )
 
         // A real composition reading both states — the concurrent reader that turns an off-main
