@@ -409,6 +409,50 @@ class UiConsistencyComposeTests {
         assertTrue(closed)
     }
 
+    private fun navigationThumbnailsKeepTheirLabels(height: Int, name: String) {
+        val opened = mutableListOf<String>()
+        content(width = 600, height = height, fontScale = 1.5f) {
+            QuickNavContent(
+                appRepository = null,
+                uiState = QuickNavUiState(isLoading = false, tab = QuickNavTab.PAGES,
+                    bookId = "book", currentPageId = "p1", bookPageCount = 12,
+                    bookPageIds = (1..12).map { "p$it" }),
+                onClose = {}, onNavigateBreadcrumb = {}, onSelectTab = {},
+                onToggleBookmark = {}, onSetBookmark = { _, _ -> }, onTogglePinned = {},
+                onAddOutlineEntry = { _, _ -> }, onRenameOutlineEntry = { _, _ -> },
+                onChangeOutlineDepth = { _, _ -> }, onRemoveOutlineEntry = {}, onMoveOutlineEntry = { _, _ -> },
+                onGenerateBookPreviews = {}, onScrubStart = {}, onScrubPreview = {}, onScrubEnd = {},
+                onReturnClick = {}, goToPage = opened::add,
+            )
+        }
+        // Capture before assertions so a baseline run records the clipped labels too.
+        screenshot(name)
+        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
+        compose.onNodeWithTag("navigation-page-scrubber").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        // These assertions also run against the old implementation: the text nodes existed,
+        // but the fixed two-row grid allocated no usable height to their labels.
+        for (label in listOf("1", "2")) {
+            compose.onNodeWithText(label, useUnmergedTree = true)
+                .assertIsDisplayed().assertHeightIsAtLeast(20.dp)
+        }
+        compose.onNodeWithContentDescription("Open page 2").assertIsDisplayed()
+            .assertHeightIsAtLeast(130.dp).performClick()
+        assertEquals(listOf("p2"), opened)
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(11)
+        compose.onNodeWithText("12", useUnmergedTree = true)
+            .assertIsDisplayed().assertHeightIsAtLeast(20.dp)
+        compose.onNodeWithContentDescription("Open page 12").performClick()
+        assertEquals(listOf("p2", "p12"), opened)
+    }
+
+    @Test
+    fun intermediateHeightNavigationPreservesFullThumbnailsAndLabels() =
+        navigationThumbnailsKeepTheirLabels(500, "navigation-thumbnails-intermediate-large-text")
+
+    @Test
+    fun fullHeightNavigationPreservesFullThumbnailsAndLabels() =
+        navigationThumbnailsKeepTheirLabels(900, "navigation-thumbnails-full-large-text")
+
     @Test
     fun titleMenuKeepsPaperSettingsReachableWithoutCrowdingTheTitle() {
         val actions = mutableListOf<ToolbarAction>()
