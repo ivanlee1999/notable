@@ -88,6 +88,7 @@ class TodayViewModel @Inject constructor(
     suspend fun create(topics: List<String> = emptyList()): Pair<String, String>? {
         if (busy.value || !dataReady.value) return null
         busy.value = true
+        error.value = null
         return try { journal.createEntry(topics) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { error.value = "Could not create note. Try again."; null }
@@ -97,6 +98,7 @@ class TodayViewModel @Inject constructor(
     fun topic(note: JournalNote, name: String, selected: Boolean) {
         if (busy.value || !dataReady.value) return
         busy.value = true
+        error.value = null
         viewModelScope.launch {
             try {
                 if (selected) journal.addTopic(note.entry.notebookId, name)

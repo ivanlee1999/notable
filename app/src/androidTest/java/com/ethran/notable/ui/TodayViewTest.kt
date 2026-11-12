@@ -58,6 +58,21 @@ class TodayViewTest {
     }
 
     @Test
+    fun successfulCreationRetryClearsThePreviousError() {
+        var attempts = 0
+        coEvery { journal.createEntry(any()) } answers {
+            if (attempts++ == 0) error("Save failed")
+            "new-book" to "new-page"
+        }
+        show()
+        compose.onNodeWithText("New note").performClick()
+        compose.onNodeWithText("Could not create note. Try again.").assertExists()
+        compose.onNodeWithText("New note").performClick()
+        compose.waitUntil { opened != null }
+        compose.onNodeWithText("Could not create note. Try again.").assertDoesNotExist()
+    }
+
+    @Test
     fun openingTodayCreatesNothingAndNewNoteOpensItsEditor() {
         coEvery { journal.createEntry(any()) } returns ("new-book" to "new-page")
         show()
