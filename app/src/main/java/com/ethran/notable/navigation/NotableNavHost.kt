@@ -3,7 +3,10 @@ package com.ethran.notable.navigation
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import com.ethran.notable.data.datastore.RecentNotebooks
@@ -24,6 +27,9 @@ import com.ethran.notable.ui.views.BugReportDestination
 import com.ethran.notable.ui.views.BugReportScreen
 import com.ethran.notable.ui.views.Library
 import com.ethran.notable.ui.views.LibraryDestination
+import com.ethran.notable.ui.views.TodayDestination
+import com.ethran.notable.ui.views.TodayView
+import com.ethran.notable.ui.components.TextAction
 import com.ethran.notable.ui.views.PagesDestination
 import com.ethran.notable.ui.views.PagesView
 import com.ethran.notable.ui.views.SettingsDestination
@@ -55,30 +61,40 @@ fun NotableNavHost(
             popEnterTransition = { EnterTransition.None },
             popExitTransition = { ExitTransition.None },
         ) {
+            composable(TodayDestination.route) {
+                TodayView(
+                    onOpen = { page, book -> appNavigator.goToJournalEntry(page, book) },
+                    onLibrary = { appNavigator.goToLibrary(null) },
+                    onPages = { book -> appNavigator.goToPages(book) },
+                )
+                appNavigator.cleanCurrentPageId()
+            }
             composable(
                 route = LibraryDestination.routeWithArgs,
                 arguments = listOf(navArgument(LibraryDestination.FOLDER_ID_ARG) {
                     nullable = true
                 }),
             ) {
-                Library(
-                    navController = appNavigator.navController,
-                    folderId = it.arguments?.getString(LibraryDestination.FOLDER_ID_ARG),
-                    goToPage = { pageId -> appNavigator.goToPage(appRepository, pageId) },
-                    onCreateNewNote = { folderId ->
-                        appNavigator.onCreateNewNote(
-                            appRepository,
-                            folderId
+                Column {
+                    TextAction("Today", { appNavigator.goToToday() }, Modifier.padding(8.dp))
+                    Box(Modifier.weight(1f)) {
+                        Library(
+                            navController = appNavigator.navController,
+                            folderId = it.arguments?.getString(LibraryDestination.FOLDER_ID_ARG),
+                            goToPage = { pageId -> appNavigator.goToPage(appRepository, pageId) },
+                            onCreateNewNote = { folderId ->
+                                appNavigator.onCreateNewNote(appRepository, folderId)
+                            }
                         )
                     }
-                )
+                }
                 appNavigator.cleanCurrentPageId()
             }
             composable(
                 route = WelcomeDestination.route,
             ) {
                 WelcomeView(
-                    goToLibrary = { appNavigator.goToLibrary(null) },
+                    goToLibrary = { appNavigator.goToToday() },
                 )
                 appNavigator.cleanCurrentPageId()
             }
@@ -147,11 +163,20 @@ fun NotableNavHost(
                     /* configuring arguments for navigation */
                     type = NavType.StringType
                 }),
-            ) {
+            ) { pagesEntry ->
+                val fromJournal = pagesEntry.savedStateHandle.get<Boolean>("fromJournal") ?: run {
+                    val value = appNavigator.navController.previousBackStackEntry
+                        ?.let { it.destination.route == TodayDestination.route || it.savedStateHandle.get<Boolean>("fromJournal") == true } == true
+                    pagesEntry.savedStateHandle["fromJournal"] = value
+                    value
+                }
                 PagesView(
-                    goToLibrary = { folderId -> appNavigator.goToLibrary(folderId) },
-                    goToEditor = { pageId, bId -> appNavigator.goToEditor(pageId, bId) },
-                    bookId = it.arguments?.getString(PagesDestination.BOOK_ID_ARG)!!,
+                    goToLibrary = { folderId -> if (fromJournal) appNavigator.goToToday() else appNavigator.goToLibrary(folderId) },
+                    goToEditor = { pageId, bId ->
+                        if (fromJournal) appNavigator.goToJournalEntry(pageId, bId)
+                        else appNavigator.goToEditor(pageId, bId)
+                    },
+                    bookId = pagesEntry.arguments?.getString(PagesDestination.BOOK_ID_ARG)!!,
                 )
             }
             composable(

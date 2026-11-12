@@ -19,6 +19,7 @@ import com.ethran.notable.editor.utils.refreshScreen
 import com.ethran.notable.ui.viewmodels.QuickNavTab
 import com.ethran.notable.ui.views.BugReportDestination
 import com.ethran.notable.ui.views.LibraryDestination
+import com.ethran.notable.ui.views.TodayDestination
 import com.ethran.notable.ui.views.PagesDestination
 import com.ethran.notable.ui.views.SystemInformationDestination
 import com.ethran.notable.ui.views.TrashDestination
@@ -60,7 +61,7 @@ class NotableNavigator(
 
     val startDestination: String
         get() = if (GlobalAppSettings.current.showWelcome || !hasUsableStorage) WelcomeDestination.route
-        else LibraryDestination.route
+        else TodayDestination.route
 
     val quickNavSourcePageId: String?
         get() = navController.currentBackStackEntry?.savedStateHandle?.get<String>("quickNavSourcePageId")
@@ -118,8 +119,26 @@ class NotableNavigator(
         navController.navigate(LibraryDestination.createRoute(folderId))
     }
 
+    fun goToToday() {
+        navigationRequests.begin()
+        if (navController.popBackStack(TodayDestination.route, false)) return
+        navController.navigate(TodayDestination.route) {
+            popUpTo(navController.graph.id) { inclusive = false }
+            launchSingleTop = true
+        }
+    }
+
+    fun goToJournalEntry(pageId: String, bookId: String) {
+        goToEditor(pageId, bookId)
+        navController.currentBackStackEntry?.savedStateHandle?.set("fromJournal", true)
+    }
+
     /** Leave the note directly, removing editor/page-manager entries above the library. */
     fun exitEditor(folderId: String?) {
+        if (navController.currentBackStackEntry?.savedStateHandle?.get<Boolean>("fromJournal") == true) {
+            goToToday()
+            return
+        }
         navigationRequests.begin()
         navController.navigate(LibraryDestination.createRoute(folderId)) {
             popUpTo(navController.graph.id) { inclusive = false }
