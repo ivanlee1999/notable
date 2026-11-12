@@ -184,6 +184,9 @@ class NotableNavigator(
     fun goToPage(appRepository: AppRepository, pageId: String) {
         val request = navigationRequests.begin()
         if (pageId == currentPageId) return
+        val fromJournal = navController.currentBackStackEntry?.let {
+            it.destination.route == TodayDestination.route || it.savedStateHandle.get<Boolean>("fromJournal") == true
+        } == true
         coroutineScope.launch {
             val page = try {
                 withContext(Dispatchers.IO) {
@@ -204,6 +207,7 @@ class NotableNavigator(
             val url = EditorDestination.createRoute(pageId, page.notebookId)
             log.d("navigate -> $url")
             navController.navigate(url) { launchSingleTop = true }
+            if (fromJournal) navController.currentBackStackEntry?.savedStateHandle?.set("fromJournal", true)
         }
     }
 
