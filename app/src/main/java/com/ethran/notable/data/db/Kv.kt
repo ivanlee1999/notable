@@ -21,6 +21,7 @@ import com.ethran.notable.utils.hasFilePermission
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,6 +41,12 @@ data class Kv(
 // DAO
 @Dao
 interface KvDao {
+    @Query("SELECT `key`, value FROM kv WHERE `key` GLOB 'journal.entry.*'")
+    fun observeJournalEntries(): Flow<List<Kv>>
+
+    @Query("SELECT `key`, value FROM kv WHERE `key` GLOB 'journal.entry.*'")
+    suspend fun getJournalEntries(): List<Kv>
+
     @Query("SELECT * FROM kv WHERE `key`=:key")
     suspend fun get(key: String): Kv?
 
