@@ -42,7 +42,7 @@ class JournalRepository @Inject constructor(
         val ids = appRepository.createNewNote() ?: error("Unable to create note")
         val book = appRepository.bookRepository.getById(ids.first) ?: error("Note is missing")
         appRepository.bookRepository.update(book.copy(
-            title = DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()).format(now.atZone(zone))
+            title = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.getDefault()).format(now.atZone(zone))
         ))
         val topics = if (initialTopics.isEmpty()) emptyList()
             else normalizeTopics(initialTopics, knownTopics())

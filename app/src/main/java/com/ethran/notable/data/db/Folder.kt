@@ -77,6 +77,9 @@ interface FolderDao {
     @Query("SELECT * FROM folder")
     fun getAll(): List<Folder>
 
+    @Query("SELECT id, title, parentFolderId, createdAt, updatedAt, deletedAt, updatedBy FROM folder")
+    fun observeAll(): Flow<List<Folder>>
+
     /** Every folder the library shows, as a flow — what a search over the whole library reads. */
     @Query("SELECT * FROM folder WHERE deletedAt IS NULL")
     fun getAllVisibleFlow(): Flow<List<Folder>>
@@ -157,6 +160,8 @@ class FolderRepository @Inject constructor(
     }
 
     fun getAllVisibleFlow(): Flow<List<Folder>> = db.getAllVisibleFlow()
+
+    fun getAllFlow(): Flow<List<Folder>> = db.observeAll()
 
     fun getAllInFolder(folderId: String? = null): LiveData<List<Folder>> {
         return db.getChildrenFolders(folderId)
