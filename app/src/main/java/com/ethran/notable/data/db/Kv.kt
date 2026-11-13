@@ -41,6 +41,12 @@ data class Kv(
 // DAO
 @Dao
 interface KvDao {
+    @Query("SELECT `key`, value FROM kv WHERE `key` GLOB 'journal.organization.*' OR `key` GLOB 'journal.entry.*' ORDER BY `key`")
+    fun observeJournalOrganization(): Flow<List<Kv>>
+
+    @Query("SELECT `key`, value FROM kv WHERE `key` GLOB 'journal.organization.*' ORDER BY `key`")
+    suspend fun getJournalOrganization(): List<Kv>
+
     @Query("SELECT `key`, value FROM kv WHERE `key` GLOB 'journal.entry.*'")
     fun observeJournalEntries(): Flow<List<Kv>>
 
