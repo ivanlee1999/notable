@@ -626,23 +626,27 @@ class CouchSyncControllerTest {
         )
 
         controller.start()
-        settle(400)
-        controller.stop()
-
-        assertTrue(
-            "the feed should have come round more than once, got ${backend.pullCalls.size}",
-            backend.pullCalls.size >= 2,
-        )
-        assertEquals(
-            "the drain must wait out the scheduled retry instead of re-flushing at feed pace",
-            1,
-            backend.flushCount,
-        )
-        assertEquals(
-            "successful reads must not hide the outstanding upload failure during backoff",
-            CouchSyncController.Status.Failed("conflict(page:a)"),
-            controller.status,
-        )
+        try {
+            settle(400)
+            // Observe live backoff before teardown clears its retry state. Cancellation is
+            // cooperative, so an in-flight fake pull can still finish after stop() returns.
+            assertTrue(
+                "the feed should have come round more than once, got ${backend.pullCalls.size}",
+                backend.pullCalls.size >= 2,
+            )
+            assertEquals(
+                "the drain must wait out the scheduled retry instead of re-flushing at feed pace",
+                1,
+                backend.flushCount,
+            )
+            assertEquals(
+                "successful reads must not hide the outstanding upload failure during backoff",
+                CouchSyncController.Status.Failed("conflict(page:a)"),
+                controller.status,
+            )
+        } finally {
+            controller.stop()
+        }
     }
 
     // region Backgrounding
