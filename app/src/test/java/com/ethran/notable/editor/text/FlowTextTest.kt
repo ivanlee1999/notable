@@ -12,8 +12,10 @@ class FlowTextTest {
 
     @Test fun unchangedSourceDoesNotResplitExistingMultilineBlock() {
         val old = listOf(block("a", "first\n\nsecond"))
-        assertEquals(FlowText.Plan(emptyList(), emptyList()), FlowText.reconcile("page", old, old,
-            "first\n\nsecond", now, "device"))
+        val plan = FlowText.reconcile("page", old, old, "first\n\nsecond", now, "device")
+        assertTrue(plan.blocks.isEmpty())
+        assertTrue(plan.removedIds.isEmpty())
+        assertEquals(listOf("a"), plan.resultIds)
     }
 
     @Test fun paragraphEditsRetainIdsAndKeysWhileUntouchedRemoteTextSurvives() {
@@ -64,5 +66,18 @@ class FlowTextTest {
         assertEquals(listOf("a"), (sections[0] as FlowText.Section.Text).blocks.map { it.id })
         assertEquals("b", (sections[1] as FlowText.Section.Content).block.id)
         assertEquals(listOf("c"), (sections[2] as FlowText.Section.Text).blocks.map { it.id })
+    }
+
+    @Test fun partialCreationReplayReplacesItsExistingIdentityAtTheSameAnchor() {
+        val existing = block("first-id", "First", "b")
+        val before = block("before", "", "a").copy(kind = "audio")
+        val after = block("after", "", "c").copy(kind = "image")
+        val intended = listOf("first-id", "second-id").iterator()
+        val plan = FlowText.reconcile("page", listOf(before, existing, after), emptyList(),
+            "First\n\nSecond", now, "device", newId = { intended.next() })
+        val final = (listOf(before, existing, after).associateBy { it.id } + plan.blocks.associateBy { it.id }).values.toList()
+        assertEquals(listOf("before", "first-id", "second-id", "after"), FlowText.ordered(final).map { it.id })
+        assertEquals(listOf("first-id", "second-id"), plan.resultIds)
+        assertEquals(plan.blocks.size, plan.blocks.map { it.id }.distinct().size)
     }
 }

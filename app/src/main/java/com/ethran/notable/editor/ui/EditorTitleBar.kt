@@ -37,6 +37,7 @@ import compose.icons.FeatherIcons
 import compose.icons.feathericons.ChevronDown
 import compose.icons.feathericons.ChevronLeft
 import compose.icons.feathericons.MoreHorizontal
+import compose.icons.feathericons.Type
 
 /**
  * The editor's own title bar: where you are, how far through, and the two page-level actions.
@@ -57,6 +58,7 @@ fun EditorTitleBar(
     onAction: (ToolbarAction) -> Unit,
     onSwitchNotebook: () -> Unit = { onAction(ToolbarAction.OpenQuickNav) },
     topics: (@Composable () -> Unit)? = null,
+    onType: (() -> Unit)? = null,
 ) {
     val metrics = kaleidoMetrics(LocalConfiguration.current.screenWidthDp.dp)
 
@@ -110,6 +112,7 @@ fun EditorTitleBar(
             }
 
             topics?.invoke()
+            onType?.let { TitleBarButton(FeatherIcons.Type, "Type a note", 48.dp, it) }
 
             Box(
                 Modifier.size(48.dp)

@@ -113,6 +113,8 @@ data class ToolbarUiState(
     /** A text box is open and the keyboard is up. */
     val isTextEditing: Boolean = false,
     val isTopicPickerOpen: Boolean = false,
+    val isFlowTextOpen: Boolean = false,
+    val isToolOptionsOpen: Boolean = false,
     val hasClipboard: Boolean = false,
     val isDrawing: Boolean = true,
     val isQuickNavOpen: Boolean = false,
@@ -123,7 +125,7 @@ data class ToolbarUiState(
         get() = penSettings[penPresetId] ?: PenSetting(5f, android.graphics.Color.BLACK)
 
     val isDrawingAllowed: Boolean
-        get() = !isSelectionActive && !isTextEditing && !isTopicPickerOpen &&
+        get() = !isSelectionActive && !isTextEditing && !isTopicPickerOpen && !isFlowTextOpen && !isToolOptionsOpen &&
                 !(isMenuOpen || isStrokeSelectionOpen || isBackgroundSelectorModalOpen)
                 && !isQuickNavOpen
 }
@@ -134,6 +136,7 @@ data class ToolbarUiState(
 // --------------------------------------------------------
 
 sealed class ToolbarAction {
+    data class UpdateToolOptionsOpen(val isOpen: Boolean) : ToolbarAction()
     object ToggleToolbar : ToolbarAction()
     data class ChangeMode(val mode: Mode) : ToolbarAction()
     data class ChangePen(val presetId: String) : ToolbarAction()
@@ -338,6 +341,10 @@ class EditorViewModel @Inject constructor(
     fun onToolbarAction(action: ToolbarAction) {
         log.v("onToolbarAction: $action")
         when (action) {
+            is ToolbarAction.UpdateToolOptionsOpen -> {
+                _toolbarState.update { it.copy(isToolOptionsOpen = action.isOpen) }
+                updateDrawingState()
+            }
             is ToolbarAction.ToggleToolbar -> {
                 _toolbarState.update { it.copy(isToolbarOpen = !it.isToolbarOpen) }
                 updateDrawingState()
@@ -759,6 +766,7 @@ class EditorViewModel @Inject constructor(
         _toolbarState.update {
             it.copy(
                 notebookId = bookId,
+                isToolOptionsOpen = if (it.pageId != pageId) false else it.isToolOptionsOpen,
                 pageId = pageId,
                 notebookTitle = book?.title,
                 pageNumberInfo = "${pageIndex + 1}/$totalPages",
@@ -978,6 +986,12 @@ class EditorViewModel @Inject constructor(
     fun setTopicPickerOpen(open: Boolean) {
         if (_toolbarState.value.isTopicPickerOpen == open) return
         _toolbarState.update { it.copy(isTopicPickerOpen = open) }
+        updateDrawingState()
+    }
+
+    fun setFlowTextOpen(open: Boolean) {
+        if (_toolbarState.value.isFlowTextOpen == open) return
+        _toolbarState.update { it.copy(isFlowTextOpen = open) }
         updateDrawingState()
     }
 

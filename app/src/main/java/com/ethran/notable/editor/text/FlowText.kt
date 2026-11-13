@@ -2,6 +2,7 @@ package com.ethran.notable.editor.text
 
 import com.ethran.notable.data.db.Block
 import com.ethran.notable.markdown.MarkdownBlocks
+import com.ethran.notable.sync.couch.TextVersions
 import java.util.Date
 import java.util.UUID
 
@@ -9,7 +10,7 @@ import java.util.UUID
 object FlowText {
     fun isFlow(block: Block): Boolean = block.x == null || block.y == null
 
-    fun ordered(blocks: List<Block>): List<Block> = blocks.filter(::isFlow).sortedWith { a, b ->
+    fun ordered(blocks: List<Block>): List<Block> = blocks.filter { isFlow(it) && it.kind != TextVersions.KIND }.sortedWith { a, b ->
         byteCompare(a.orderKey, b.orderKey).takeIf { it != 0 } ?: byteCompare(a.id, b.id)
     }
 
@@ -31,7 +32,7 @@ object FlowText {
         finish()
     }
 
-    data class Plan(val blocks: List<Block>, val removedIds: List<String>)
+    data class Plan(val blocks: List<Block>, val removedIds: List<String>, val resultIds: List<String> = emptyList())
 
     /**
      * Reconcile only the edited run. Unchanged paragraphs keep their identities, even after a
@@ -49,7 +50,7 @@ object FlowText {
         retiredIds: Set<String> = emptySet(),
         newId: () -> String = { UUID.randomUUID().toString() },
     ): Plan {
-        if (source == MarkdownBlocks.join(original.map { it.text.orEmpty() })) return Plan(emptyList(), emptyList())
+        if (source == MarkdownBlocks.join(original.map { it.text.orEmpty() })) return Plan(emptyList(), emptyList(), original.map { it.id })
         val text = MarkdownBlocks.split(source)
         val currentById = current.associateBy { it.id }
         val eligible = original.filter { it.id !in retiredIds && currentById[it.id]?.let { b -> isFlow(b) && b.kind == "md" } == true }
@@ -63,8 +64,9 @@ object FlowText {
         val rewritten = text.mapIndexed { index, paragraph ->
             val base = assigned[index]
             val latest = base?.let { currentById[it.id] }
-            if (base != null && paragraph == base.text.orEmpty()) latest!!
-            else (latest ?: Block(id = newId(), pageId = pageId, createdAt = now)).copy(
+            val target = latest ?: newId().let { id -> currentById[id] ?: Block(id = id, pageId = pageId, createdAt = now) }
+            if ((base != null && paragraph == base.text.orEmpty()) || paragraph == target.text.orEmpty()) target
+            else target.copy(
                 text = paragraph, updatedAt = now, deviceId = deviceId,
             )
         }
@@ -72,16 +74,19 @@ object FlowText {
         val removed = eligible.map { it.id }.filter { id -> rewritten.none { it.id == id } }
         val ordered = ordered(current)
         val topologyChanged = rewritten.map { it.id } != original.map { it.id }
-        if (!topologyChanged) return Plan(rewritten.filter { it != currentById[it.id] }, removed)
+        if (!topologyChanged) return Plan(rewritten.filter { it != currentById[it.id] }, removed, rewritten.map { it.id })
 
-        val first = ordered.indexOfFirst { it.id in oldIds }.let { if (it < 0) ordered.size else it }
-        val before = ordered.take(first).filterNot { it.id in oldIds }
-        val after = ordered.drop(first).filterNot { it.id in oldIds }
+        // Intended creation ids can already exist after a process died between the first
+        // canonical write and rebasing a newer draft. Replace them at their current anchor.
+        val replacedIds = oldIds + rewritten.map { it.id }
+        val first = ordered.indexOfFirst { it.id in replacedIds }.let { if (it < 0) ordered.size else it }
+        val before = ordered.take(first).filterNot { it.id in replacedIds }
+        val after = ordered.drop(first).filterNot { it.id in replacedIds }
         val reindexed = (before + rewritten + after).mapIndexed { index, block ->
             val key = (index + 1).toString().padStart(10, '0')
             if (block.orderKey == key) block else block.copy(orderKey = key, updatedAt = now, deviceId = deviceId)
         }
-        return Plan(reindexed.filter { it != currentById[it.id] }, removed)
+        return Plan(reindexed.filter { it != currentById[it.id] }, removed, rewritten.map { it.id })
     }
 
     private fun byteCompare(a: String, b: String): Int {

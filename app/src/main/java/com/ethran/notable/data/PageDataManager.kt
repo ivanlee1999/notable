@@ -1468,6 +1468,11 @@ class PageDataManager @Inject constructor(
     private val writeChainTails = HashMap<String, Job>()
     private val writeChainLock = Any()
 
+    /** Wait for content already submitted on this page before rendering it in another surface. */
+    suspend fun awaitContentWrites(pageId: String) {
+        synchronized(writeChainLock) { writeChainTails[pageId] }?.join()
+    }
+
     /**
      * Runs a DB content-write on [dataScope], and keeps trying until it lands.
      *

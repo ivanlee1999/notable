@@ -17,10 +17,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.ethran.notable.editor.canvas.CanvasEventBus
 import com.ethran.notable.editor.state.ClipboardStore
 import com.ethran.notable.editor.ui.EditorSurface
@@ -30,6 +34,8 @@ import com.ethran.notable.editor.ui.SaveStateBadge
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.TextBoxEditor
+import com.ethran.notable.editor.text.FlowTextViewModel
+import com.ethran.notable.editor.text.FlowEditorSurface
 import com.ethran.notable.editor.topics.EditorTopicButton
 import com.ethran.notable.editor.topics.EditorTopicsPopup
 import com.ethran.notable.editor.topics.EditorTopicsViewModel
@@ -45,6 +51,7 @@ import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 private val log = ShipBook.getLogger("EditorView")
@@ -83,6 +90,7 @@ fun EditorView(
     openQuickNav: () -> Unit,
     openNoteSwitcher: () -> Unit = openQuickNav,
     onExitRequested: () -> Unit = {},
+    onNewEntry: (pageId: String, bookId: String) -> Unit = { _, _ -> },
     goToBugReport: () -> Unit,
 
     viewModel: EditorViewModel = hiltViewModel()
@@ -90,6 +98,9 @@ fun EditorView(
     val context = LocalContext.current
     val snackManager = LocalSnackContext.current
     val scope = rememberCoroutineScope()
+    val flowModel: FlowTextViewModel = hiltViewModel()
+    var flowOpen by rememberSaveable(initialPageId) { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     // A page that outgrew its sheet is divided before anything loads it — the reconciliation
     // the iPad has run on notebook open since pages became sheets (§6.6), now run here too.
@@ -105,8 +116,12 @@ fun EditorView(
     }
 
     BackHandler(enabled = !isQuickNavOpen) {
-        onExitRequested()
-        viewModel.onToolbarAction(ToolbarAction.NavigateToLibrary)
+        scope.launch {
+            if (!flowOpen || flowModel.flush()) {
+                onExitRequested()
+                viewModel.onToolbarAction(ToolbarAction.NavigateToLibrary)
+            }
+        }
     }
 
     // Single point of entry for loading book data based on the pageId from Navigation
@@ -241,6 +256,40 @@ fun EditorView(
 //        }
 
         val toolbarState by viewModel.toolbarState.collectAsStateWithLifecycle()
+        val flowState by flowModel.state.collectAsStateWithLifecycle()
+        var flowDecisionPage by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(toolbarState.pageId) {
+            toolbarState.pageId?.let { pageId ->
+                flowOpen = false
+                flowModel.open(pageId)
+            }
+        }
+        LaunchedEffect(flowState.document?.pageId) {
+            flowState.document?.let { document ->
+                if (flowDecisionPage != document.pageId) {
+                    flowDecisionPage = document.pageId
+                    flowOpen = document.runs.values.any { it.original.isNotEmpty() || it.source.isNotBlank() }
+                }
+            }
+        }
+        LaunchedEffect(flowState.error, flowState.document?.pageId, toolbarState.pageId) {
+            if (flowState.error != null && flowState.document != null && flowState.document?.pageId != toolbarState.pageId)
+                flowOpen = true
+        }
+        DisposableEffect(flowOpen) {
+            viewModel.setFlowTextOpen(flowOpen)
+            onDispose { viewModel.setFlowTextOpen(false) }
+        }
+        DisposableEffect(lifecycleOwner, editorControlTower) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) {
+                    editorControlTower.commitTextBox()
+                    flowModel.flushInBackground()
+                } else if (event == Lifecycle.Event.ON_RESUME) flowModel.refreshIfClean()
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
         val topicsModel: EditorTopicsViewModel = hiltViewModel()
         DisposableEffect(topicsModel) { onDispose { topicsModel.close() } }
         val topicEntries by topicsModel.entries.collectAsStateWithLifecycle()
@@ -298,13 +347,23 @@ fun EditorView(
             onDispose {
                 // The draft is not yet a stored block. Commit before the outgoing page is saved.
                 editorControlTower.commitTextBox()
-                viewModel.onDispose(page)
+                // Close-sync starts after typed source has reached its canonical rows.
+                flowModel.finishOnDispose { viewModel.onDispose(page) }
             }
         }
 
 
 
         InkaTheme {
+            if (flowOpen) {
+                FlowEditorSurface(flowModel, if (flowState.document?.pageId == toolbarState.pageId)
+                    toolbarState.notebookTitle.orEmpty() else "Unsaved text",
+                    onBack = { onExitRequested(); viewModel.onToolbarAction(ToolbarAction.NavigateToLibrary) },
+                    onInk = { flowDecisionPage = toolbarState.pageId; flowOpen = false; toolbarState.pageId?.let(flowModel::open) },
+                    onTags = if (flowState.document?.pageId == toolbarState.pageId) ({ openTopics() }) else null,
+                    onSwitchNotebook = openNoteSwitcher,
+                    onNewEntry = onNewEntry)
+            } else {
             // Everything the docked chrome covers: the rail's band, plus the title bar along
             // the top of what it leaves.
             val chromeInset = editorChromeInset(toolbarState.isToolbarOpen)
@@ -363,6 +422,18 @@ fun EditorView(
                         onSwitchNotebook = openNoteSwitcher,
                         topics = { EditorTopicButton(selectedTopics,
                             enabled = toolbarState.notebookId != null) { openTopics() } },
+                        onType = {
+                            editorControlTower.commitTextBox()
+                            toolbarState.pageId?.let { pageId -> scope.launch {
+                                viewModel.pageDataManager.awaitContentWrites(pageId)
+                                if (viewModel.toolbarState.value.pageId == pageId && page.currentPageId == pageId) {
+                                    flowModel.prepareForTyping(page.strokes.isNotEmpty() || page.images.isNotEmpty() ||
+                                        page.blocks.any { it.x != null && it.y != null })
+                                    flowDecisionPage = pageId
+                                    flowOpen = true
+                                }
+                            } }
+                        },
                     )
                 }
             }
@@ -372,6 +443,7 @@ fun EditorView(
             // Last, so it is over the toolbar rather than under it: the one thing on this screen
             // the user cannot find out any other way.
             SaveStateBadge(saveState = page.pageDataManager.saveState)
+            }
             if (topicRequest?.let { it.notebookId == toolbarState.notebookId && it.pageId == toolbarState.pageId } == true) {
                 EditorTopicsPopup(topicsModel)
             }
