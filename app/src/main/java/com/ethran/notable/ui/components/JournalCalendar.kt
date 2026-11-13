@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -26,7 +27,6 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.time.temporal.WeekFields
-import java.util.Locale
 
 internal data class JournalDay<T>(val date: String?, val rows: List<List<T>>, val index: Int) {
     val key get() = "day:${date ?: "library"}"
@@ -59,7 +59,7 @@ fun JournalCalendar(
     onDismiss: () -> Unit,
 ) {
     var month by remember(initialDate) { mutableStateOf(YearMonth.from(initialDate)) }
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val firstDay = WeekFields.of(locale).firstDayOfWeek
     val context = LocalContext.current
     ScaledDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {

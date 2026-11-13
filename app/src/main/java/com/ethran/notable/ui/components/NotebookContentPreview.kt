@@ -7,8 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
-import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
@@ -21,8 +19,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -172,25 +170,34 @@ fun NotebookContentPreview(
         if (page != null) PagePreview(
             pageId = page, version = version, onPreviewNeeded = onPreviewNeeded,
             modifier = Modifier.fillMaxWidth().then(if (expanded) Modifier else Modifier.height(previewHeight))
-                .clickable { onEdit(page) }
                 .pointerInput(notebook.id, notebook.pageIds, page) {
                     val threshold = 48.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.type != PointerType.Touch) return@awaitEachGesture
-                        var distance = 0f
-                        val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ ->
+                        var moved = false
+                        var horizontal = false
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.isConsumed || event.changes.count { it.pressed } > 1) break
                             val delta = change.position - down.position
-                            if (abs(delta.x) > abs(delta.y) * 1.35f) {
-                                distance = delta.x; change.consume()
+                            if (!moved && delta.getDistance() > viewConfiguration.touchSlop) {
+                                moved = true
+                                horizontal = down.type == PointerType.Touch && abs(delta.x) > abs(delta.y) * 1.35f
+                            }
+                            if (horizontal) change.consume()
+                            if (!change.pressed) {
+                                if (horizontal && abs(delta.x) >= threshold) turn(if (delta.x < 0) 1 else -1)
+                                else if (!moved) { change.consume(); onEdit(page) }
+                                break
                             }
                         }
-                        if (drag != null && horizontalDrag(drag.id) { change ->
-                            distance += change.positionChange().x; change.consume()
-                        } && abs(distance) >= threshold) turn(if (distance < 0) 1 else -1)
                     }
                 }
-                .clipToBounds().semantics { contentDescription = "${notebook.title} ink preview" },
+                .clipToBounds().semantics {
+                    contentDescription = "${notebook.title} ink preview"
+                    onClick { onEdit(page); true }
+                },
             contentScale = ContentScale.FillWidth, alignment = Alignment.TopStart,
             expandToContent = expanded,
         ) else Box(Modifier.fillMaxWidth().height(previewHeight).background(Kaleido.Canvas))
