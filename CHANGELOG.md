@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.58.1
+
+- Stamp local text edits strictly after the version they change, keeping the newest
+  edit active during sync even when saves happen in the same millisecond or the
+  local clock moves backward. Incoming peer timestamps remain intact.
+
 ## 0.58.0
 
 - Write flowing Markdown beside the original handwriting, with native selection,
