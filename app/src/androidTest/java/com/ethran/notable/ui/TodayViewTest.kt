@@ -1,10 +1,12 @@
 package com.ethran.notable.ui
 
+import android.content.Context
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.core.app.ApplicationProvider
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.JournalEntry
 import com.ethran.notable.data.JournalRepository
@@ -21,6 +23,8 @@ import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,6 +42,13 @@ class TodayViewTest {
     private val books = MutableStateFlow<List<Notebook>>(emptyList())
     private val folders = MutableStateFlow<List<Folder>>(emptyList())
     private var opened: Pair<String, String>? = null
+
+    @Before
+    @After
+    fun resetBrowserLayout() {
+        ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences("note_browser", Context.MODE_PRIVATE).edit().clear().commit()
+    }
 
     private fun show() {
         every { journal.entries } returns entries
@@ -91,11 +102,18 @@ class TodayViewTest {
         books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
             pageIds = listOf("${it.notebookId}-page")) }
         show()
+        compose.onNodeWithContentDescription("Preview size").performClick()
+        compose.onNode(hasText("Reading feed", substring = true) and hasAnyAncestor(isPopup())).performClick()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("entry-0"))
         assertEquals(null, opened)
         compose.onNodeWithContentDescription("Expand entry-0 in place").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasContentDescription("Collapse entry-0"))
+        compose.onNodeWithContentDescription("Collapse entry-0").assertIsDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasContentDescription("Edit entry-0"))
+        compose.waitForIdle()
         assertEquals(null, opened)
-        compose.onNodeWithContentDescription("Edit entry-0").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Edit entry-0").assertIsDisplayed().performClick()
         assertEquals("entry-0-page" to "entry-0", opened)
         coVerify(exactly = 0) { journal.createEntry(any()) }
     }
