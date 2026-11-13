@@ -226,6 +226,15 @@ class BookRepository @Inject constructor(
         }
     }
 
+    /** Rename the latest manifest, retaining pages, folders and settings changed elsewhere. */
+    suspend fun rename(id: String, title: String) = database.withTransaction {
+        val current = notebookDao.getById(id) ?: error("Notebook is missing")
+        check(current.deletedAt == null) { "Notebook is in Trash" }
+        notebookDao.update(current.copy(title = title,
+            updatedAt = SyncClock.afterDate(current.updatedAt), updatedBy = null))
+        outbox.queue(CouchDocId.notebook(id))
+    }
+
     /**
      * Write the notebook exactly as given, unlike [update], which stamps `updatedAt = now()`.
      * Used during sync when downloading from server, to keep the remote timestamp.

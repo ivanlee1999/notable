@@ -8,6 +8,7 @@ import com.ethran.notable.sync.SyncClock
 import kotlinx.serialization.SerialName
 import java.util.Date
 import java.util.UUID
+import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 
 /**
@@ -84,6 +85,11 @@ data class Stroke(
 // DAO
 @Dao
 interface StrokeDao {
+    @Query("SELECT * FROM Stroke WHERE pageId = :pageId")
+    suspend fun getByPage(pageId: String): List<Stroke>
+
+    @Query("SELECT * FROM Stroke WHERE pageId = :pageId")
+    fun observeByPage(pageId: String): Flow<List<Stroke>>
     @Insert
     suspend fun create(stroke: Stroke): Long
 
@@ -124,6 +130,8 @@ interface StrokeDao {
 class StrokeRepository @Inject constructor(
     private val db: StrokeDao
 ) {
+    suspend fun getByPage(pageId: String): List<Stroke> = db.getByPage(pageId)
+    fun observeByPage(pageId: String): Flow<List<Stroke>> = db.observeByPage(pageId)
 
     suspend fun create(stroke: Stroke): Long {
         return db.create(stroke)

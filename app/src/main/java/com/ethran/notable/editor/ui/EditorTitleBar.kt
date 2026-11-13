@@ -59,6 +59,8 @@ fun EditorTitleBar(
     onSwitchNotebook: () -> Unit = { onAction(ToolbarAction.OpenQuickNav) },
     topics: (@Composable () -> Unit)? = null,
     onType: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null,
+    onRenamePage: (() -> Unit)? = null,
 ) {
     val metrics = kaleidoMetrics(LocalConfiguration.current.screenWidthDp.dp)
 
@@ -91,13 +93,14 @@ fun EditorTitleBar(
             Row(
                 Modifier.weight(1f).height(48.dp)
                     .semantics(mergeDescendants = true) {
-                        contentDescription = "Switch notebook or page"
+                        contentDescription = if (onRename != null) "Rename notebook" else "Switch notebook or page"
                         stateDescription = uiState.notebookTitle.orEmpty()
                     }
-                    .noRippleClickable(onSwitchNotebook),
+                    .noRippleClickable(onRename ?: onSwitchNotebook),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                Column(Modifier.weight(1f)) {
                 Text(
                     text = uiState.notebookTitle.orEmpty(),
                     fontSize = metrics.bodySize,
@@ -105,9 +108,14 @@ fun EditorTitleBar(
                     color = Kaleido.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
-                Icon(FeatherIcons.ChevronDown, contentDescription = null,
+                onRenamePage?.let { rename ->
+                    Text(uiState.pageTitle?.takeIf { it.isNotBlank() } ?: "Page ${uiState.currentPageNumber + 1}",
+                        fontSize = 11.sp, color = Kaleido.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().noRippleClickable(rename).semantics { contentDescription = "Rename page" })
+                }
+                }
+                if (onRename == null) Icon(FeatherIcons.ChevronDown, contentDescription = null,
                     tint = Kaleido.Muted, modifier = Modifier.size(14.dp))
             }
 

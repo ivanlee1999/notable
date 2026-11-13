@@ -139,6 +139,9 @@ interface PageDao {
         OR EXISTS(SELECT 1 FROM Image WHERE pageId = :pageId)
         OR EXISTS(SELECT 1 FROM Page WHERE id = :pageId AND backgroundType != 'native')""")
     fun observeCanvasContent(pageId: String): Flow<Boolean>
+    @Query("""SELECT EXISTS(SELECT 1 FROM Image WHERE pageId = :pageId)
+        OR EXISTS(SELECT 1 FROM Page WHERE id = :pageId AND backgroundType != 'native')""")
+    fun observeNonInkCanvasContent(pageId: String): Flow<Boolean>
     @Query("SELECT * FROM page WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<Page>
 
@@ -276,10 +279,16 @@ class PageRepository @Inject constructor(
      * Name a page, or clear its name with null. Bumps `updatedAt` so the rename is picked up as a
      * per-page change by incremental sync, the same way an edit to the drawing would be.
      */
-    suspend fun rename(pageId: String, title: String?) {
+    suspend fun rename(pageId: String, title: String?, expectedNotebookId: String? = null) {
         if (pageId.isEmpty()) return
         database.withTransaction {
-            db.updateTitle(pageId, title, SyncClock.nowMs())
+            val current = db.getById(pageId) ?: error("Page is missing")
+            if (expectedNotebookId != null) {
+                check(current.notebookId == expectedNotebookId) { "Page moved to another notebook" }
+                val book = database.notebookDao().getById(expectedNotebookId) ?: error("Notebook is missing")
+                check(book.deletedAt == null && pageId in book.pageIds) { "Page is no longer in this notebook" }
+            }
+            db.updateTitle(pageId, title, SyncClock.afterDate(current.updatedAt).time)
             // Read back rather than taken from the caller: the rename menu knows a page id and
             // nothing else, and the notebook has to travel with it. Null only if the page was
             // deleted underneath us, in which case there is nothing to send.
@@ -312,6 +321,7 @@ class PageRepository @Inject constructor(
 
     fun observeUpdatedAt(pageId: String): Flow<Long?> = db.observeUpdatedAt(pageId)
     fun observeCanvasContent(pageId: String): Flow<Boolean> = db.observeCanvasContent(pageId)
+    fun observeNonInkCanvasContent(pageId: String): Flow<Boolean> = db.observeNonInkCanvasContent(pageId)
 
     /** One notebook's newest page clock, or null with no pages here — §6.4's liveness signal. */
     suspend fun newestUpdatedAtInNotebook(notebookId: String): Date? =

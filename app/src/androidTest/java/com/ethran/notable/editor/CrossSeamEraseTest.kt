@@ -97,6 +97,7 @@ class CrossSeamEraseTest {
             },
             viewport = PageViewportState(),
             couchSync = mockk<CouchSyncController>(relaxed = true),
+            transcription = mockk(relaxed = true),
         )
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     }

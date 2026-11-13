@@ -48,6 +48,7 @@ fun FlowEditorSurface(
     onTags: (() -> Unit)?,
     onSwitchNotebook: () -> Unit,
     onNewEntry: (String, String) -> Unit,
+    onRename: (() -> Unit)? = null,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val document = state.document
@@ -64,7 +65,7 @@ fun FlowEditorSurface(
     Column(Modifier.fillMaxSize().background(Kaleido.Paper).imePadding()) {
         Row(Modifier.fillMaxWidth().height(49.dp), verticalAlignment = Alignment.CenterVertically) {
             TextAction("‹", { leave(onBack) }, Modifier.size(48.dp).semantics { contentDescription = "Back to journal" })
-            Text(title, Modifier.weight(1f).clickable { leave(onSwitchNotebook) }, maxLines = 1,
+            Text(title, Modifier.weight(1f).clickable { leave(onRename ?: onSwitchNotebook) }, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, fontSize = 14.sp, color = Kaleido.Ink)
             TextAction("Ink", { leave(onInk) }, Modifier.height(48.dp).semantics { contentDescription = "Return to handwriting" })
             onTags?.let { TextAction("#", it, Modifier.size(48.dp).semantics { contentDescription = "Edit tags" }) }

@@ -172,7 +172,9 @@ class PageDataManager @Inject constructor(
     private val backgroundFileWatcher: BackgroundFileWatcher,
     private val viewport: PageViewportState,
     private val couchSync: CouchSyncController,
+    private val transcription: com.ethran.notable.recognition.PageTranscriptionRepository,
 ) {
+    fun penContact(owner: Any, down: Boolean) = transcription.penContact(owner, down)
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -1615,6 +1617,7 @@ class PageDataManager @Inject constructor(
         launchDbWrite("updateStrokes(${strokes.size})", pages) {
             appRepository.strokeRepository.update(strokes)
             pages.forEach { bumpEditTimestamps(it) }
+            pages.forEach(transcription::request)
         }
     }
 
@@ -1643,6 +1646,7 @@ class PageDataManager @Inject constructor(
                 appRepository.strokeRepository.update(strokes)
             }
             pages.forEach { bumpEditTimestamps(it) }
+            pages.forEach(transcription::request)
         }
     }
 
@@ -1670,6 +1674,7 @@ class PageDataManager @Inject constructor(
             appRepository.strokeRepository.deleteAll(strokes)
             appRepository.deletedStrokeRepository.record(pageId, strokes)
             bumpEditTimestamps(pageId)
+            transcription.request(pageId)
         }
     }
 

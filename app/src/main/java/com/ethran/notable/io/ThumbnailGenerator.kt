@@ -35,6 +35,7 @@ interface ThumbnailGeneratorEntryPoint {
     fun thumbnailBackfillQueue(): ThumbnailBackfillQueue
     fun pageRepository(): PageRepository
     fun blockRepository(): com.ethran.notable.data.db.BlockRepository
+    fun pageTranscriptionRepository(): com.ethran.notable.recognition.PageTranscriptionRepository
 }
 
 /**

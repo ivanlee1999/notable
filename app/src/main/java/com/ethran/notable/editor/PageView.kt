@@ -204,12 +204,14 @@ class PageView(
 
     /** Pen down: hold the view the firmware is about to paint this stroke onto. */
     fun beginInkCapture() {
+        pageDataManager.penContact(this, true)
         inkHandoffGuard.begin()
         strokeViewport = currentViewport
     }
 
     /** Pen up, cancelled, or the page changed under the stroke: stop holding a view. */
     fun endInkCapture() {
+        pageDataManager.penContact(this, false)
         strokeViewport = null
         inkHandoffGuard.end()
     }
@@ -524,6 +526,7 @@ class PageView(
         Cancel loading strokes, and save bitmap to disk
     */
     fun disposeOldPage() {
+        endInkCapture()
         log.d("Dispose old page")
         pageDataManager.onExit(currentPageId, windowedBitmap)
         cleanJob()

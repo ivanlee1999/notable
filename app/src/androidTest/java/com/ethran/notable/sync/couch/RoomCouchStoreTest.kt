@@ -1,6 +1,7 @@
 package com.ethran.notable.sync.couch
 
 import android.content.Context
+import io.mockk.mockk
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ethran.notable.data.AppRepository
@@ -1067,6 +1068,7 @@ class RoomCouchStoreTest {
             // behaviour is covered by CouchSyncControllerTest, so it is wired to a dead backend
             // here rather than allowed to reach for a server that is not part of this scenario.
             couchSync = inertCouchSync(),
+            transcription = mockk(relaxed = true),
         ).also { pageManagers += it }
 
         runBlocking {
@@ -1103,6 +1105,7 @@ class RoomCouchStoreTest {
             backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
             viewport = PageViewportState(),
             couchSync = inertCouchSync(),
+            transcription = mockk(relaxed = true),
         ).also { pageManagers += it }
 
         runBlocking {
@@ -1224,6 +1227,7 @@ class RoomCouchStoreTest {
         backgroundFileWatcher = BackgroundFileWatcher(DefaultAppEventBus()),
         viewport = PageViewportState(),
         couchSync = inertCouchSync(),
+        transcription = mockk(relaxed = true),
     ).also { pageManagers += it }
 
     private fun reportingStore() = RoomCouchStore(

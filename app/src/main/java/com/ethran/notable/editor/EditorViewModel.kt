@@ -80,6 +80,7 @@ data class ToolbarUiState(
     val pageId: String? = null,
     /** The open notebook's name, for the editor's title bar. */
     val notebookTitle: String? = null,
+    val pageTitle: String? = null,
     val pageNumberInfo: String = "1/1",
     val currentPageNumber: Int = 0,
 
@@ -769,6 +770,7 @@ class EditorViewModel @Inject constructor(
                 isToolOptionsOpen = if (it.pageId != pageId) false else it.isToolOptionsOpen,
                 pageId = pageId,
                 notebookTitle = book?.title,
+                pageTitle = page.title,
                 pageNumberInfo = "${pageIndex + 1}/$totalPages",
                 currentPageNumber = pageIndex,
                 backgroundType = page.backgroundType,

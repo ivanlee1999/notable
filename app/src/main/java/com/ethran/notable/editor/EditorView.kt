@@ -36,6 +36,7 @@ import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.TextBoxEditor
 import com.ethran.notable.editor.text.FlowTextViewModel
 import com.ethran.notable.editor.text.FlowEditorSurface
+import com.ethran.notable.ui.dialogs.NoteRenameDialog
 import com.ethran.notable.editor.topics.EditorTopicButton
 import com.ethran.notable.editor.topics.EditorTopicsPopup
 import com.ethran.notable.editor.topics.EditorTopicsViewModel
@@ -258,6 +259,23 @@ fun EditorView(
         val toolbarState by viewModel.toolbarState.collectAsStateWithLifecycle()
         val flowState by flowModel.state.collectAsStateWithLifecycle()
         var flowDecisionPage by remember { mutableStateOf<String?>(null) }
+        var renameTarget by remember { mutableStateOf<Pair<String, String?>?>(null) }
+        fun rename(pageTitle: Boolean = false) {
+            val book = toolbarState.notebookId ?: return
+            val targetPage = toolbarState.pageId
+            editorControlTower.commitTextBox()
+            scope.launch {
+                if (flowModel.flush() && viewModel.toolbarState.value.notebookId == book &&
+                    viewModel.toolbarState.value.pageId == targetPage)
+                    renameTarget = book to targetPage?.takeIf { pageTitle }
+            }
+        }
+        DisposableEffect(renameTarget) {
+            val active = renameTarget != null
+            if (active) viewModel.setTextEditing(true)
+            onDispose { if (active) viewModel.setTextEditing(false) }
+        }
+        LaunchedEffect(toolbarState.pageId) { renameTarget = null }
         LaunchedEffect(toolbarState.pageId) {
             toolbarState.pageId?.let { pageId ->
                 flowOpen = false
@@ -362,7 +380,8 @@ fun EditorView(
                     onInk = { flowDecisionPage = toolbarState.pageId; flowOpen = false; toolbarState.pageId?.let(flowModel::open) },
                     onTags = if (flowState.document?.pageId == toolbarState.pageId) ({ openTopics() }) else null,
                     onSwitchNotebook = openNoteSwitcher,
-                    onNewEntry = onNewEntry)
+                    onNewEntry = onNewEntry,
+                    onRename = { rename() })
             } else {
             // Everything the docked chrome covers: the rail's band, plus the title bar along
             // the top of what it leaves.
@@ -420,6 +439,8 @@ fun EditorView(
                             viewModel.onToolbarAction(action)
                         },
                         onSwitchNotebook = openNoteSwitcher,
+                        onRename = { rename() },
+                        onRenamePage = { rename(pageTitle = true) },
                         topics = { EditorTopicButton(selectedTopics,
                             enabled = toolbarState.notebookId != null) { openTopics() } },
                         onType = {
@@ -446,6 +467,14 @@ fun EditorView(
             }
             if (topicRequest?.let { it.notebookId == toolbarState.notebookId && it.pageId == toolbarState.pageId } == true) {
                 EditorTopicsPopup(topicsModel)
+            }
+            renameTarget?.let { (book, targetPage) ->
+                NoteRenameDialog(book, targetPage, onDismiss = { renameTarget = null }, onSaved = {
+                    scope.launch {
+                        val current = viewModel.toolbarState.value
+                        if (current.notebookId == book) current.pageId?.let { viewModel.loadToolbarState(book, it) }
+                    }
+                })
             }
         }
     }
