@@ -30,13 +30,15 @@ import compose.icons.feathericons.Minimize2
 
 enum class BrowserLayout(val label: String, val columns: Int, val rows: Int) {
     FEED("Reading feed", 1, 2),
+    COMPACT("Compact list", 1, 6),
     LARGE("2 × 2 · Large", 2, 2),
     MEDIUM("2 × 3 · Medium", 2, 3),
     OVERVIEW("3 × 4 · Overview", 3, 4);
 
     fun columnsFor(width: Dp): Int = if (width < 600.dp) columns.coerceAtMost(2) else columns
 
-    fun previewHeight(viewport: Dp): Dp = if (this == FEED) (viewport * .55f).coerceIn(180.dp, 360.dp)
+    fun previewHeight(viewport: Dp): Dp = if (this == COMPACT) 72.dp
+        else if (this == FEED) (viewport * .55f).coerceIn(180.dp, 360.dp)
         else ((viewport - 32.dp) / rows - 108.dp).coerceAtLeast(64.dp)
 
     companion object {
@@ -70,7 +72,12 @@ fun rememberBrowserLayout(compact: Boolean): Pair<BrowserLayout, (BrowserLayout)
 fun BrowserLayoutPicker(layout: BrowserLayout, onChoose: (BrowserLayout) -> Unit, compact: Boolean) {
     var open by remember { mutableStateOf(false) }
     Box {
-        TextAction("${layout.label} ▾", { open = true },
+        val label = if (!compact) layout.label else when (layout) {
+            BrowserLayout.FEED -> "Feed"
+            BrowserLayout.COMPACT -> "List"
+            else -> "${layout.columns} × ${layout.rows}"
+        }
+        TextAction("$label ▾", { open = true },
             Modifier.semantics { contentDescription = "Preview size" })
         if (open) ActionMenu(onDismiss = { open = false }) {
             BrowserLayout.entries.filter { !compact || it != BrowserLayout.OVERVIEW }.forEach { choice ->

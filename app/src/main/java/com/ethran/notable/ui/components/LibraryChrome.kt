@@ -39,6 +39,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -221,16 +223,18 @@ fun TextAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     filled: Boolean = false,
+    enabled: Boolean = true,
 ) {
     Box(
         modifier.heightIn(min = 48.dp)
             .background(if (filled) Kaleido.Ink else Kaleido.Paper)
             .border(1.dp, Kaleido.Ink)
-            .noRippleClickable(onClick)
+            .then(if (enabled) Modifier.noRippleClickable(onClick) else Modifier)
+            .semantics { role = Role.Button; if (!enabled) disabled() }
             .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (filled) Kaleido.Paper else Kaleido.Ink,
+        Text(label, color = (if (filled) Kaleido.Paper else Kaleido.Ink).copy(alpha = if (enabled) 1f else .5f),
             fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }

@@ -403,6 +403,7 @@
     <string name="no_redo_to_perform">Nothing to redo</string>
     <string name="toolbar_eraser">Eraser</string>
     <string name="pen_input_mode">Pen input</string>
+    <string name="compact_pen_bar">Compact pen bar</string>
     <string name="pen_input_automatic">Automatic</string>
     <string name="pen_input_compatibility">Compatibility</string>
     <string name="pen_input_reopen">Reopen the note after changing pen input.</string>

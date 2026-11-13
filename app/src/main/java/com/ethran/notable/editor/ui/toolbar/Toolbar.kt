@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +58,7 @@ import com.ethran.notable.editor.ui.toolbar.model.ToolbarElement
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElementId
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarElements
 import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
+import com.ethran.notable.editor.ui.toolbar.model.PenElement
 import com.ethran.notable.editor.ui.toolbar.model.baseWidth
 import com.ethran.notable.editor.utils.Eraser
 import com.ethran.notable.editor.utils.Pen
@@ -62,6 +66,9 @@ import com.ethran.notable.editor.utils.PenSetting
 import com.ethran.notable.ui.dialogs.BackgroundSelector
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
+import com.ethran.notable.ui.components.TextAction
+import compose.icons.FeatherIcons
+import compose.icons.feathericons.MoreHorizontal
 
 /**
  * The tool rail: a fixed arrangement of groups, rendered through [ToolbarElementView].
@@ -141,6 +148,11 @@ fun ToolbarContent(
         }
     }
 
+    if (settings.compactPenBar) {
+        CompactPenRail(uiState, onAction, groups) { renderGroup(it) }
+        return
+    }
+
     if (settings.toolbarPosition.isVertical) {
         VerticalRail(
             position = settings.toolbarPosition,
@@ -157,6 +169,76 @@ fun ToolbarContent(
             uiState = uiState,
             onAction = onAction,
         )
+    }
+}
+
+/** Same dock and ink exclusion band, with six reachable controls on a Palma-sized display. */
+@Composable
+private fun CompactPenRail(
+    uiState: ToolbarUiState,
+    onAction: (ToolbarAction) -> Unit,
+    groups: RailGroups,
+    renderGroup: @Composable (List<ToolbarElement>) -> Unit,
+) {
+    val position = GlobalAppSettings.current.toolbarPosition
+    val vertical = position.isVertical
+    var moreOpen by remember(uiState.pageId) { mutableStateOf(false) }
+    val pens = (groups.tools + groups.overflow).filterIsInstance<PenElement>()
+    val active = pens.firstOrNull { it.presetId == uiState.penPresetId } ?: pens.firstOrNull()
+    val essentials = listOfNotNull(active) + listOf(
+        ToolbarElements.of(ToolbarElementId.ERASER),
+        ToolbarElements.of(ToolbarElementId.SELECT),
+    )
+    @Composable
+    fun tools() {
+        renderGroup(essentials)
+        ToolbarButton(vectorIcon = FeatherIcons.MoreHorizontal, contentDescription = "More tools",
+            isSelected = moreOpen, onSelect = { moreOpen = !moreOpen })
+    }
+    if (vertical) Row(Modifier.fillMaxHeight().width(TOOLBAR_THICKNESS.dp).background(Kaleido.Rail)) {
+        if (position == AppSettings.Position.Right) ToolbarEdgeRule(vertical = true)
+        Column(Modifier.width(BUTTON_SIZE.dp).fillMaxHeight().navigationBarsPadding()) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { tools() }
+            renderGroup(groups.history)
+        }
+        if (position == AppSettings.Position.Left) ToolbarEdgeRule(vertical = true)
+    } else Column(Modifier.fillMaxWidth().height(TOOLBAR_THICKNESS.dp).background(Kaleido.Rail)) {
+        if (position == AppSettings.Position.Bottom) ToolbarEdgeRule(vertical = false)
+        Row(Modifier.fillMaxWidth().height(BUTTON_SIZE.dp)) {
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { tools() }
+            renderGroup(groups.history)
+        }
+        if (position == AppSettings.Position.Top) ToolbarEdgeRule(vertical = false)
+    }
+    if (moreOpen) {
+        DisposableEffect(Unit) {
+            onAction(ToolbarAction.UpdateToolOptionsOpen(true))
+            onDispose { onAction(ToolbarAction.UpdateToolOptionsOpen(false)) }
+        }
+        val placement = toolbarPopupPlacement()
+        ScaledPopup(alignment = placement.alignment, offset = placement.offset,
+            properties = PopupProperties(focusable = true), onDismissRequest = { moreOpen = false }) {
+            Column(Modifier.padding(placement.padding).widthIn(min = 232.dp, max = 280.dp)
+                .heightIn(max = 420.dp).background(Kaleido.Rail).border(1.dp, Kaleido.Ink)
+                .verticalScroll(rememberScrollState()).padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Pens", color = Kaleido.Ink)
+                Row(Modifier.horizontalScroll(rememberScrollState())) { renderGroup(pens) }
+                Row(Modifier.horizontalScroll(rememberScrollState())) { QuickInkSwatches(uiState, onAction) }
+                Row(Modifier.horizontalScroll(rememberScrollState())) { NibGroup(uiState, onAction) }
+                Text("Annotation tools", color = Kaleido.Ink)
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    renderGroup(listOf(ToolbarElements.of(ToolbarElementId.TEXT)) +
+                        groups.overflow.filterNot { it is PenElement })
+                }
+                InkSwatch(uiState, onAction)
+                Row(Modifier.fillMaxWidth()) {
+                    renderGroup(listOf(ToolbarElements.of(ToolbarElementId.TOGGLE)))
+                    Spacer(Modifier.weight(1f))
+                    TextAction("Done", { moreOpen = false })
+                }
+            }
+        }
     }
 }
 

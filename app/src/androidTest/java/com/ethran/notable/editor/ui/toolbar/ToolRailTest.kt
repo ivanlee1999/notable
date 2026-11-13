@@ -111,9 +111,11 @@ class ToolRailTest {
         height: Dp? = null,
         position: AppSettings.Position = AppSettings.Position.Top,
         greyscale: Boolean = false,
+        compact: Boolean = false,
     ): MutableList<ToolbarAction> {
         val actions = mutableListOf<ToolbarAction>()
-        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position, greyscaleInks = greyscale))
+        GlobalAppSettings.update(AppSettings(version = 1, toolbarPosition = position, greyscaleInks = greyscale,
+            compactPenBar = compact))
         composeRule.setContent {
             var modifier: Modifier = Modifier
             if (width != null) modifier = modifier.width(width)
@@ -128,6 +130,22 @@ class ToolRailTest {
         }
         composeRule.waitForIdle()
         return actions
+    }
+
+    @Test
+    fun compactPhoneRailKeepsEssentialsVisibleAndPreservesAdvancedTools() {
+        val actions = rail(state(), width = NARROW_WIDTH, compact = true)
+        listOf("eraser", "lasso", "More tools", "undo", "redo").forEach {
+            composeRule.onNodeWithContentDescription(it, ignoreCase = true).assertIsDisplayed()
+        }
+        composeRule.onNodeWithContentDescription("More tools").performClick()
+        composeRule.onNodeWithText("Pens").assertIsDisplayed()
+        assertTrue(count(Pen.BALLPEN.penName) >= 1)
+        assertTrue(actions.any { it == ToolbarAction.UpdateToolOptionsOpen(true) })
+        composeRule.onNodeWithText("Done").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertTrue(actions.any { it == ToolbarAction.UpdateToolOptionsOpen(false) })
+        composeRule.onNodeWithContentDescription("More tools").assertIsDisplayed()
     }
 
     @Test

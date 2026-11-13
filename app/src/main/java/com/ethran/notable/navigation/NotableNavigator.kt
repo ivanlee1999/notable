@@ -12,6 +12,7 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.JournalRepository
 import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.EditorDestination
 import com.ethran.notable.editor.canvas.CanvasEventBus
@@ -218,14 +219,19 @@ class NotableNavigator(
      * into the editor — but what it makes is an ordinary notebook, so the note syncs, is searchable
      * and can be recovered from the Trash. None of which a loose page could do.
      */
-    fun onCreateNewNote(appRepository: AppRepository, folderId: String?) {
+    fun onCreateNewNote(journal: JournalRepository, folderId: String?, onFailure: (String) -> Unit = {}) {
         val request = navigationRequests.begin()
         coroutineScope.launch {
-            val (bookId, pageId) = withContext(Dispatchers.IO) {
-                appRepository.createNewNote(parentFolderId = folderId)
-            } ?: return@launch
+            val ids = try {
+                withContext(Dispatchers.IO) { journal.createEntry(parentFolderId = folderId) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                log.e("Could not create journal entry", error)
+                if (navigationRequests.isCurrent(request)) onFailure("Could not create note. Try again.")
+                return@launch
+            }
             if (!navigationRequests.isCurrent(request)) return@launch
-            navController.navigate(EditorDestination.createRoute(pageId, bookId))
+            navController.navigate(EditorDestination.createRoute(ids.second, ids.first))
         }
     }
 

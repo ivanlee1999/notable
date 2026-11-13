@@ -37,10 +37,18 @@ class JournalRepository @Inject constructor(
             .sortedWith(compareBy({ it.createdAt }, { it.notebookId }))
     }
 
-    suspend fun createEntry(initialTopics: List<String> = emptyList()): Pair<String, String> = db.withTransaction {
+    suspend fun createEntry(initialTopics: List<String> = emptyList(), parentFolderId: String? = null): Pair<String, String> = db.withTransaction {
+        var parent = parentFolderId
+        val ancestors = mutableSetOf<String>()
+        while (parent != null) {
+            check(ancestors.add(parent)) { "Folder ancestry is invalid" }
+            val folder = db.folderDao().get(parent) ?: error("Folder is missing")
+            check(folder.deletedAt == null) { "Folder is in Trash" }
+            parent = folder.parentFolderId
+        }
         val now = Instant.now()
         val zone = ZoneId.systemDefault()
-        val ids = appRepository.createNewNote() ?: error("Unable to create note")
+        val ids = appRepository.createNewNote(parentFolderId) ?: error("Unable to create note")
         val book = appRepository.bookRepository.getById(ids.first) ?: error("Note is missing")
         appRepository.bookRepository.update(book.copy(
             title = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.getDefault()).format(now.atZone(zone))

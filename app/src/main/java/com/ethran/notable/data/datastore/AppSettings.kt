@@ -128,6 +128,8 @@ data class AppSettings(
     // A device-local escape hatch when firmware raw input is unavailable. Existing settings
     // keep the native path; the editor reads this when its drawing surface is created.
     val compatibilityPenInput: Boolean = false,
+    /** Keeps the active pen and essentials on the rail; the complete controls stay in More. */
+    val compactPenBar: Boolean = true,
     /**
      * The longest edge, in pixels, that a picked image is stored at. A photograph arrives at
      * whatever the camera produced and then travels as base64 inside a page document, so the

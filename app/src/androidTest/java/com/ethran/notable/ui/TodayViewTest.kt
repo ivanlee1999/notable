@@ -129,7 +129,8 @@ class TodayViewTest {
         books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
             pageIds = listOf("${it.notebookId}-page")) }
         show()
-        compose.onNodeWithText("Topics").performClick()
+        compose.onNodeWithText("Browse").performClick()
+        compose.onNodeWithText("Tags").performClick()
         compose.onAllNodesWithText("#Product").assertCountEquals(1)
         compose.onNodeWithText("#product").assertDoesNotExist()
         compose.onNodeWithText("#Product").performClick()
@@ -147,9 +148,9 @@ class TodayViewTest {
             "new-book" to "new-page"
         }
         show()
-        compose.onNodeWithText("New note").performClick()
+        compose.onNodeWithText("Write").performClick()
         compose.onNodeWithText("Could not create note. Try again.").assertExists()
-        compose.onNodeWithText("New note").performClick()
+        compose.onNodeWithText("Write").performClick()
         compose.waitUntil { opened != null }
         compose.onNodeWithText("Could not create note. Try again.").assertDoesNotExist()
     }
@@ -158,9 +159,9 @@ class TodayViewTest {
     fun openingTodayCreatesNothingAndNewNoteOpensItsEditor() {
         coEvery { journal.createEntry(any()) } returns ("new-book" to "new-page")
         show()
-        compose.onNodeWithText("New note").assertIsEnabled()
+        compose.onNodeWithText("Write").assertIsEnabled()
         coVerify(exactly = 0) { journal.createEntry(any()) }
-        compose.onNodeWithText("New note").performClick()
+        compose.onNodeWithText("Write").performClick()
         compose.waitUntil { opened != null }
         assertEquals("new-page" to "new-book", opened)
         coVerify(exactly = 1) { journal.createEntry(emptyList()) }
@@ -182,13 +183,15 @@ class TodayViewTest {
         compose.onNodeWithText("first").assertIsDisplayed()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("second"))
         compose.onNodeWithText("second").assertIsDisplayed()
-        compose.onNodeWithText("old").assertDoesNotExist()
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("#Product"))
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("old"))
+        compose.onNodeWithText("old").assertIsDisplayed()
+        compose.onNodeWithText("Browse").performClick()
+        compose.onNodeWithText("Tags").performClick()
         compose.onNodeWithText("#Product").performClick()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("old"))
         compose.onNodeWithText("old").assertIsDisplayed()
         compose.onNodeWithText("second").assertDoesNotExist()
-        compose.onNodeWithText("New note").performClick()
+        compose.onNodeWithText("Write").performClick()
         compose.waitUntil { opened != null }
         coVerify(exactly = 1) { journal.createEntry(listOf("Product")) }
     }
@@ -204,11 +207,11 @@ class TodayViewTest {
         every { app.folderRepository.getAllFlow() } returns folders
         content(TodayViewModel(journal, app))
         compose.onNodeWithText("Could not load notes.").assertExists()
-        compose.onNodeWithText("New note").assertIsNotEnabled()
+        compose.onNodeWithText("Write").assertIsNotEnabled()
         compose.onNodeWithText("Dismiss").assertDoesNotExist()
         compose.runOnIdle { fail = false }
         compose.onNodeWithText("Retry").performClick()
-        compose.onNodeWithText("New note").assertIsEnabled()
+        compose.onNodeWithText("Write").assertIsEnabled()
         compose.onNodeWithText("Could not load notes.").assertDoesNotExist()
     }
 
@@ -227,6 +230,26 @@ class TodayViewTest {
         compose.onNodeWithText("Done").performClick()
         compose.onNodeWithText("#Product").assertDoesNotExist()
         compose.onNodeWithText("#Alex").assertExists()
+    }
+
+    @Test
+    fun filteringToTodayAndReturningToTheStreamPreservesOlderEntries() {
+        val today = LocalDate.now().toString()
+        entries.value = listOf(JournalEntry("today", today, 2),
+            JournalEntry("older", LocalDate.now().minusDays(1).toString(), 1))
+        books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
+            pageIds = listOf("${it.notebookId}-page")) }
+        show()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("older"))
+        compose.onNodeWithText("older").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Journal date filter").performClick()
+        compose.onNode(hasText("Today") and hasAnyAncestor(isPopup())).performClick()
+        compose.onNodeWithText("older").assertDoesNotExist()
+        compose.onNodeWithText("today").assertExists()
+        compose.onNode(hasText("Journal") and hasClickAction()).performClick()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("older"))
+        compose.onNodeWithText("older").assertIsDisplayed()
+        coVerify(exactly = 0) { journal.createEntry(any(), any()) }
     }
 
     @Test

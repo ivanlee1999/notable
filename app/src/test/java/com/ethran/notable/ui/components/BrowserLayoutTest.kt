@@ -12,6 +12,7 @@ class BrowserLayoutTest {
         assertEquals(BrowserLayout.MEDIUM, BrowserLayout.fromKey("OVERVIEW", compact = true))
         assertEquals(3, BrowserLayout.OVERVIEW.columnsFor(900.dp))
         assertEquals(2, BrowserLayout.OVERVIEW.columnsFor(360.dp))
+        assertEquals(BrowserLayout.COMPACT, BrowserLayout.fromKey("COMPACT", compact = true))
     }
 
     @Test fun expandingANoteKeepsEveryNeighborInOrderAndGivesItAFullRow() {
@@ -31,5 +32,6 @@ class BrowserLayoutTest {
         assertTrue(BrowserLayout.LARGE.previewHeight(800.dp) > BrowserLayout.MEDIUM.previewHeight(800.dp))
         assertTrue(BrowserLayout.MEDIUM.previewHeight(800.dp) > BrowserLayout.OVERVIEW.previewHeight(800.dp))
         assertTrue(BrowserLayout.OVERVIEW.previewHeight(200.dp) >= 64.dp)
+        assertTrue(BrowserLayout.COMPACT.previewHeight(800.dp) < BrowserLayout.OVERVIEW.previewHeight(800.dp))
     }
 }

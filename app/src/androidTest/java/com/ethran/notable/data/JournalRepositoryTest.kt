@@ -9,6 +9,7 @@ import com.ethran.notable.data.db.BookRepository
 import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.Kv
 import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.Folder
 import io.mockk.mockk
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -88,6 +89,29 @@ class JournalRepositoryTest {
         assertEquals(listOf("Personal"), entries.single { it.notebookId == second.first }.topics)
         assertEquals(first.first, db.pageDao().getById(first.second)?.notebookId)
         assertEquals(second.first, db.pageDao().getById(second.second)?.notebookId)
+    }
+
+    @Test
+    fun captureInAFolderRetainsItsJournalDateAndTopics() = runBlocking {
+        db.folderDao().create(Folder(id = "work", title = "Work"))
+        val captured = journal.createEntry(listOf("Product"), parentFolderId = "work")
+        val entry = journal.entries.first().single()
+        assertEquals(captured.first, entry.notebookId)
+        assertEquals(journalDate(entry.createdAt), entry.date)
+        assertEquals(listOf("Product"), entry.topics)
+        assertEquals("work", db.notebookDao().getById(captured.first)?.parentFolderId)
+    }
+
+    @Test
+    fun aTrashedAncestorCannotCreateAHiddenCapture() = runBlocking {
+        db.folderDao().create(Folder(id = "trash", deletedAt = Date()))
+        db.folderDao().create(Folder(id = "child", parentFolderId = "trash"))
+        try {
+            journal.createEntry(parentFolderId = "child")
+            fail("Expected trashed-folder rejection")
+        } catch (_: IllegalStateException) { }
+        assertTrue(journal.entries.first().isEmpty())
+        assertTrue(db.notebookDao().getAll().isEmpty())
     }
 
     @Test

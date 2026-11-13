@@ -51,6 +51,11 @@ fun GeneralSettings(
             })
 
         SettingToggleRow(
+            label = stringResource(R.string.compact_pen_bar),
+            value = settings.compactPenBar,
+            onToggle = { onSettingsChange(settings.copy(compactPenBar = it)) })
+
+        SettingToggleRow(
             label = stringResource(R.string.enable_scribble_to_erase),
             value = settings.scribbleToEraseEnabled,
             onToggle = { isChecked ->

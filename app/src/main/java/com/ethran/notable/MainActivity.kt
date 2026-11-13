@@ -33,6 +33,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.JournalRepository
 import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.defaultToolbarPosition
@@ -88,6 +89,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var appRepositoryLazy: dagger.Lazy<AppRepository>
+
+    @Inject
+    lateinit var journalRepositoryLazy: dagger.Lazy<JournalRepository>
 
     @Inject
     lateinit var exportEngineLazy: dagger.Lazy<ExportEngine>
@@ -187,7 +191,8 @@ class MainActivity : ComponentActivity() {
                             exportEngine = exportEngineLazy.get(),
                             snackState = snackState,
                             snackDispatcher = snackDispatcher,
-                            appRepository = appRepositoryLazy.get()
+                            appRepository = appRepositoryLazy.get(),
+                            journalRepository = journalRepositoryLazy.get()
                         )
                     } else {
                         ShowInitMessage()

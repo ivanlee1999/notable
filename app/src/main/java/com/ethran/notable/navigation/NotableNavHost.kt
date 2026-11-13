@@ -20,6 +20,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.JournalRepository
+import com.ethran.notable.ui.LocalSnackContext
+import com.ethran.notable.ui.SnackConf
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.ethran.notable.editor.EditorDestination
 import com.ethran.notable.editor.EditorView
 import com.ethran.notable.io.ExportEngine
@@ -48,9 +53,12 @@ private val log = ShipBook.getLogger("NotableNavHost")
 fun NotableNavHost(
     exportEngine: ExportEngine,
     appRepository: AppRepository,
+    journalRepository: JournalRepository,
     modifier: Modifier = Modifier,
     appNavigator: NotableNavigator
 ) {
+    val snackState = LocalSnackContext.current
+    val scope = rememberCoroutineScope()
 
     Box(modifier = modifier.fillMaxSize()) {
         NavHost(
@@ -76,14 +84,16 @@ fun NotableNavHost(
                 }),
             ) {
                 Column {
-                    TextAction("Today", { appNavigator.goToToday() }, Modifier.padding(8.dp))
+                    TextAction("Journal", { appNavigator.goToToday() }, Modifier.padding(8.dp))
                     Box(Modifier.weight(1f)) {
                         Library(
                             navController = appNavigator.navController,
                             folderId = it.arguments?.getString(LibraryDestination.FOLDER_ID_ARG),
                             goToPage = { pageId -> appNavigator.goToPage(appRepository, pageId) },
                             onCreateNewNote = { folderId ->
-                                appNavigator.onCreateNewNote(appRepository, folderId)
+                                appNavigator.onCreateNewNote(journalRepository, folderId) { message ->
+                                    scope.launch { snackState.showOrUpdateSnack(SnackConf(text = message, duration = 3000)) }
+                                }
                             }
                         )
                     }
@@ -148,6 +158,7 @@ fun NotableNavHost(
                     bookId = bookId,
                     initialPageId = currentPageId,
                     isQuickNavOpen = appNavigator.isQuickNavOpen,
+                    onNewEntry = { page, book -> appNavigator.goToJournalEntry(page, book) },
                     onPageChange = { newPageId ->
                         log.d("onPageChange: $newPageId")
                         appNavigator.onPageChange(

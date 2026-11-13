@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.JournalRepository
 import com.ethran.notable.gestures.quickNavGesture
 import com.ethran.notable.io.ExportEngine
 import com.ethran.notable.navigation.NotableNavHost
@@ -24,7 +25,8 @@ fun NotableApp(
     exportEngine: ExportEngine,
     snackState: SnackState,
     snackDispatcher: SnackDispatcher,
-    appRepository: AppRepository
+    appRepository: AppRepository,
+    journalRepository: JournalRepository,
 ) {
     val appNavState = rememberNotableAppState()
     Box(
@@ -36,6 +38,7 @@ fun NotableApp(
         NotableNavHost(
             exportEngine = exportEngine,
             appRepository = appRepository,
+            journalRepository = journalRepository,
             appNavigator = appNavState
         )
 

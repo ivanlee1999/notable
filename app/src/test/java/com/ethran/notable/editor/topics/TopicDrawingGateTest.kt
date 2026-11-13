@@ -19,6 +19,11 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class TopicDrawingGateTest {
+    @Test fun textAndToolOptionsKeepTheCanvasInactive() {
+        assertFalse(ToolbarUiState(isFlowTextOpen = true).isDrawingAllowed)
+        assertFalse(ToolbarUiState(isToolOptionsOpen = true).isDrawingAllowed)
+        assertTrue(ToolbarUiState().isDrawingAllowed)
+    }
     @Test fun olderDelayedResumeCannotDrawBehindTopicPicker() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         mockkObject(DeviceCompat)

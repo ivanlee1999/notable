@@ -369,7 +369,7 @@ fun LibraryContent(
                     onSortChanged = onSortChanged,
                     onCreateNewFolder = onCreateNewFolder,
                     onNavigateToTrash = onNavigateToTrash,
-                    gridView = browserLayout != BrowserLayout.FEED,
+                    gridView = browserLayout.columns > 1,
                     onGridChanged = { chooseLayout(if (it) BrowserLayout.LARGE else BrowserLayout.FEED) },
                     onToggleSidebar = if (canShowSidebar) ({ sidebarRequested = !sidebarRequested }) else null,
                     sidebarVisible = showSidebar,
@@ -387,14 +387,12 @@ fun LibraryContent(
                     if (sortedFolders.isEmpty() && sortedBooks.isEmpty()) item(key = "empty-library") {
                         Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(if (uiState.isSearching) "No results for “${uiState.query}”" else if (uiState.folderId != null) "Empty folder" else "Your library starts here",
+                            Text(if (uiState.isSearching) "No results for “${uiState.query}”" else "No notes",
                                 color = Kaleido.Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Text(if (uiState.isSearching) "Try another notebook or folder name."
-                                else "Create a notebook or import your notes from More.", color = Kaleido.Muted)
                             if (uiState.isSearching) TextAction("Clear search", { onQueryChanged("") })
                         }
                     }
-                    item(key = "folders-header") {
+                    if (sortedFolders.isNotEmpty()) item(key = "folders-header") {
                         SectionHeader(
                             stringResource(
                                 if (uiState.isSearching) R.string.home_folders_found
@@ -462,7 +460,7 @@ fun LibraryContent(
                         }
                     }
 
-                    item(key = "books-header") {
+                    if (sortedBooks.isNotEmpty()) item(key = "books-header") {
                         Spacer(Modifier.height(22.dp))
                         SectionHeader(stringResource(if (uiState.isSearching)
                             R.string.home_notebooks_found else R.string.home_notebooks),
@@ -567,9 +565,9 @@ internal fun LibraryHeader(
                 fontSize = metrics.titleSize, fontWeight = FontWeight.ExtraBold,
                 color = Kaleido.Ink, modifier = Modifier.weight(1f), maxLines = 2,
                 overflow = TextOverflow.Ellipsis)
-            SquareButton(48.dp, onCreateNewNotebook, filled = true) {
+            SquareButton(48.dp, onCreateNewNote, filled = true) {
                 Icon(
-                    FeatherIcons.Plus, stringResource(R.string.home_new_notebook),
+                    FeatherIcons.Plus, stringResource(R.string.home_new_note),
                     tint = Kaleido.Paper
                 )
             }
@@ -588,11 +586,8 @@ internal fun LibraryHeader(
                         .semantics { contentDescription = "Update available" })
                 }
                 if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
-                    MenuAction("Grid", { isMoreOpen = false; onGridChanged(true) }, gridView)
-                    MenuAction("List", { isMoreOpen = false; onGridChanged(false) }, !gridView)
-                    RowRule()
                     MenuAction("New folder", { isMoreOpen = false; onCreateNewFolder() })
-                    MenuAction(stringResource(R.string.home_new_note), { isMoreOpen = false; onCreateNewNote() })
+                    MenuAction(stringResource(R.string.home_new_notebook), { isMoreOpen = false; onCreateNewNotebook() })
                     MenuAction(stringResource(R.string.home_import_notebook), { isMoreOpen = false; onImport() })
                     RowRule()
                     MenuAction(
