@@ -402,5 +402,9 @@
     <string name="no_undo_to_perform">Nothing to undo</string>
     <string name="no_redo_to_perform">Nothing to redo</string>
     <string name="toolbar_eraser">Eraser</string>
+    <string name="pen_input_mode">Pen input</string>
+    <string name="pen_input_automatic">Automatic</string>
+    <string name="pen_input_compatibility">Compatibility</string>
+    <string name="pen_input_reopen">Reopen the note after changing pen input.</string>
 
 </resources>

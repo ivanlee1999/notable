@@ -1,12 +1,18 @@
 package com.ethran.notable.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ethran.notable.R
 import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.data.datastore.MAX_IMAGE_SIZE_STEPS
 import com.ethran.notable.data.model.PageSizePreset
+import com.ethran.notable.ui.theme.Kaleido
 
 
 @Composable
@@ -50,6 +56,21 @@ fun GeneralSettings(
             onToggle = { isChecked ->
                 onSettingsChange(settings.copy(scribbleToEraseEnabled = isChecked))
             })
+
+        SelectorRow(
+            label = stringResource(R.string.pen_input_mode),
+            options = listOf(
+                false to stringResource(R.string.pen_input_automatic),
+                true to stringResource(R.string.pen_input_compatibility),
+            ),
+            value = settings.compatibilityPenInput,
+            onValueChange = { onSettingsChange(settings.copy(compatibilityPenInput = it)) })
+        Text(
+            stringResource(R.string.pen_input_reopen),
+            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            color = Kaleido.Muted,
+            fontSize = 12.sp,
+        )
 
         // This is the single page-navigation choice. Scrolling fits the page width and flows
         // through physical page seams; Pagination fits a whole sheet and turns it at once.

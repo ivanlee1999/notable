@@ -51,5 +51,19 @@ class AppSettingsToolbarPensTest {
         )
         assertEquals(ToolbarPen.DEFAULT_PENS, decoded.toolbarPens)
         assertEquals(false, decoded.smoothScroll)
+        assertEquals(false, decoded.compatibilityPenInput)
+    }
+
+    @Test
+    fun `compatibility input round trips without changing existing pen and navigation settings`() {
+        val old = json.decodeFromString(AppSettings.serializer(),
+            """{"version":1,"smoothScroll":false,"canvasLocked":true,"toolbarPosition":"Bottom"}""")
+        val updated = old.copy(compatibilityPenInput = true)
+        val restored = json.decodeFromString(AppSettings.serializer(),
+            json.encodeToString(AppSettings.serializer(), updated))
+        assertEquals(updated, restored)
+        assertEquals(old.toolbarPens, restored.toolbarPens)
+        assertEquals(old.canvasLocked, restored.canvasLocked)
+        assertEquals(old.toolbarPosition, restored.toolbarPosition)
     }
 }

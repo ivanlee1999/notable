@@ -125,6 +125,9 @@ data class AppSettings(
      * it shipped.
      */
     val canvasLocked: Boolean = false,
+    // A device-local escape hatch when firmware raw input is unavailable. Existing settings
+    // keep the native path; the editor reads this when its drawing surface is created.
+    val compatibilityPenInput: Boolean = false,
     /**
      * The longest edge, in pixels, that a picked image is stored at. A photograph arrives at
      * whatever the camera produced and then travels as base64 inside a page document, so the
