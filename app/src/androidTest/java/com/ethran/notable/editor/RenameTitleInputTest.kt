@@ -3,6 +3,7 @@ package com.ethran.notable.editor
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.Column
 import com.ethran.notable.editor.topics.InkTopicRecognizer
 import com.ethran.notable.testing.ComposeUiSupportRule
 import com.ethran.notable.ui.dialogs.RenameTitleInput
@@ -20,8 +21,9 @@ class RenameTitleInputTest {
     private val saved = AtomicReference<String?>(null)
 
     private fun render() {
-        compose.setContent { RenameTitleInput("Original", recognizer, "en-US", false, null, saved::set, {}) }
+        compose.setContent { Column { RenameTitleInput("Original", recognizer, "en-US", false, null, saved::set, {}) } }
         compose.onNodeWithText("Write", useUnmergedTree = true).performClick()
+        compose.onNodeWithContentDescription("Write a name").assertExists()
         compose.onNodeWithContentDescription("Write a name").performTouchInput {
             swipe(Offset(20f, 20f), Offset(100f, 50f), durationMillis = 200)
         }
