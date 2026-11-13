@@ -24,13 +24,9 @@ import com.ethran.notable.editor.utils.eraserIndicatorWidth
 import com.ethran.notable.editor.utils.refreshScreenRegion
 import com.onyx.android.sdk.pen.data.TouchPointList
 import com.ethran.notable.editor.utils.onSurfaceChanged
-import com.ethran.notable.editor.utils.onSurfaceDestroy
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 
-
-// keep reference of the surface view presently associated to the singleton touchhelper
-var referencedSurfaceView: String = ""
 
 @SuppressLint("ViewConstructor") // we never execute constructor from XML
 class DrawCanvas(
@@ -238,6 +234,7 @@ class DrawCanvas(
         val surfaceCallback: SurfaceHolder.Callback = object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 log.i("surface created $holder")
+                inputHandler.surfaceCreated()
                 // set up the drawing surface
                 inputHandler.updateActiveSurface()
                 // The surface is only drawable once this callback fires; any
@@ -266,16 +263,7 @@ class DrawCanvas(
                 removeCallbacks(previewFrame)
                 previewFramePosted = false
                 previewDirty = null
-                log.i(
-                    "surface destroyed ${
-                        this@DrawCanvas.hashCode()
-                    } - ref $referencedSurfaceView"
-                )
-                holder.removeCallback(this)
-                if (referencedSurfaceView == this@DrawCanvas.hashCode().toString()) {
-                    inputHandler.touchHelper?.closeRawDrawing()
-                }
-                onSurfaceDestroy(this@DrawCanvas, inputHandler.touchHelper)
+                inputHandler.surfaceDestroyed()
             }
         }
 

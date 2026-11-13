@@ -53,7 +53,7 @@ class CanvasRefreshManager(
             try {
                 // Recheck mode here: selection/page transitions can happen while this frame
                 // is queued. Never clear the raw layer if no replacement frame was posted.
-                if (posted && page.currentPageId == pageId &&
+                if (posted && drawCanvas.inputHandler.ownsRawDrawing && page.currentPageId == pageId &&
                     viewModel.toolbarState.value.isDrawing &&
                     !CanvasEventBus.drawingInProgress.isLocked
                 ) {
@@ -84,9 +84,11 @@ class CanvasRefreshManager(
             }
             return
         }
+        if (!drawCanvas.inputHandler.ownsRawDrawing) return
         // 1. Block input immediately so no stroke can start during the swap/settle.
         touchHelper?.setRawInputReaderEnable(false)
         drawCanvas.coroutineScope.launch {
+            if (!drawCanvas.inputHandler.ownsRawDrawing) return@launch
             // 2. Push the erased page bitmap to the EPD *while still frozen* (drawBitmapToSurfaceSync
             //    forces it through with enablePost(0)+enablePost(1), like kreader's renderToScreen).
             drawBitmapToSurfaceSync(dirty)

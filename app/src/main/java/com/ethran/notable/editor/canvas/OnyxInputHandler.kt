@@ -26,6 +26,7 @@ import com.ethran.notable.editor.utils.handleErase
 import com.ethran.notable.editor.utils.handleScribbleToErase
 import com.ethran.notable.editor.utils.handleSelect
 import com.ethran.notable.editor.utils.onSurfaceInit
+import com.ethran.notable.editor.utils.onSurfaceDestroy
 import com.ethran.notable.editor.utils.penToStroke
 import com.ethran.notable.editor.utils.setupSurface
 import com.ethran.notable.data.model.SimplePointF
@@ -85,8 +86,7 @@ class OnyxInputHandler(
     val touchHelper by lazy {
         val helper = if (DeviceCompat.isOnyxDevice && !drawCanvas.compatibilityInput) {
             try {
-                referencedSurfaceView = this.hashCode().toString()
-                TouchHelper.create(drawCanvas, inputCallback)
+                TouchHelper.create(drawCanvas, inputCallback)?.also { claimRawDrawing() }
             } catch (t: Throwable) {
                 Log.w("OnyxInputHandler", "TouchHelper.create failed: ${t.message}")
                 null
@@ -138,11 +138,11 @@ class OnyxInputHandler(
             // eraser type: the wide marker (style 8) for the pen/drag eraser, a dotted outline
             // (DASH style 5) for the lasso/select eraser. See docs/onyx-sdk/onyx-native-eraser-indicator.md.
             // The current zoom rides along so the track matches the swath actually erased.
-            enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
+            if (ownsRawDrawing) enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
             // The eraser channel carries no colour of its own — the firmware paints the track with
             // the global setStrokeColor. Set it here (width comes from the style's params, so this
             // touches colour only, not thickness). This is the one thing we still set on begin.
-            touchHelper?.setStrokeColor(ERASER_INDICATOR_COLOR)
+            if (ownsRawDrawing) touchHelper?.setStrokeColor(ERASER_INDICATOR_COLOR)
             isErasing = true
         }
 
@@ -212,7 +212,7 @@ class OnyxInputHandler(
         }
 
     fun updatePenAndStroke() {
-        if(touchHelper == null) return
+        if (!ownsRawDrawing || touchHelper == null) return
         // it takes around 11 ms to run on Note 4c.
         log.i("Update pen and stroke")
         when (toolbarState.mode) {
@@ -253,7 +253,7 @@ class OnyxInputHandler(
      * visible against ink).
      */
     private fun applyEraserIndicatorStyle(penEraserColor: Int = Color.BLACK) {
-        if (touchHelper == null) return
+        if (!ownsRawDrawing || touchHelper == null) return
         when (toolbarState.eraser) {
             // Scaled by zoom exactly like the Draw path above: the swath handleErase deletes is
             // 30 page units, so the on-screen track is 30·zoom px. updatePenAndStroke runs on
@@ -278,7 +278,7 @@ class OnyxInputHandler(
     }
 
     suspend fun updateIsDrawing() {
-        if(touchHelper == null) return
+        if (!ownsRawDrawing || touchHelper == null) return
         log.i("Update is drawing: $toolbarState.isDrawing")
         if (toolbarState.isDrawing) {
             enableRawDrawing()
@@ -292,7 +292,7 @@ class OnyxInputHandler(
             // Recheck the mode in that callback: another toolbar action may have re-enabled
             // drawing while this frame was queued. A failed post must retain the existing ink.
             drawCanvas.refreshManager.drawCanvasToView(null) { posted ->
-                handoffPostedFrame(posted, isCurrent = { !toolbarState.isDrawing }) {
+                handoffPostedFrame(posted, isCurrent = { ownsRawDrawing && !toolbarState.isDrawing }) {
                     cancelPendingScreenFreezeReset()
                     touchHelper?.setRawDrawingEnabled(false)
                 }
@@ -313,12 +313,32 @@ class OnyxInputHandler(
     }
 
     fun updateEraserTrack() {
-        if (toolbarState.isDrawing) enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
+        if (ownsRawDrawing && toolbarState.isDrawing) enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
     }
 
     private var surfaceSetupJob: Job? = null
+    private var surfaceAvailable = false
+    internal val ownsRawDrawing: Boolean get() = surfaceAvailable && rawDrawingOwner.isOwner(drawCanvas)
+
+    private fun claimRawDrawing() {
+        if (!rawDrawingOwner.isOwner(drawCanvas)) cancelPendingScreenFreezeReset()
+        rawDrawingOwner.claim(drawCanvas)
+    }
+
+    fun surfaceCreated() { surfaceAvailable = true }
+
+    fun surfaceDestroyed() {
+        surfaceAvailable = false
+        surfaceSetupJob?.cancel()
+        rawDrawingOwner.release(drawCanvas) {
+            cancelPendingScreenFreezeReset()
+            onSurfaceDestroy(drawCanvas, touchHelper)
+            touchHelper?.closeRawDrawing()
+        }
+    }
 
     fun enableRawDrawing() {
+        if (!ownsRawDrawing) return
         touchHelper?.setRawDrawingEnabled(true)
         enableNativeEraser(touchHelper, toolbarState.eraser, page.zoomLevel.value)
         updatePenAndStroke()
@@ -333,11 +353,12 @@ class OnyxInputHandler(
         surfaceSetupJob = coroutineScope.launch {
             // Before surfaceCreated there is nothing to set up (no surface, possibly zero size);
             // surfaceCreated calls this again once the surface exists.
-            if (!drawCanvas.holder.surface.isValid) {
+            if (!surfaceAvailable || !drawCanvas.holder.surface.isValid) {
                 log.d("Surface not ready, skipping surface setup")
                 return@launch
             }
             if (DeviceCompat.isOnyxDevice) onSurfaceInit(drawCanvas)
+            if (touchHelper != null) claimRawDrawing()
             // The surface is laid out inside the chrome's inset, so its own box is the paper —
             // there is no chrome to measure or exclude here. Showing or hiding the toolbar
             // resizes the surface, which re-runs this through surfaceChanged with the new box.
