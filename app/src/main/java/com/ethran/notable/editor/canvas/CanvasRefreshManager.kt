@@ -78,6 +78,12 @@ class CanvasRefreshManager(
      */
     fun commitErase(dirtyRect: Rect?, areaErase: Boolean = false) {
         val dirty = dirtyRect ?: Rect(0, 0, page.viewWidth, page.viewHeight)
+        if (touchHelper == null) {
+            drawCanvasToView(dirty) { posted ->
+                if (posted && DeviceCompat.isOnyxDevice) refreshScreenRegion(drawCanvas, dirty)
+            }
+            return
+        }
         // 1. Block input immediately so no stroke can start during the swap/settle.
         touchHelper?.setRawInputReaderEnable(false)
         drawCanvas.coroutineScope.launch {
@@ -144,6 +150,7 @@ class CanvasRefreshManager(
                     lock = { drawCanvas.holder.lockCanvas(zoneToRedraw) },
                     draw = { canvas ->
                         canvas.drawBitmap(page.windowedBitmap, zoneToRedraw, zoneToRedraw, Paint())
+                        drawCanvas.drawFallbackPreview(canvas)
                         if (viewModel.toolbarState.value.mode == Mode.Select) {
                             viewModel.selectionState.firstPageCut?.let { cutPoints ->
                                 val path = pointsToPath(cutPoints.map {

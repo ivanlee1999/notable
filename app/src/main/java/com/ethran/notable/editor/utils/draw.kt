@@ -8,6 +8,7 @@ import com.ethran.notable.editor.PageView
 import com.ethran.notable.ui.SnackConf
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -21,10 +22,11 @@ fun handleDraw(
     strokeSize: Float,
     color: Int,
     pen: Pen,
-    touchPoints: List<StrokePoint>
+    touchPoints: List<StrokePoint>,
+    onRendered: () -> Unit = {},
 ) {
     try {
-        if (touchPoints.isEmpty()) return
+        if (touchPoints.isEmpty()) { onRendered(); return }
         val startY = touchPoints.first().y
 
         // A stroke that *starts* past this page's end is not on this page. Under continuous
@@ -37,6 +39,7 @@ fun handleDraw(
             val nextPageId = page.nextPageId
             if (nextPageId != null) {
                 handleDrawOntoNextPage(page, nextPageId, strokeSize, color, pen, touchPoints)
+                onRendered()
                 return
             }
             // The last page. Writing past the end means "keep writing", and the way to keep
@@ -44,18 +47,22 @@ fun handleDraw(
             // the end creates it, and the ink files onto it. Asynchronous because the creation
             // is a database transaction; the stroke appears with the redraw that follows.
             page.coroutineScope.launch(Dispatchers.IO) {
-                val created = page.pageDataManager.ensureNextPage(page.currentPageId)
-                withContext(Dispatchers.Main.immediate) {
-                    if (created != null) {
-                        handleDrawOntoNextPage(
-                            page, created, strokeSize, color, pen, touchPoints
-                        )
-                    } else {
-                        // The open page moved on under us, so there is nothing to extend.
-                        page.snackManager.showOrUpdateSnack(
-                            SnackConf(text = "The page ends here", duration = 2000)
-                        )
+                try {
+                    val created = page.pageDataManager.ensureNextPage(page.currentPageId)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (created != null) {
+                            handleDrawOntoNextPage(
+                                page, created, strokeSize, color, pen, touchPoints
+                            )
+                        } else {
+                            // The open page moved on under us, so there is nothing to extend.
+                            page.snackManager.showOrUpdateSnack(
+                                SnackConf(text = "The page ends here", duration = 2000)
+                            )
+                        }
                     }
+                } finally {
+                    withContext(NonCancellable + Dispatchers.Main.immediate) { onRendered() }
                 }
             }
             return
@@ -68,6 +75,7 @@ fun handleDraw(
             page.snackManager.showOrUpdateSnack(
                 SnackConf(text = "The page ends here", duration = 2000)
             )
+            onRendered()
             return
         }
 
@@ -80,6 +88,7 @@ fun handleDraw(
             page.snackManager.showOrUpdateSnack(
                 SnackConf(text = "The page ends here", duration = 2000)
             )
+            onRendered()
             return
         }
 
@@ -90,8 +99,10 @@ fun handleDraw(
         // this is causing lagging and crushing, neo pens are not good
         page.drawAreaPageCoordinates(strokeBounds(stroke).toRect())
         historyBucket.add(stroke.id)
+        onRendered()
     } catch (e: Exception) {
         log.e("Handle Draw: An error occurred while handling the drawing: ${e.message}")
+        onRendered()
     }
 }
 

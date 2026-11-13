@@ -19,10 +19,9 @@ import kotlin.math.sin
  * shape out of the framework's own events and dispatches to the same place rather than
  * duplicating any of it; every tool keeps working without knowing which path fed it.
  *
- * What the framework cannot replace is the *live* track. The raw path paints ink into the
- * panel from firmware as the pen moves, which is the whole reason this app is built on it;
- * here a stroke appears when the pen lifts. That is a real downgrade, and it is the reason
- * this is a fallback rather than a second supported input mode.
+ * [onStrokeProgress] provides the live track without committing anything to the page. A
+ * cancelled gesture therefore leaves no stored ink, while the finished list still uses the
+ * editor's existing stroke, history and persistence path exactly once.
  */
 class MotionEventStrokeSource(
     private val onStrokeFinished: (TouchPointList) -> Unit,
@@ -31,8 +30,10 @@ class MotionEventStrokeSource(
      * long as it lasts — the firmware path brackets its strokes the same way. See
      * [com.ethran.notable.editor.InkViewport].
      */
-    private val onStrokeStarted: () -> Unit = {},
+    private val onStrokeStarted: (isEraser: Boolean) -> Unit = {},
     private val onStrokeEnded: () -> Unit = {},
+    private val onStrokeProgress: (TouchPointList) -> Unit = {},
+    private val onStrokeCancelled: () -> Unit = {},
 ) {
     private var pending: TouchPointList? = null
 
@@ -79,7 +80,8 @@ class MotionEventStrokeSource(
                 ) return false
                 penPointerId = event.getPointerId(index)
                 pending = TouchPointList().apply { add(event.toTouchPoint(index)) }
-                onStrokeStarted()
+                onStrokeStarted(event.getToolType(index) == MotionEvent.TOOL_TYPE_ERASER)
+                onStrokeProgress(pending!!)
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -90,6 +92,7 @@ class MotionEventStrokeSource(
                 // digitizer's, which shows up as visible faceting on a fast stroke.
                 for (pos in 0 until event.historySize) stroke.add(event.toTouchPoint(index, pos))
                 stroke.add(event.toTouchPoint(index))
+                onStrokeProgress(stroke)
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
@@ -110,6 +113,7 @@ class MotionEventStrokeSource(
                 penPointerId = MotionEvent.INVALID_POINTER_ID
                 stroke.add(event.toTouchPoint(index))
                 try {
+                    onStrokeProgress(stroke)
                     // A down/up pair also preserves a dot made by tapping the pen.
                     if (stroke.size() >= 2) onStrokeFinished(stroke)
                 } finally {
@@ -130,7 +134,10 @@ class MotionEventStrokeSource(
         val wasDrawing = pending != null
         pending = null
         penPointerId = MotionEvent.INVALID_POINTER_ID
-        if (wasDrawing) onStrokeEnded()
+        if (wasDrawing) {
+            try { onStrokeCancelled() }
+            finally { onStrokeEnded() }
+        }
     }
 }
 

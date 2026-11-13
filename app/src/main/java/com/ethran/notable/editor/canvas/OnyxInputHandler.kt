@@ -70,19 +70,20 @@ class OnyxInputHandler(
     /**
      * Whether the firmware raw-pen path actually came up on this device.
      *
-     * Being an ONYX device is not enough: [TouchHelper.create] can fail, and a panel that
-     * carries no digitizer of its own (the Palma class, which takes a capacitive stylus
-     * rather than the Tab series' EMR one) may not serve the raw channel at all. Everything
-     * Onyx-side already null-guards the helper, so on those devices the editor would come up
-     * looking fine and simply never record a stroke — [MotionEventStrokeSource] reads the
-     * framework's events instead when this is false.
+     * Allocation does not prove that a particular firmware delivers callbacks. Diagnostics
+     * count those separately; compatibility input lets the user select the framework path
+     * without racing two capture paths in the middle of a stroke.
      */
     val usesRawInput: Boolean get() = touchHelper != null
+    private var diagnosticSession = 0L
+
+    fun recordFrameworkStroke(eventAgeMs: Long) =
+        PenInputDiagnostics.frameworkStroke(diagnosticSession, eventAgeMs)
 
     // TODO: As OnyxInput is not done by lazy, which forces evaluation of the touchHelper
     //       lazy during DrawCanvas construction.
     val touchHelper by lazy {
-        val helper = if (DeviceCompat.isOnyxDevice) {
+        val helper = if (DeviceCompat.isOnyxDevice && !drawCanvas.compatibilityInput) {
             try {
                 referencedSurfaceView = this.hashCode().toString()
                 TouchHelper.create(drawCanvas, inputCallback)
@@ -91,6 +92,11 @@ class OnyxInputHandler(
                 null
             }
         } else null
+        diagnosticSession = PenInputDiagnostics.beginSession(when {
+            helper != null -> "BOOX native (check raw callbacks)"
+            DeviceCompat.isOnyxDevice || drawCanvas.compatibilityInput -> "Android compatibility"
+            else -> "Android front buffer"
+        })
         helper
     }
 
@@ -101,6 +107,7 @@ class OnyxInputHandler(
         // - erase :  `onBeginRawErasing()` -> `onRawErasingTouchPointMoveReceived()` -> `onRawErasingTouchPointListReceived()` -> `onEndRawErasing()`
 
         override fun onBeginRawDrawing(p0: Boolean, p1: TouchPoint?) {
+            PenInputDiagnostics.rawStroke(diagnosticSession)
             // The firmware is about to paint on the picture that is on the panel now, so that is
             // the view this stroke will be filed through however far the editor scrolls before the
             // pen lifts. See InkViewport.
@@ -122,6 +129,7 @@ class OnyxInputHandler(
         // Handle button/eraser tip of the pen:
         override fun onBeginRawErasing(p0: Boolean, p1: TouchPoint?) {
             if (touchHelper == null) return
+            PenInputDiagnostics.rawStroke(diagnosticSession)
             // An erase track is aimed at the ink on the panel exactly as a stroke is, and is
             // matched against stored ink the same way. Same view, same reason. See InkViewport.
             page.beginInkCapture()
@@ -329,7 +337,7 @@ class OnyxInputHandler(
                 log.d("Surface not ready, skipping surface setup")
                 return@launch
             }
-            onSurfaceInit(drawCanvas)
+            if (DeviceCompat.isOnyxDevice) onSurfaceInit(drawCanvas)
             // The surface is laid out inside the chrome's inset, so its own box is the paper —
             // there is no chrome to measure or exclude here. Showing or hiding the toolbar
             // resizes the surface, which re-runs this through surfaceChanged with the new box.
@@ -473,7 +481,8 @@ class OnyxInputHandler(
                                 toolbarState.activePenSetting.strokeSize,
                                 toolbarState.activePenSetting.color,
                                 toolbarState.pen,
-                                scaledPoints
+                                scaledPoints,
+                                onRendered = { drawCanvas.completeFallbackPreview(plist) }
                             )
                             // The firmware's live track is already on the panel, so the raw path
                             // needs no push here — the pen-up refresh swaps it for the real
@@ -497,6 +506,7 @@ class OnyxInputHandler(
                                 )
                             }
                         } else {
+                            drawCanvas.completeFallbackPreview(plist)
                             log.d("Erased by scribble, $erasedByScribbleDirtyRect")
                             // Union the scribble track (firmware screen coords) with the erased
                             // strokes' bounds so commitErase overwrites both in one pass while
@@ -524,6 +534,10 @@ class OnyxInputHandler(
                 }
             }
         }
+    }
+
+    internal fun onFallbackStrokeCollected(points: TouchPointList, eraser: Boolean) {
+        if (eraser) onRawErasingList(points) else onStrokeCollected(points)
     }
 
     private fun onRawErasingList(plist: TouchPointList?) {

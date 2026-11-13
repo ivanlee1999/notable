@@ -3,6 +3,11 @@ package com.ethran.notable.editor.canvas
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -11,7 +16,13 @@ import com.ethran.notable.editor.PageView
 import com.ethran.notable.editor.drawing.OpenGLRenderer
 import com.ethran.notable.editor.state.History
 import com.ethran.notable.editor.state.Operation
+import com.ethran.notable.editor.state.Mode
+import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.editor.utils.DeviceCompat
+import com.ethran.notable.editor.utils.Eraser
+import com.ethran.notable.editor.utils.eraserIndicatorWidth
+import com.ethran.notable.editor.utils.refreshScreenRegion
+import com.onyx.android.sdk.pen.data.TouchPointList
 import com.ethran.notable.editor.utils.onSurfaceChanged
 import com.ethran.notable.editor.utils.onSurfaceDestroy
 import io.shipbook.shipbooksdk.ShipBook
@@ -30,6 +41,7 @@ class DrawCanvas(
     val history: History
 ) : SurfaceView(context) {
     private val log = ShipBook.getLogger("DrawCanvas")
+    internal val compatibilityInput = GlobalAppSettings.current.compatibilityPenInput
 
     private fun isStylusOrEraser(toolType: Int): Boolean =
         toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
@@ -68,10 +80,11 @@ class DrawCanvas(
             // still use OpenGL as their only renderer. The original condition is kept
             // (commented) as a reference. See docs/onyx-sdk/onyx-native-eraser-indicator.md.
             // if (!DeviceCompat.isOnyxDevice || inputHandler.isErasing) {
-            if (!DeviceCompat.isOnyxDevice) {
-                glRenderer.onTouchListener.onTouch(this, event)
-            } else if (!inputHandler.usesRawInput) {
+            if (compatibilityInput ||
+                (DeviceCompat.isOnyxDevice && !inputHandler.usesRawInput)) {
                 collectStrokeWithoutFirmware(event)
+            } else if (!DeviceCompat.isOnyxDevice) {
+                glRenderer.onTouchListener.onTouch(this, event)
             }
 
             // Consume completely. This prevents Compose underneath from ever
@@ -96,10 +109,74 @@ class DrawCanvas(
         // This view *is* the paper: the editor lays it out inside the chrome's inset, so there
         // is no band of it to keep the pen off. Events arrive in view coordinates, so the whole
         // view is the limit.
-        fallbackStrokeSource.onTouchEvent(event, Rect(0, 0, width, height))
+        if (fallbackStrokeSource.onTouchEvent(event, Rect(0, 0, width, height)) &&
+            (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
+            requestUnbufferedDispatch(event)
+            inputHandler.recordFrameworkStroke(SystemClock.uptimeMillis() - event.eventTime)
+        }
     }
 
-    internal fun cancelFallbackStroke() = fallbackStrokeSource.cancel()
+    internal fun cancelFallbackStroke() {
+        fallbackStrokeSource.cancel()
+        fallbackPreview.clear()
+    }
+
+    internal fun completeFallbackPreview(stroke: TouchPointList) = fallbackPreview.committed(stroke)
+    internal fun drawFallbackPreview(canvas: Canvas) = fallbackPreview.draw(canvas)
+
+    private var previewDirty: Rect? = null
+    private var previewFramePosted = false
+    private val previewFrame = Runnable {
+        previewFramePosted = false
+        val dirty = previewDirty
+        previewDirty = null
+        if (dirty != null && dirty.intersect(0, 0, width, height) &&
+            isAttachedToWindow && holder.surface.isValid) {
+            // Paint the bitmap and transient track together. One surface post per display
+            // frame, rather than a complete-page render or a new thread for every pen point.
+            refreshManager.drawCanvasToView(dirty) { posted ->
+                if (posted && DeviceCompat.isOnyxDevice) refreshScreenRegion(this, dirty)
+            }
+        }
+    }
+
+    private fun requestPreviewFrame(dirty: Rect) {
+        previewDirty?.union(dirty) ?: run { previewDirty = Rect(dirty) }
+        if (!previewFramePosted) {
+            previewFramePosted = true
+            postOnAnimation(previewFrame)
+        }
+    }
+
+    private val fallbackPreview = FallbackInkPreview(::requestPreviewFrame)
+
+    private fun fallbackPaint(): Paint {
+        val toolbar = viewModel.toolbarState.value
+        return Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = toolbar.activePenSetting.color
+            strokeWidth = (toolbar.activePenSetting.strokeSize * page.zoomLevel.value).coerceAtLeast(1f)
+            when (toolbar.mode) {
+                Mode.Select, Mode.Text -> {
+                    color = Color.DKGRAY
+                    strokeWidth = 2f
+                    pathEffect = DashPathEffect(floatArrayOf(6f, 6f), 0f)
+                }
+                Mode.Erase -> {
+                    color = Color.GRAY
+                    if (toolbar.eraser == Eraser.SELECT) {
+                        strokeWidth = 2f
+                        pathEffect = DashPathEffect(floatArrayOf(6f, 6f), 0f)
+                    } else strokeWidth = eraserIndicatorWidth(page.zoomLevel.value)
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private var fallbackEraser = false
 
     @Suppress("RedundantOverride")
     override fun performClick(): Boolean {
@@ -128,9 +205,21 @@ class DrawCanvas(
     /** Only ever used when the firmware raw channel is absent; see [collectStrokeWithoutFirmware]. */
     private val fallbackStrokeSource =
         MotionEventStrokeSource(
-            onStrokeFinished = inputHandler::onStrokeCollected,
-            onStrokeStarted = page::beginInkCapture,
+            onStrokeFinished = { stroke ->
+                if (!fallbackEraser && viewModel.toolbarState.value.mode == Mode.Draw) fallbackPreview.finish(stroke)
+                else fallbackPreview.cancelActive()
+                inputHandler.onFallbackStrokeCollected(stroke, fallbackEraser)
+            },
+            onStrokeStarted = { eraser ->
+                fallbackEraser = eraser
+                page.beginInkCapture()
+                fallbackPreview.begin(fallbackPaint().apply {
+                    if (eraser) { color = Color.GRAY; strokeWidth = eraserIndicatorWidth(page.zoomLevel.value) }
+                })
+            },
             onStrokeEnded = page::endInkCapture,
+            onStrokeProgress = fallbackPreview::update,
+            onStrokeCancelled = fallbackPreview::cancelActive,
         )
 
 
@@ -143,7 +232,7 @@ class DrawCanvas(
     fun init() {
         log.i("Initializing Canvas")
         glRenderer = OpenGLRenderer(this@DrawCanvas)
-        glRenderer.attachSurfaceView(this)
+        if (!DeviceCompat.isOnyxDevice && !compatibilityInput) glRenderer.attachSurfaceView(this)
 
 
         val surfaceCallback: SurfaceHolder.Callback = object : SurfaceHolder.Callback {
@@ -169,11 +258,14 @@ class DrawCanvas(
                 // Update page dimensions, redraw and refresh
                 page.updateDimensions(width, height)
                 inputHandler.updateActiveSurface()
-                onSurfaceChanged(this@DrawCanvas)
+                if (DeviceCompat.isOnyxDevice) onSurfaceChanged(this@DrawCanvas)
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 cancelFallbackStroke()
+                removeCallbacks(previewFrame)
+                previewFramePosted = false
+                previewDirty = null
                 log.i(
                     "surface destroyed ${
                         this@DrawCanvas.hashCode()

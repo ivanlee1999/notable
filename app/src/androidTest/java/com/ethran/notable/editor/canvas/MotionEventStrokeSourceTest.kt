@@ -442,6 +442,72 @@ class MotionEventStrokeSourceTest {
     }
 
     @Test
+    fun live_points_arrive_before_pen_up_but_storage_happens_only_once_afterwards() {
+        val visible = mutableListOf<List<Float>>()
+        var commits = 0
+        val live = MotionEventStrokeSource(
+            onStrokeFinished = { commits++ },
+            onStrokeProgress = { visible += it.points.map { p -> p.x } },
+        )
+        live.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
+        live.onTouchEvent(event(MotionEvent.ACTION_MOVE, 20f, 20f), canvas)
+        assertEquals(listOf(10f, 20f), visible.last())
+        assertEquals(0, commits)
+
+        live.onTouchEvent(event(MotionEvent.ACTION_UP, 30f, 30f), canvas)
+        live.onTouchEvent(event(MotionEvent.ACTION_UP, 30f, 30f), canvas)
+        assertEquals(listOf(10f, 20f, 30f), visible.last())
+        assertEquals(1, commits)
+    }
+
+    @Test
+    fun batched_history_is_in_the_live_preview_and_saved_stroke_without_duplication() {
+        var visible = emptyList<Float>()
+        var finished = emptyList<Float>()
+        val live = MotionEventStrokeSource(
+            onStrokeFinished = { finished = it.points.map { p -> p.x } },
+            onStrokeProgress = { visible = it.points.map { p -> p.x } },
+        )
+        live.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
+        val move = event(MotionEvent.ACTION_MOVE, 20f, 20f)
+        move.addBatch(16L, 30f, 30f, 0.5f, 1f, 0)
+        live.onTouchEvent(move, canvas)
+        assertEquals(listOf(10f, 20f, 30f), visible)
+        live.onTouchEvent(event(MotionEvent.ACTION_UP, 40f, 40f), canvas)
+        assertEquals(listOf(10f, 20f, 30f, 40f), finished)
+    }
+
+    @Test
+    fun cancellation_removes_live_preview_without_committing_or_closing_twice() {
+        var cancelled = 0
+        var commits = 0
+        var ended = 0
+        val live = MotionEventStrokeSource(
+            onStrokeFinished = { commits++ },
+            onStrokeEnded = { ended++ },
+            onStrokeCancelled = { cancelled++ },
+        )
+        live.onTouchEvent(event(MotionEvent.ACTION_DOWN, 10f, 10f), canvas)
+        live.onTouchEvent(event(MotionEvent.ACTION_MOVE, 20f, 20f), canvas)
+        live.cancel()
+        live.onTouchEvent(event(MotionEvent.ACTION_UP, 30f, 30f), canvas)
+        live.cancel()
+        assertEquals(1, cancelled)
+        assertEquals(1, ended)
+        assertEquals(0, commits)
+    }
+
+    @Test
+    fun the_eraser_tool_is_reported_from_the_actual_pen_pointer_beside_a_palm() {
+        var erasing: Boolean? = null
+        val live = MotionEventStrokeSource(onStrokeFinished = {}, onStrokeStarted = { erasing = it })
+        live.onTouchEvent(event(MotionEvent.ACTION_DOWN, listOf(palm)), canvas)
+        live.onTouchEvent(event(MotionEvent.ACTION_POINTER_DOWN,
+            listOf(palm, pen(10f, 10f).copy(toolType = MotionEvent.TOOL_TYPE_ERASER)), 1), canvas)
+        assertEquals(true, erasing)
+    }
+
+    @Test
     fun a_press_on_the_rail_holds_no_view() {
         // Nothing opened, so nothing may be held: the editor would go on holding a view for a
         // stroke that never started.
