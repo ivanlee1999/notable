@@ -111,36 +111,29 @@ class UiConsistencyComposeTests {
     ) = PagesContent(state, onBack, onOpen, {}, { _, _ -> }, onDelete, onDuplicate, onAdd)
 
     @Test
-    fun compactLibraryKeepsCreationViewAndSettingsReachableAtLargeText() {
+    fun compactLibraryKeepsCreationAndSettingsReachableAtLargeText() {
         var created = 0
+        var notebooksCreated = 0
         var settingsOpened = 0
         content(width = 320, fontScale = 1.5f) {
-            var grid by remember { mutableStateOf(true) }
             BoxWithConstraints {
                 LibraryHeader(
                     metrics = kaleidoMetrics(maxWidth), uiState = LibraryUiState(),
-                    onCreateNewNotebook = { created++ },
+                    onCreateNewNote = { created++ },
+                    onCreateNewNotebook = { notebooksCreated++ },
                     onNavigateToSettings = { settingsOpened++ },
-                    gridView = grid, onGridChanged = { grid = it },
                 )
             }
         }
         compose.onNodeWithText("Library").assertIsDisplayed()
-        // The two visible actions are icon squares now, so they are addressed the way a screen
-        // reader addresses them — by description, not by a label the header no longer spends a
-        // row on.
-        compose.onNodeWithContentDescription("New notebook").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Quick note").assertIsDisplayed().performClick()
         assertEquals(1, created)
         screenshot("library-header-320-large-text")
-        // Layout, settings and the rest all live behind the one gear.
         compose.onNodeWithContentDescription("More").performClick()
-        compose.onNodeWithText("List").assertIsDisplayed().performClick()
+        compose.onNodeWithText("New notebook").assertIsDisplayed().performClick()
+        assertEquals(1, notebooksCreated)
         compose.onNodeWithContentDescription("More").performClick()
-        // Substring, because MenuAction ticks the chosen entry by rewriting its label to
-        // "✓ List" — an exact match would look for a string the menu no longer draws.
-        compose.onNodeWithText("List", substring = true).assertIsSelected()
-        compose.onNodeWithText("Grid", substring = true).assertIsNotSelected()
-        compose.onNodeWithText("Settings").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Settings").performScrollTo().assertIsDisplayed().performClick()
         assertEquals(1, settingsOpened)
     }
 
@@ -154,8 +147,9 @@ class UiConsistencyComposeTests {
         compose.onNodeWithText("Library").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search notebooks and folders").assertIsDisplayed()
         compose.onNodeWithText("Sort").assertIsDisplayed()
-        compose.onNodeWithContentDescription("New notebook").assertIsDisplayed()
-        compose.onNodeWithContentDescription("More").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Quick note").assertIsDisplayed()
+        compose.onNodeWithContentDescription("More").assertIsDisplayed().performClick()
+        compose.onNodeWithText("New notebook").assertIsDisplayed().performClick()
         screenshot("library-header-600")
     }
 
