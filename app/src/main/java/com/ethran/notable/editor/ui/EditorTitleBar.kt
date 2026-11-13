@@ -56,6 +56,7 @@ fun EditorTitleBar(
     uiState: ToolbarUiState,
     onAction: (ToolbarAction) -> Unit,
     onSwitchNotebook: () -> Unit = { onAction(ToolbarAction.OpenQuickNav) },
+    topics: (@Composable () -> Unit)? = null,
 ) {
     val metrics = kaleidoMetrics(LocalConfiguration.current.screenWidthDp.dp)
 
@@ -107,6 +108,8 @@ fun EditorTitleBar(
                 Icon(FeatherIcons.ChevronDown, contentDescription = null,
                     tint = Kaleido.Muted, modifier = Modifier.size(14.dp))
             }
+
+            topics?.invoke()
 
             Box(
                 Modifier.size(48.dp)

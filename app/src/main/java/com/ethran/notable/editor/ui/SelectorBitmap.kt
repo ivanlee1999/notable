@@ -41,6 +41,7 @@ import compose.icons.feathericons.Clipboard
 import compose.icons.feathericons.Copy
 import compose.icons.feathericons.Scissors
 import compose.icons.feathericons.Share2
+import compose.icons.feathericons.Tag
 
 val strokeStyle = Stroke(
     width = 2f,
@@ -50,7 +51,8 @@ val strokeStyle = Stroke(
 @Composable
 fun SelectedBitmap(
     context: Context,
-    controlTower: EditorControlTower
+    controlTower: EditorControlTower,
+    onAddTopic: (() -> Unit)? = null,
 ) {
     val selectionState = controlTower.getSnapshotOfSelectionState()
     if (selectionState.selectedBitmap == null) return
@@ -105,7 +107,8 @@ fun SelectedBitmap(
         )
 
         val density = LocalDensity.current
-        val buttonCount = if (selectionState.isResizable()) 7 else 5
+        val canTag = onAddTopic != null && !selectionState.selectedStrokes.isNullOrEmpty()
+        val buttonCount = (if (selectionState.isResizable()) 7 else 5) + if (canTag) 1 else 0
         val toolbarPadding = 4.dp
         val toolbarWidthPx = minOf(constraints.maxWidth,
             with(density) { (BUTTON_SIZE.dp * buttonCount + toolbarPadding * 2).roundToPx() })
@@ -126,6 +129,13 @@ fun SelectedBitmap(
                 .padding(toolbarPadding)
                 .height(BUTTON_SIZE.dp)
         ) {
+            if (canTag) ToolbarButton(
+                vectorIcon = FeatherIcons.Tag,
+                contentDescription = "Add selection as topic",
+                isSelected = false,
+                onSelect = { onAddTopic?.invoke() },
+                modifier = Modifier.height(BUTTON_SIZE.dp),
+            )
             ToolbarButton(
                 vectorIcon = FeatherIcons.Share2,
                 contentDescription = "Share selection",

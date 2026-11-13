@@ -30,6 +30,9 @@ import com.ethran.notable.editor.ui.SaveStateBadge
 import com.ethran.notable.editor.ui.ScrollIndicator
 import com.ethran.notable.editor.ui.SelectedBitmap
 import com.ethran.notable.editor.ui.TextBoxEditor
+import com.ethran.notable.editor.topics.EditorTopicButton
+import com.ethran.notable.editor.topics.EditorTopicsPopup
+import com.ethran.notable.editor.topics.EditorTopicsViewModel
 import com.ethran.notable.editor.ui.toolbar.PositionedToolbar
 import com.ethran.notable.editor.ui.toolbar.editorChromeInset
 import com.ethran.notable.editor.ui.toolbar.toolbarInset
@@ -238,6 +241,24 @@ fun EditorView(
 //        }
 
         val toolbarState by viewModel.toolbarState.collectAsStateWithLifecycle()
+        val topicsModel: EditorTopicsViewModel = hiltViewModel()
+        DisposableEffect(topicsModel) { onDispose { topicsModel.close() } }
+        val topicEntries by topicsModel.entries.collectAsStateWithLifecycle()
+        val topicRequest by topicsModel.request.collectAsStateWithLifecycle()
+        val selectedTopics = topicEntries.firstOrNull { it.notebookId == toolbarState.notebookId }?.topics.orEmpty()
+        fun openTopics(fromSelection: Boolean = false) {
+            val notebook = toolbarState.notebookId ?: return
+            val pageId = toolbarState.pageId ?: return
+            viewModel.setTopicPickerOpen(true)
+            topicsModel.open(notebook, pageId, if (fromSelection) viewModel.selectionState.selectedStrokes.orEmpty() else emptyList())
+        }
+        LaunchedEffect(toolbarState.notebookId, toolbarState.pageId) {
+            topicsModel.retainContext(toolbarState.notebookId, toolbarState.pageId)
+        }
+        DisposableEffect(topicRequest) {
+            viewModel.setTopicPickerOpen(topicRequest != null)
+            onDispose { viewModel.setTopicPickerOpen(false) }
+        }
 
         // Observe pageId changes from ViewModel state for navigation
         LaunchedEffect(viewModel) {
@@ -310,7 +331,8 @@ fun EditorView(
                     history = history
                 )
                 SelectedBitmap(
-                    context = context, controlTower = editorControlTower
+                    context = context, controlTower = editorControlTower,
+                    onAddTopic = { openTopics(fromSelection = true) },
                 )
                 // Only while a box is open. The rest of the time a text box is drawn into the
                 // page bitmap with everything else, so the page carries no views and scrolling
@@ -339,6 +361,8 @@ fun EditorView(
                             viewModel.onToolbarAction(action)
                         },
                         onSwitchNotebook = openNoteSwitcher,
+                        topics = { EditorTopicButton(selectedTopics,
+                            enabled = toolbarState.notebookId != null) { openTopics() } },
                     )
                 }
             }
@@ -348,6 +372,9 @@ fun EditorView(
             // Last, so it is over the toolbar rather than under it: the one thing on this screen
             // the user cannot find out any other way.
             SaveStateBadge(saveState = page.pageDataManager.saveState)
+            if (topicRequest?.let { it.notebookId == toolbarState.notebookId && it.pageId == toolbarState.pageId } == true) {
+                EditorTopicsPopup(topicsModel)
+            }
         }
     }
 }

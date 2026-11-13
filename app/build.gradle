@@ -189,6 +189,7 @@ tasks.withType(Test).configureEach {
 }
 
 dependencies {
+    implementation 'com.google.mlkit:digital-ink-recognition:19.0.0'
     implementation libs.androidx.core.ktx
     implementation libs.androidx.ui
     implementation libs.androidx.material

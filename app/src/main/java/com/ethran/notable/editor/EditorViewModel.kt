@@ -49,6 +49,7 @@ import io.shipbook.shipbooksdk.Log
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -111,6 +112,7 @@ data class ToolbarUiState(
     val isSelectionActive: Boolean = false,
     /** A text box is open and the keyboard is up. */
     val isTextEditing: Boolean = false,
+    val isTopicPickerOpen: Boolean = false,
     val hasClipboard: Boolean = false,
     val isDrawing: Boolean = true,
     val isQuickNavOpen: Boolean = false,
@@ -121,7 +123,7 @@ data class ToolbarUiState(
         get() = penSettings[penPresetId] ?: PenSetting(5f, android.graphics.Color.BLACK)
 
     val isDrawingAllowed: Boolean
-        get() = !isSelectionActive && !isTextEditing &&
+        get() = !isSelectionActive && !isTextEditing && !isTopicPickerOpen &&
                 !(isMenuOpen || isStrokeSelectionOpen || isBackgroundSelectorModalOpen)
                 && !isQuickNavOpen
 }
@@ -690,15 +692,19 @@ class EditorViewModel @Inject constructor(
     /**
      * Re-evaluates whether drawing should be enabled based on menu and selection states.
      */
+    private var drawingStateJob: Job? = null
+
     fun updateDrawingState() {
         // It get called three times on canvas creation.
         val shouldBeDrawing = _toolbarState.value.isDrawingAllowed
         _toolbarState.update { it.copy(isDrawing = shouldBeDrawing) }
         log.d("updateDrawingState: Drawing state: $shouldBeDrawing")
-        viewModelScope.launch {
+        drawingStateJob?.cancel()
+        drawingStateJob = viewModelScope.launch {
             if (shouldBeDrawing)
                 DeviceCompat.delayBeforeResumingDrawing()
-            CanvasEventBus.isDrawing.emit(shouldBeDrawing)
+            if (_toolbarState.value.isDrawingAllowed == shouldBeDrawing)
+                CanvasEventBus.isDrawing.emit(shouldBeDrawing)
         }
     }
 
@@ -966,6 +972,12 @@ class EditorViewModel @Inject constructor(
     fun setTextEditing(active: Boolean) {
         if (_toolbarState.value.isTextEditing == active) return
         _toolbarState.update { it.copy(isTextEditing = active) }
+        updateDrawingState()
+    }
+
+    fun setTopicPickerOpen(open: Boolean) {
+        if (_toolbarState.value.isTopicPickerOpen == open) return
+        _toolbarState.update { it.copy(isTopicPickerOpen = open) }
         updateDrawingState()
     }
 
