@@ -230,7 +230,7 @@ fun TextAction(
             .background(if (filled) Kaleido.Ink else Kaleido.Paper)
             .border(1.dp, Kaleido.Ink)
             .then(if (enabled) Modifier.noRippleClickable(onClick) else Modifier)
-            .semantics { role = Role.Button; if (!enabled) disabled() }
+            .semantics(mergeDescendants = true) { role = Role.Button; if (!enabled) disabled() }
             .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {

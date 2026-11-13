@@ -266,7 +266,7 @@ fun TodayView(
                                             note.entry.topics.forEach { topic ->
                                                 TextAction("#$topic", { topicsView = true; selectedTopic = topic })
                                             }
-                                            TextAction("+ Topic", { editingTopics = note.entry.notebookId })
+                                            TextAction("+ Tag", { editingTopics = note.entry.notebookId })
                                         }
                                     }
                             }

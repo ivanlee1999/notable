@@ -224,7 +224,7 @@ class TodayViewTest {
             entries.value = listOf(entry.copy(topics = listOf("Alex")))
         }
         show()
-        compose.onNodeWithText("+ Topic").performClick()
+        compose.onNodeWithText("+ Tag").performClick()
         compose.onNodeWithText("Product").performClick()
         coVerify(exactly = 1) { journal.removeTopic("book", "Product") }
         compose.onNodeWithText("Done").performClick()

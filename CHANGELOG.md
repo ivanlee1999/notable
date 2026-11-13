@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.58.0
+
+- Write flowing Markdown beside the original handwriting, with native selection,
+  formatting, keyboard support, durable drafts, and independent New thought entries.
+- Browse a continuous journal with date filters, tags, readable text previews, a
+  compact list, and adjustable grids. Notes captured in folders receive the same
+  journal date and tag metadata.
+- Keep essential pen controls visible and retain presets and advanced tools under
+  More. The detailed pen bar remains available in settings.
+- Preserve concurrent text sources as readable previous versions; protect drafts
+  during sync, navigation, and crash recovery. Obsidian 0.3.0 reads flowing text.
+- Correct native ink ownership when writing surfaces are destroyed and reopened.
+
+Original strokes and positioned annotations keep their coordinates. Physical Palma
+2 Pro latency remains unverified; untouched captures may remain as blank entries.
+
 ## 0.55.2
 
 - Duplicate notebooks as one transaction, keeping bookmarks, outline entries, and
