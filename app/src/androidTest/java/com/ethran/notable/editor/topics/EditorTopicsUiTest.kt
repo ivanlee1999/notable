@@ -1,9 +1,12 @@
 package com.ethran.notable.editor.topics
 
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -28,6 +31,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class EditorTopicsUiTest {
@@ -38,7 +42,7 @@ class EditorTopicsUiTest {
     private val journal = mockk<JournalRepository>()
     private lateinit var model: EditorTopicsViewModel
 
-    private fun render() {
+    private fun render(fontScale: Float = 1f) {
         every { journal.entries } returns source
         coEvery { journal.addTopic(any(), any()) } coAnswers {
             val id = firstArg<String>(); val raw = secondArg<String>()
@@ -53,15 +57,34 @@ class EditorTopicsUiTest {
             override suspend fun recognize(strokes: List<TopicInkStroke>, language: String, onDownloading: () -> Unit) = "#Product"
         }, ApplicationProvider.getApplicationContext<Context>())
         compose.setContent {
-            val entries by model.entries.collectAsStateWithLifecycle()
-            EditorTitleBar(ToolbarUiState(notebookId = "note", pageId = "page", notebookTitle = "Notes"), {},
-                topics = { EditorTopicButton(entries.firstOrNull { it.notebookId == "note" }?.topics.orEmpty()) { model.open("note", "page") } })
-            EditorTopicsPopup(model)
+            DeviceConfigurationOverride(
+                DeviceConfigurationOverride.ForcedSize(DpSize(320.dp, 640.dp)) then
+                    DeviceConfigurationOverride.FontScale(fontScale)
+            ) {
+                val entries by model.entries.collectAsStateWithLifecycle()
+                EditorTitleBar(ToolbarUiState(notebookId = "note", pageId = "page", notebookTitle = "Notes"), {},
+                    topics = { EditorTopicButton(entries.firstOrNull { it.notebookId == "note" }?.topics.orEmpty()) { model.open("note", "page") } })
+                EditorTopicsPopup(model)
+            }
         }
         compose.waitUntil { model.ready.value }
     }
 
     @After fun cleanup() { if (::model.isInitialized) model.viewModelScope.cancel() }
+
+    @Test fun phoneWithLargeTextKeepsTheTagControlAndDropdownReachable() {
+        render(fontScale = 1.5f)
+        compose.onNodeWithContentDescription("Edit note topics")
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNodeWithContentDescription("Find or create topic").assertIsDisplayed()
+        compose.onNodeWithText("Done").assertIsDisplayed()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val directory = File(context.cacheDir, "ui-review").apply { mkdirs() }
+        File(directory, "editor-topics-phone.png").outputStream().use {
+            check(compose.onNode(isPopup()).captureToImage().asAndroidBitmap()
+                .compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+    }
 
     @Test fun titleBarAddsAndRemovesTopicsWithoutLeavingTheEditor() {
         render()
