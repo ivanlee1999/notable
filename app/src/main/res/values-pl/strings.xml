@@ -416,5 +416,9 @@
     <string name="no_undo_to_perform">Nie ma czego cofnąć</string>
     <string name="no_redo_to_perform">Nie ma czego ponowić</string>
     <string name="toolbar_eraser">Gumka</string>
+    <string name="pen_input_mode">Wprowadzanie piórem</string>
+    <string name="pen_input_automatic">Automatyczne</string>
+    <string name="pen_input_compatibility">Tryb zgodności</string>
+    <string name="pen_input_reopen">Po zmianie trybu ponownie otwórz notatkę.</string>
 
 </resources>
