@@ -279,20 +279,22 @@ class PageRepository @Inject constructor(
      * Name a page, or clear its name with null. Bumps `updatedAt` so the rename is picked up as a
      * per-page change by incremental sync, the same way an edit to the drawing would be.
      */
-    suspend fun rename(pageId: String, title: String?, expectedNotebookId: String? = null) {
-        if (pageId.isEmpty()) return
-        database.withTransaction {
+    suspend fun rename(pageId: String, title: String?, expectedNotebookId: String? = null): Page {
+        require(pageId.isNotEmpty())
+        return database.withTransaction {
             val current = db.getById(pageId) ?: error("Page is missing")
             if (expectedNotebookId != null) {
                 check(current.notebookId == expectedNotebookId) { "Page moved to another notebook" }
                 val book = database.notebookDao().getById(expectedNotebookId) ?: error("Notebook is missing")
                 check(book.deletedAt == null && pageId in book.pageIds) { "Page is no longer in this notebook" }
             }
-            db.updateTitle(pageId, title, SyncClock.afterDate(current.updatedAt).time)
+            val authored = current.copy(title = title, updatedAt = SyncClock.afterDate(current.updatedAt), updatedBy = null)
+            db.updateTitle(pageId, title, authored.updatedAt.time)
             // Read back rather than taken from the caller: the rename menu knows a page id and
             // nothing else, and the notebook has to travel with it. Null only if the page was
             // deleted underneath us, in which case there is nothing to send.
-            queuePage(pageId, db.getNotebookId(pageId) ?: return@withTransaction)
+            queuePage(pageId, current.notebookId)
+            authored
         }
     }
 

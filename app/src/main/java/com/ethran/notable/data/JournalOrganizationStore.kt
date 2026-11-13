@@ -206,6 +206,51 @@ class JournalOrganizationStore @Inject constructor(private val db: AppDatabase) 
         }
     }
 
+    /** Additive only: a remembered removal always wins over automatic classification. */
+    internal suspend fun addAutomaticTopics(notebookId: String, createdAt: Long, names: List<String>) = db.withTransaction {
+        val records = load()
+        val current = records.find { it.notebookId == notebookId } ?: OrganizationEntry(notebookId, null, createdAt)
+        val additions = names.map(::canonicalTopicName).filter { it.isNotEmpty() }
+            .associateBy(::asciiLower).filterKeys { it !in current.topics }
+        if (additions.isEmpty()) return@withTransaction
+        val (counter, writer) = nextRevision()
+        write(current.copy(topics = current.topics + additions.mapValues { (_, name) -> TopicRevision(name, true, counter, writer) }))
+    }
+
+    /** Existing notes include Trash. Pending organization records without a note stay untouched. */
+    suspend fun renameTopic(sourceName: String, destination: String): Int = changeTopic(sourceName, topicName(destination).also {
+        require(it.isNotEmpty()) { "Enter a tag name" }
+    })
+
+    suspend fun removeTopicEverywhere(sourceName: String): Int = changeTopic(sourceName, null)
+
+    private suspend fun changeTopic(sourceName: String, destination: String?): Int = db.withTransaction {
+        val records = load()
+        val existing = db.notebookDao().getAll().mapTo(mutableSetOf()) { it.id }
+        val sourceKey = asciiLower(canonicalTopicName(sourceName))
+        val targetKey = destination?.let(::asciiLower)
+        val targetName = destination?.let { requested ->
+            if (sourceKey == targetKey) requested else records.asSequence().filter { it.notebookId in existing }.flatMap { it.topics.values.asSequence() }
+                .filter { it.present && asciiLower(it.name) == targetKey }.map { it.name }.sortedWith(::compareUtf8).firstOrNull() ?: requested
+        }
+        val affected = records.filter { entry -> entry.notebookId in existing &&
+            entry.topics[sourceKey]?.let { it.present && (sourceKey != targetKey || it.name != targetName) } == true }
+        if (affected.isEmpty()) return@withTransaction 0
+        val (counter, writer) = nextRevision()
+        affected.forEach { entry ->
+            val topics = entry.topics.toMutableMap()
+            val source = topics.getValue(sourceKey)
+            if (sourceKey == targetKey) topics[sourceKey] = TopicRevision(targetName!!, true, counter, writer)
+            else {
+                topics[sourceKey] = source.copy(present = false, counter = counter, writer = writer)
+                if (targetKey != null && topics[targetKey]?.present != true)
+                    topics[targetKey] = TopicRevision(targetName!!, true, counter, writer)
+            }
+            write(entry.copy(topics = topics))
+        }
+        affected.size
+    }
+
     private suspend fun load(): List<OrganizationEntry> {
         // Validate the complete input before changing even one row.
         val legacy = dao.getJournalEntries().map(::decodeJournalEntry)

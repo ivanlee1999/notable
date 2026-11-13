@@ -84,6 +84,8 @@ class PageViewChangePageTest {
             viewport = PageViewportState(),
             couchSync = mockk<CouchSyncController>(relaxed = true),
             transcription = mockk(relaxed = true),
+            contentTagger = mockk(relaxed = true),
+            database = db,
         )
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     }

@@ -19,6 +19,7 @@ import org.junit.runner.RunWith
 import java.util.Date
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(AndroidJUnit4::class)
 class PageTranscriptionTest {
@@ -31,6 +32,10 @@ class PageTranscriptionTest {
     private val source = MutableStateFlow(listOf(ink))
     private val strokes = mockk<StrokeRepository>()
     private val recognizer = mockk<InkTopicRecognizer>()
+    private val tagger = mockk<com.ethran.notable.data.ContentTagger>(relaxed = true)
+    private val tagGeneration = AtomicLong()
+    private lateinit var automaticTags: com.ethran.notable.data.AutomaticTagPreferences
+    private var previousAutomatic = true
     private lateinit var preferences: HandwritingPreferences
     private lateinit var previous: HandwritingOptions
     private lateinit var repository: PageTranscriptionRepository
@@ -41,14 +46,18 @@ class PageTranscriptionTest {
         preferences = HandwritingPreferences(context)
         previous = preferences.options.value
         preferences.update(HandwritingOptions(automatic = true, textPreview = true, language = "en-US"))
+        automaticTags = com.ethran.notable.data.AutomaticTagPreferences(context)
+        previousAutomatic = automaticTags.enabled.value
+        automaticTags.setEnabled(true)
         every { strokes.observeByPage(page) } returns source
+        every { tagger.currentGeneration() } answers { tagGeneration.get() }
         coEvery { strokes.getByPage(page) } answers { source.value }
         coEvery { recognizer.recognize(any(), any(), any()) } returns "Recognized source"
-        repository = PageTranscriptionRepository(context, strokes, recognizer, preferences, scope, Dispatchers.IO)
+        repository = PageTranscriptionRepository(context, strokes, recognizer, preferences, scope, Dispatchers.IO, tagger, automaticTags)
         scope.launch { repository.observe(page).collect { observed += it.text; state.value = it } }
     }
 
-    @After fun cleanup() = runBlocking { scope.coroutineContext.job.cancelAndJoin(); preferences.update(previous) }
+    @After fun cleanup() = runBlocking { scope.coroutineContext.job.cancelAndJoin(); preferences.update(previous); automaticTags.setEnabled(previousAutomatic) }
 
     @Test fun automaticRequestsCoalesceAndOnlyCreateDerivedText() = runBlocking {
         repeat(20) { repository.request(page) }
@@ -130,5 +139,43 @@ class PageTranscriptionTest {
         repository.penContact(contact, false)
         withTimeout(6_000) { state.first { it.text == "After pen release" } }
         assertEquals(2, attempts)
+    }
+
+    @Test fun aCachedPreviewStaysReadOnlyButAnExactLocallySavedUndoCanUseItsText() = runBlocking {
+        withTimeout(6_000) { state.first { it.text == "Recognized source" } }
+        verify(exactly = 0) { tagger.submit(any(), any(), any(), any()) }
+        val submitted = CompletableDeferred<com.ethran.notable.data.ContentTagSource>()
+        every { tagger.submit("book", page, any(), any()) } answers { submitted.complete(thirdArg()); Unit }
+        repository.markLocalInkSaved(page, "book", source.value, "en-US")
+        repository.request(page)
+        val tagged = withTimeout(6_000) { submitted.await() } as com.ethran.notable.data.ContentTagSource.Ink
+        assertEquals(handwritingFingerprint(source.value, "en-US"), tagged.fingerprint)
+        assertEquals("Recognized source", tagged.text)
+        coVerify(exactly = 1) { recognizer.recognize(any(), any(), any()) }
+        repository.request(page)
+        delay(1_200)
+        verify(exactly = 1) { tagger.submit(any(), any(), any(), any()) }
+    }
+
+    @Test fun globalTagManagementInvalidatesOldInkEligibilityAndDelayedMarkersButAllowsANewLocalEdit() = runBlocking {
+        val started = CompletableDeferred<Unit>(); val finish = CompletableDeferred<String>()
+        coEvery { recognizer.recognize(any(), any(), any()) } coAnswers { started.complete(Unit); finish.await() }
+        repository.markLocalInkSaved(page, "book", source.value, "en-US", generation = 0)
+        repository.request(page)
+        withTimeout(6_000) { started.await() }
+        tagGeneration.incrementAndGet()
+        finish.complete("Recognized source")
+        withTimeout(6_000) { state.first { it.text == "Recognized source" } }
+        verify(exactly = 0) { tagger.submit(any(), any(), any(), any()) }
+        repository.markLocalInkSaved(page, "book", source.value, "en-US", generation = 0)
+        repository.request(page)
+        delay(1_200)
+        verify(exactly = 0) { tagger.submit(any(), any(), any(), any()) }
+        val submitted = CompletableDeferred<Unit>()
+        every { tagger.submit("book", page, any(), 1) } answers { submitted.complete(Unit); Unit }
+        repository.markLocalInkSaved(page, "book", source.value, "en-US", generation = 1)
+        repository.request(page)
+        withTimeout(6_000) { submitted.await() }
+        verify(exactly = 1) { tagger.submit(any(), any(), any(), any()) }
     }
 }

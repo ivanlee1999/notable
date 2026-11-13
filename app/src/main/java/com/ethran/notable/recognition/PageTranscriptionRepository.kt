@@ -64,7 +64,7 @@ internal data class CachedTranscription(val fingerprint: String, val text: Strin
 
 data class HandwritingPreview(val text: String? = null, val textMode: Boolean = false)
 
-/** Derived local files only. This worker never writes ink, typed blocks, dates, tags or outbox. */
+/** Cache is derived locally; only eligible local edits submit metadata to the guarded tagger. */
 @Singleton
 class PageTranscriptionRepository @Inject constructor(
     @param:ApplicationContext context: Context,
@@ -73,6 +73,8 @@ class PageTranscriptionRepository @Inject constructor(
     val preferences: HandwritingPreferences,
     @param:ApplicationScope private val scope: CoroutineScope,
     @param:IoDispatcher private val io: CoroutineDispatcher,
+    private val contentTagger: com.ethran.notable.data.ContentTagger,
+    private val automaticTags: com.ethran.notable.data.AutomaticTagPreferences,
 ) {
     private val directory = File(context.cacheDir, "handwriting-text")
     private val queue = Channel<String>(Channel.UNLIMITED)
@@ -81,6 +83,8 @@ class PageTranscriptionRepository @Inject constructor(
     private val pending = mutableSetOf<String>()
     private val again = mutableSetOf<String>()
     private val generations = mutableMapOf<String, Long>()
+    private data class LocalInk(val notebookId: String, val fingerprint: String, val language: String, val generation: Long)
+    private val locallyChanged = mutableMapOf<String, LocalInk>()
     private val failed = mutableMapOf<String, Pair<String, Long>>()
     private val updates = MutableSharedFlow<String>(extraBufferCapacity = 64)
     private val penContacts = MutableStateFlow<Set<Any>>(emptySet())
@@ -121,6 +125,17 @@ class PageTranscriptionRepository @Inject constructor(
         penContacts.update { if (down) it + owner else it - owner }
     }
 
+    fun capturesLocalTags(): Boolean = automaticTags.enabled.value && preferences.options.value.automatic
+
+    /** Source was read in the same transaction as the local ink write, not at worker wake. */
+    fun markLocalInkSaved(pageId: String, notebookId: String, source: List<Stroke>, language: String,
+        generation: Long = contentTagger.currentGeneration()) {
+        if (!capturesLocalTags() || preferences.options.value.language != language || generation != contentTagger.currentGeneration()) return
+        val fingerprint = handwritingFingerprint(source, language)
+        if (generation != contentTagger.currentGeneration()) return
+        synchronized(lock) { locallyChanged[pageId] = LocalInk(notebookId, fingerprint, language, generation) }
+    }
+
     /** Called after a durable ink write and when a preview needs an uncached transcript. */
     fun request(pageId: String) {
         if (pageId.isBlank() || !preferences.options.value.automatic) return
@@ -147,7 +162,11 @@ class PageTranscriptionRepository @Inject constructor(
         if (penContacts.value.isNotEmpty()) return true
         val source = strokes.getByPage(pageId)
         val fingerprint = handwritingFingerprint(source, options.language)
-        if (read(pageId)?.fingerprint == fingerprint) return false
+        val cached = read(pageId)
+        if (cached?.fingerprint == fingerprint) {
+            applyEligibleTags(pageId, fingerprint, options.language, cached.text)
+            return false
+        }
         if (!canAttempt(pageId, fingerprint)) return false
         if (source.isEmpty()) { synchronized(fileLock) { file(pageId).delete() }; synchronized(lock) { failed.remove(pageId) }; return false }
         try {
@@ -167,12 +186,21 @@ class PageTranscriptionRepository @Inject constructor(
                 catch (failure: Throwable) { destination.failWrite(output); throw failure }
             }
             synchronized(lock) { failed.remove(pageId) }
+            applyEligibleTags(pageId, fingerprint, options.language, text)
         } catch (cancelled: CancellationException) {
             if (!currentCoroutineContext().isActive) throw cancelled
             return true
         }
         catch (_: Exception) { synchronized(lock) { failed[pageId] = fingerprint to System.currentTimeMillis() } }
         return false
+    }
+
+    private fun applyEligibleTags(pageId: String, fingerprint: String, language: String, text: String) {
+        val local = synchronized(lock) { locallyChanged[pageId]?.takeIf {
+            it.fingerprint == fingerprint && it.language == language && it.generation == contentTagger.currentGeneration()
+        }?.also { locallyChanged.remove(pageId) } }
+        local?.let { contentTagger.submit(it.notebookId, pageId,
+            com.ethran.notable.data.ContentTagSource.Ink(fingerprint, language, text), it.generation) }
     }
 
     private fun file(pageId: String): AtomicFile {

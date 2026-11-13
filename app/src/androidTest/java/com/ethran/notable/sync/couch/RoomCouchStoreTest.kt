@@ -1069,6 +1069,8 @@ class RoomCouchStoreTest {
             // here rather than allowed to reach for a server that is not part of this scenario.
             couchSync = inertCouchSync(),
             transcription = mockk(relaxed = true),
+            contentTagger = mockk(relaxed = true),
+            database = db,
         ).also { pageManagers += it }
 
         runBlocking {
@@ -1106,6 +1108,8 @@ class RoomCouchStoreTest {
             viewport = PageViewportState(),
             couchSync = inertCouchSync(),
             transcription = mockk(relaxed = true),
+            contentTagger = mockk(relaxed = true),
+            database = db,
         ).also { pageManagers += it }
 
         runBlocking {
@@ -1228,6 +1232,8 @@ class RoomCouchStoreTest {
         viewport = PageViewportState(),
         couchSync = inertCouchSync(),
         transcription = mockk(relaxed = true),
+            contentTagger = mockk(relaxed = true),
+            database = db,
     ).also { pageManagers += it }
 
     private fun reportingStore() = RoomCouchStore(

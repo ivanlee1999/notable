@@ -74,6 +74,7 @@ fun NotableNavHost(
                     onOpen = { page, book -> appNavigator.goToJournalEntry(page, book) },
                     onLibrary = { appNavigator.goToLibrary(null) },
                     onPages = { book -> appNavigator.goToPages(book) },
+                    onTrash = { appNavigator.goToTrash() },
                 )
                 appNavigator.cleanCurrentPageId()
             }

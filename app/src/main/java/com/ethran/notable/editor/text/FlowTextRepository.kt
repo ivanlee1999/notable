@@ -77,6 +77,7 @@ class FlowTextRepository @Inject constructor(
     private val app: AppRepository,
     private val thumbnails: ThumbnailGenerator,
     private val backfill: ThumbnailBackfillQueue,
+    private val contentTagger: com.ethran.notable.data.ContentTagger,
 ) {
     private val mutex = Mutex()
     private val revisions = AtomicLong()
@@ -130,6 +131,7 @@ class FlowTextRepository @Inject constructor(
     }
 
     suspend fun save(draft: FlowDraft): FlowSaveResult = mutex.withLock {
+        var localText: Triple<String, List<Block>, Long>? = null
         // The source lands durably before any canonical write. A failed transaction keeps it.
         if (draft.revision >= (written[draft.pageId] ?: -1)) {
             db.kvDao().set(Kv(key(draft.pageId), json.encodeToString(draft)))
@@ -145,6 +147,7 @@ class FlowTextRepository @Inject constructor(
             val conflicts = linkedSetOf<String>()
             val ids = linkedMapOf<String, List<String>>()
             var changed = false
+            val authoredIds = mutableSetOf<String>()
             for (run in draft.runs) {
                 val original = run.original.map { it.block(draft.pageId) }
                 val latest = app.blockRepository.getByPage(draft.pageId)
@@ -183,6 +186,7 @@ class FlowTextRepository @Inject constructor(
                     conflicts += run.token; changed = true; continue
                 }
                 app.blockRepository.upsertAll(plan.blocks)
+                plan.blocks.filter { it.kind == "md" && it.text != current[it.id]?.text }.forEach { authoredIds += it.id }
                 app.blockRepository.deleteByIds(plan.removedIds)
                 app.deletedBlockRepository.record(draft.pageId, plan.removedIds, now)
                 ids[run.token] = plan.resultIds
@@ -190,6 +194,7 @@ class FlowTextRepository @Inject constructor(
             }
             if (changed) app.pageRepository.touchUpdatedAt(draft.pageId)
             val final = app.blockRepository.getByPage(draft.pageId).associateBy { it.id }
+            if (conflicts.isEmpty() && authoredIds.isNotEmpty()) localText = Triple(page.notebookId, authoredIds.mapNotNull(final::get), contentTagger.currentGeneration())
             // Canonical content and cleanup share a commit, so process death cannot leave a
             // creation draft whose planned identities were already written as new paragraphs.
             if (conflicts.isEmpty() && draft.revision >= (written[draft.pageId] ?: -1)) db.kvDao().delete(key(draft.pageId))
@@ -200,26 +205,31 @@ class FlowTextRepository @Inject constructor(
             written[draft.pageId] = draft.revision
         }
         backfill.enqueue(thumbnails.invalidate(listOf(draft.pageId)).toList())
+        localText?.let { (book, blocks, generation) -> contentTagger.submit(book, draft.pageId, com.ethran.notable.data.ContentTagSource.Text(blocks), generation) }
         result
     }
 
     /** An explicit recovery creates new identities, never resurrects a retired paragraph. */
     suspend fun keepBoth(draft: FlowDraft, tokens: Set<String>, clearDraftThrough: Long = draft.revision) = mutex.withLock {
-        db.withTransaction {
+        val localText = db.withTransaction {
             val page = app.pageRepository.getById(draft.pageId) ?: error("This page is no longer available.")
             val book = app.bookRepository.getById(page.notebookId)
             check(book != null && book.deletedAt == null) { "This notebook is in Trash." }
+            val authoredIds = mutableSetOf<String>()
             for (run in draft.runs.filter { it.token in tokens && it.source.isNotBlank() }) {
                 val current = app.blockRepository.getByPage(draft.pageId)
                 val plan = FlowText.reconcile(draft.pageId, current, emptyList(), run.source, SyncClock.nowDate(),
                     app.kvProxy.getSyncSettings().deviceId)
                 app.blockRepository.upsertAll(plan.blocks)
+                authoredIds += plan.resultIds
             }
             app.pageRepository.touchUpdatedAt(draft.pageId)
             if (clearDraftThrough >= (written[draft.pageId] ?: -1)) {
                 db.kvDao().delete(key(draft.pageId)); written[draft.pageId] = clearDraftThrough
             }
+            Triple(page.notebookId, app.blockRepository.getByPage(draft.pageId).filter { it.id in authoredIds && it.kind == "md" }, contentTagger.currentGeneration())
         }
         backfill.enqueue(thumbnails.invalidate(listOf(draft.pageId)).toList())
+        if (localText.second.isNotEmpty()) contentTagger.submit(localText.first, draft.pageId, com.ethran.notable.data.ContentTagSource.Text(localText.second), localText.third)
     }
 }

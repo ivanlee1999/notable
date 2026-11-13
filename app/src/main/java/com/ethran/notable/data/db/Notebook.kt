@@ -101,6 +101,9 @@ interface NotebookDao {
     @Query("SELECT * FROM notebook WHERE deletedAt IS NULL")
     fun getAllFlow(): Flow<List<Notebook>>
 
+    @Query("SELECT id, title, openPageId, pageIds, parentFolderId, defaultBackground, defaultBackgroundType, defaultPageWidth, defaultPageHeight, bookmarks, outline, linkedExternalUri, createdAt, updatedAt, deletedAt, updatedBy FROM notebook")
+    fun observeAllIncludingTrash(): Flow<List<Notebook>>
+
     /** Notebooks anywhere inside [folderId], trashed ones included — the purge subtree walk. */
     @Query("SELECT * FROM notebook WHERE parentFolderId IS :folderId")
     suspend fun getInFolderIncludingTrashed(folderId: String?): List<Notebook>
@@ -186,6 +189,8 @@ class BookRepository @Inject constructor(
         return notebookDao.getAllFlow()
     }
 
+    fun observeAllIncludingTrash(): Flow<List<Notebook>> = notebookDao.observeAllIncludingTrash()
+
     /** @return the id of the notebook's first page, so a caller can open straight onto it. */
     suspend fun create(notebook: Notebook): String {
         val page = Page(
@@ -230,9 +235,11 @@ class BookRepository @Inject constructor(
     suspend fun rename(id: String, title: String) = database.withTransaction {
         val current = notebookDao.getById(id) ?: error("Notebook is missing")
         check(current.deletedAt == null) { "Notebook is in Trash" }
-        notebookDao.update(current.copy(title = title,
-            updatedAt = SyncClock.afterDate(current.updatedAt), updatedBy = null))
+        val authored = current.copy(title = title,
+            updatedAt = SyncClock.afterDate(current.updatedAt), updatedBy = null)
+        notebookDao.update(authored)
         outbox.queue(CouchDocId.notebook(id))
+        authored
     }
 
     /**

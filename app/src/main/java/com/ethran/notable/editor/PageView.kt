@@ -725,7 +725,9 @@ class PageView(
         val replaced = existing.map { byId[it.id] ?: it }
         val added = authored.filterNot { written -> existing.any { it.id == written.id } }
         blocks = replaced + added
-        pageDataManager.saveBlocksToDb(authored)
+        val localText = authored.filter { it.kind == "md" && currentById[it.id]?.text != it.text }
+        val owner = pageDataManager.pageFromDb?.takeIf { it.id == currentPageId }?.notebookId
+        pageDataManager.saveBlocksToDb(authored, owner?.takeIf { localText.isNotEmpty() }?.let { it to localText })
         // Recomputed rather than nudged, for the reason [addImage] gives: an edit is exactly what
         // puts a box below the sheet or past its right edge, and the page has to be able to
         // scroll to where it now ends.

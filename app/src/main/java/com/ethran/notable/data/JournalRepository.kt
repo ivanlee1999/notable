@@ -5,6 +5,7 @@ import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.Kv
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -14,6 +15,31 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.ethran.notable.data.db.Notebook
+import com.ethran.notable.data.db.Folder
+
+data class TagSummary(val name: String, val noteCount: Int, val trashCount: Int)
+
+internal fun summarizeTags(entries: List<JournalEntry>, books: List<Notebook>, folders: List<Folder>): List<TagSummary> {
+    val folderMap = folders.associateBy { it.id }
+    val bookMap = books.associateBy { it.id }
+    fun trashed(book: Notebook): Boolean {
+        if (book.deletedAt != null) return true
+        var parent = book.parentFolderId
+        val seen = mutableSetOf<String>()
+        while (parent != null && seen.add(parent)) {
+            val folder = folderMap[parent] ?: break
+            if (folder.deletedAt != null) return true
+            parent = folder.parentFolderId
+        }
+        return false
+    }
+    return entries.flatMap { entry -> bookMap[entry.notebookId]?.let { book ->
+        entry.topics.distinctBy(::asciiLower).map { it to trashed(book) }
+    }.orEmpty() }.groupBy { asciiLower(it.first) }.values.map { values ->
+        TagSummary(values.first().first, values.size, values.count { it.second })
+    }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+}
 
 @Serializable
 data class JournalEntry(
@@ -36,6 +62,12 @@ class JournalRepository @Inject constructor(
         db.kvDao().getJournalEntries().map(::decodeJournalEntry)
             .sortedWith(compareBy({ it.createdAt }, { it.notebookId }))
     }
+
+    val tagCatalog: Flow<List<TagSummary>> by lazy { combine(entries, appRepository.bookRepository.observeAllIncludingTrash(),
+        appRepository.folderRepository.getAllFlow(), ::summarizeTags) }
+
+    suspend fun renameTopic(sourceName: String, destination: String): Int = organization.renameTopic(sourceName, destination)
+    suspend fun removeTopicEverywhere(sourceName: String): Int = organization.removeTopicEverywhere(sourceName)
 
     suspend fun createEntry(initialTopics: List<String> = emptyList(), parentFolderId: String? = null): Pair<String, String> = db.withTransaction {
         var parent = parentFolderId

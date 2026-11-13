@@ -29,6 +29,7 @@ class FlowTextRepositoryTest {
     private lateinit var db: AppDatabase
     private lateinit var app: AppRepository
     private lateinit var repository: FlowTextRepository
+    private val tagger = mockk<ContentTagger>(relaxed = true)
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val source = Block(id = "paragraph", pageId = "page", text = "Original", orderKey = "a",
         createdAt = Date(1), updatedAt = Date(1))
@@ -45,7 +46,7 @@ class FlowTextRepositoryTest {
             DeletedBlockRepository(db.deletedBlockDao()), mockk(), outbox, mockk(), kv, db)
         val thumbnails = mockk<ThumbnailGenerator>()
         every { thumbnails.invalidate(any()) } returns emptySet()
-        repository = FlowTextRepository(db, app, thumbnails, mockk<ThumbnailBackfillQueue>(relaxed = true))
+        repository = FlowTextRepository(db, app, thumbnails, mockk<ThumbnailBackfillQueue>(relaxed = true), tagger)
         db.notebookDao().create(Notebook(id = "book", pageIds = listOf("page"), createdAt = Date(1)))
         db.pageDao().create(Page(id = "page", notebookId = "book", createdAt = Date(1)))
         db.blockDao().upsertAll(listOf(source))
@@ -182,5 +183,16 @@ class FlowTextRepositoryTest {
         assertTrue(result.conflicts.isEmpty())
         assertEquals(listOf("intended-first", "intended-second"), FlowText.ordered(db.blockDao().getByPage("page")).map { it.id })
         assertEquals(listOf("First", "Second"), FlowText.ordered(db.blockDao().getByPage("page")).map { it.text })
+    }
+
+    @Test fun readsAndUnchangedSavesStayReadOnlyButActualLocalTextSubmitsItsExactWrittenRows() = runBlocking {
+        val loaded = repository.load("page")
+        repository.save(loaded.snapshot())
+        io.mockk.verify(exactly = 0) { tagger.submit(any(), any(), any(), any()) }
+        repository.save(draft("Typed #new"))
+        val written = db.blockDao().getByPage("page").single()
+        io.mockk.verify(exactly = 1) { tagger.submit("book", "page", match {
+            it is ContentTagSource.Text && it.blocks == listOf(written)
+        }, any()) }
     }
 }

@@ -45,6 +45,7 @@ class TodayViewTest {
     private val books = MutableStateFlow<List<Notebook>>(emptyList())
     private val folders = MutableStateFlow<List<Folder>>(emptyList())
     private var opened: Pair<String, String>? = null
+    private var trashOpened = false
 
     @Before
     @After
@@ -57,7 +58,7 @@ class TodayViewTest {
         every { journal.entries } returns entries
         every { app.bookRepository.getAllFlow() } returns books
         every { app.folderRepository.getAllFlow() } returns folders
-        content(TodayViewModel(journal, app))
+        content(TodayViewModel(journal, app, mockk(relaxed = true)))
     }
 
     private fun content(model: TodayViewModel) {
@@ -65,7 +66,7 @@ class TodayViewTest {
             CompositionLocalProvider(LocalInspectionMode provides true) {
                 InkaTheme {
                     TodayView(onOpen = { page, book -> opened = page to book },
-                        onLibrary = {}, onPages = {}, viewModel = model)
+                        onLibrary = {}, onPages = {}, onTrash = { trashOpened = true }, viewModel = model)
                 }
             }
         }
@@ -208,7 +209,7 @@ class TodayViewTest {
         }
         every { app.bookRepository.getAllFlow() } returns books
         every { app.folderRepository.getAllFlow() } returns folders
-        content(TodayViewModel(journal, app))
+        content(TodayViewModel(journal, app, mockk(relaxed = true)))
         compose.onNodeWithText("Could not load notes.").assertExists()
         compose.onNodeWithText("Write").assertIsNotEnabled()
         compose.onNodeWithText("Dismiss").assertDoesNotExist()
@@ -290,5 +291,53 @@ class TodayViewTest {
         compose.runOnIdle { folders.value = folders.value.map { it.copy(deletedAt = null) } }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Trashed entry"))
         compose.onNodeWithText("Trashed entry").assertIsDisplayed()
+    }
+
+    @Test
+    fun noteMenuConfirmsRecoverableTrashAndExposesTheRestorationRoute() {
+        entries.value = listOf(JournalEntry("trash-me", LocalDate.now().toString(), 1, listOf("Work")))
+        books.value = listOf(Notebook(id = "trash-me", title = "Trash me", pageIds = listOf("page")))
+        coEvery { app.trashRepository.trashNotebook("trash-me") } answers {
+            books.value = emptyList(); listOf("notebook:trash-me")
+        }
+        show()
+        compose.onNodeWithContentDescription("Note actions for Trash me").performClick()
+        compose.onNodeWithText("Edit tags").assertExists()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val directory = File(context.getExternalFilesDir(null), "ui-review").apply { mkdirs() }
+        compose.onNode(isPopup()).captureToImage().asAndroidBitmap().let { bitmap ->
+            File(directory, "timeline-note-menu.png").outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        }
+        compose.onNodeWithText("Move to Trash").performClick()
+        compose.onNodeWithText("Trash me can be restored from Trash.").assertExists()
+        coVerify(exactly = 0) { app.trashRepository.trashNotebook(any()) }
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Trash me").assertExists()
+        compose.onNodeWithContentDescription("Note actions for Trash me").performClick()
+        compose.onNodeWithText("Move to Trash").performClick()
+        compose.onNodeWithText("Move to Trash", substring = false).performClick()
+        compose.waitUntil(5_000) { books.value.isEmpty() }
+        compose.onNodeWithText("Trash me").assertDoesNotExist()
+        coVerify(exactly = 1) { app.trashRepository.trashNotebook("trash-me") }
+        compose.onNodeWithText("Browse").performClick()
+        compose.onNodeWithText("Trash", substring = false).performClick()
+        compose.runOnIdle { assertEquals(true, trashOpened) }
+    }
+
+    @Test
+    fun failedTrashKeepsTheNoteAndCanBeRetriedFromTheConfirmation() {
+        entries.value = listOf(JournalEntry("kept", LocalDate.now().toString(), 1))
+        books.value = listOf(Notebook(id = "kept", title = "Keep me", pageIds = listOf("page")))
+        coEvery { app.trashRepository.trashNotebook("kept") } throws java.io.IOException("disk unavailable")
+        show()
+        compose.onNodeWithContentDescription("Note actions for Keep me").performClick()
+        compose.onNodeWithText("Move to Trash").performClick()
+        compose.onNodeWithText("Move to Trash", substring = false).performClick()
+        compose.waitUntil(5_000) { runCatching {
+            compose.onAllNodesWithText("Could not move this note to Trash. Try again.").assertCountEquals(2); true
+        }.getOrDefault(false) }
+        assertEquals(1, books.value.size)
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Keep me").assertExists()
     }
 }

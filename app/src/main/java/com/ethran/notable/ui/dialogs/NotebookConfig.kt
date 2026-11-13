@@ -247,7 +247,15 @@ fun NotebookConfigDialog(
                 isRenaming = false
                 val current = book!!
                 if (current.title != name) {
-                    scope.launch { saveBook(current.copy(title = name)) }
+                    val tagger = dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, NoteRenameEntryPoint::class.java).contentTagger()
+                    val tagGeneration = tagger.currentGeneration()
+                    scope.launch {
+                        reportingFailure(snackManager, "Could not rename this notebook") {
+                        val authored = bookRepository.rename(current.id, name)
+                        couchSync.noteDocumentChanged(CouchDocId.notebook(current.id))
+                        tagger.submit(current.id, null, com.ethran.notable.data.ContentTagSource.NotebookTitle(authored), tagGeneration)
+                        }
+                    }
                 }
             },
             onDismiss = { isRenaming = false }

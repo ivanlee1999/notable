@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.ContentTagger
+import com.ethran.notable.data.ContentTagSource
 import com.ethran.notable.editor.topics.InkTopicRecognizer
 import com.ethran.notable.editor.topics.TopicInkPoint
 import com.ethran.notable.editor.topics.TopicInkStroke
@@ -53,6 +55,7 @@ interface NoteRenameEntryPoint {
     fun appRepository(): AppRepository
     fun inkRecognizer(): InkTopicRecognizer
     fun handwritingPreferences(): HandwritingPreferences
+    fun contentTagger(): ContentTagger
 }
 
 /** A title candidate is explicitly accepted; temporary handwriting never enters the page. */
@@ -87,19 +90,21 @@ fun NoteRenameDialog(notebookId: String, pageId: String? = null, onDismiss: () -
                     RenameTitleInput(name, services.inkRecognizer(), options.language, busy, error,
                         onSave = { title ->
                             busy = true; error = null
+                            val tagGeneration = services.contentTagger().currentGeneration()
                             scope.launch {
                                 try {
-                                    withContext(Dispatchers.IO) {
+                                    val authored = withContext(Dispatchers.IO) {
                                         val app = services.appRepository()
-                                        if (pageId == null) app.bookRepository.rename(notebookId, title)
+                                        if (pageId == null) ContentTagSource.NotebookTitle(app.bookRepository.rename(notebookId, title))
                                         else {
                                             val book = app.bookRepository.getById(notebookId) ?: error("Notebook is missing")
                                             check(book.deletedAt == null) { "Notebook is in Trash" }
                                             val page = app.pageRepository.getById(pageId) ?: error("Page is missing")
                                             check(page.notebookId == notebookId) { "Page moved to another notebook" }
-                                            app.pageRepository.rename(pageId, title, expectedNotebookId = notebookId)
+                                            ContentTagSource.PageTitle(app.pageRepository.rename(pageId, title, expectedNotebookId = notebookId))
                                         }
                                     }
+                                    services.contentTagger().submit(notebookId, pageId, authored, tagGeneration)
                                     onSaved(); onDismiss()
                                 } catch (cancelled: CancellationException) { throw cancelled }
                                 catch (_: Exception) { error = "Could not save the name. Your candidate is kept." }

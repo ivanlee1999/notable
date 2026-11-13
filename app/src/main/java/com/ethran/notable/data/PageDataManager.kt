@@ -1,5 +1,7 @@
 package com.ethran.notable.data
 
+import androidx.room.withTransaction
+
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
@@ -173,6 +175,8 @@ class PageDataManager @Inject constructor(
     private val viewport: PageViewportState,
     private val couchSync: CouchSyncController,
     private val transcription: com.ethran.notable.recognition.PageTranscriptionRepository,
+    private val contentTagger: ContentTagger,
+    private val database: com.ethran.notable.data.db.AppDatabase,
 ) {
     fun penContact(owner: Any, down: Boolean) = transcription.penContact(owner, down)
     val log = ShipBook.getLogger("PageDataManager")
@@ -1615,7 +1619,7 @@ class PageDataManager @Inject constructor(
     fun updateStrokesInDb(strokes: List<Stroke>) {
         val pages = strokes.map { it.pageId }.distinct()
         launchDbWrite("updateStrokes(${strokes.size})", pages) {
-            appRepository.strokeRepository.update(strokes)
+            writeLocalInk(pages) { appRepository.strokeRepository.update(strokes) }
             pages.forEach { bumpEditTimestamps(it) }
             pages.forEach(transcription::request)
         }
@@ -1632,7 +1636,7 @@ class PageDataManager @Inject constructor(
     fun saveStrokesToDb(strokes: List<Stroke>) {
         val pages = strokes.map { it.pageId }.distinct()
         launchDbWrite("saveStrokes(${strokes.size})", pages) {
-            try {
+            writeLocalInk(pages) { try {
                 appRepository.strokeRepository.create(strokes)
             } catch (_: SQLiteConstraintException) {
                 // There were some rare bugs when strokes weren't unique when inserting from history
@@ -1644,7 +1648,7 @@ class PageDataManager @Inject constructor(
                     )
                 )
                 appRepository.strokeRepository.update(strokes)
-            }
+            } }
             pages.forEach { bumpEditTimestamps(it) }
             pages.forEach(transcription::request)
         }
@@ -1671,8 +1675,10 @@ class PageDataManager @Inject constructor(
      */
     fun removeStrokesFromDb(strokes: List<String>, pageId: String) {
         launchDbWrite("removeStrokes(${strokes.size})", listOf(pageId)) {
-            appRepository.strokeRepository.deleteAll(strokes)
-            appRepository.deletedStrokeRepository.record(pageId, strokes)
+            writeLocalInk(listOf(pageId)) {
+                appRepository.strokeRepository.deleteAll(strokes)
+                appRepository.deletedStrokeRepository.record(pageId, strokes)
+            }
             bumpEditTimestamps(pageId)
             transcription.request(pageId)
         }
@@ -1695,12 +1701,33 @@ class PageDataManager @Inject constructor(
      * queues it for the next push, exactly as an image edit does. Without it a typed paragraph
      * would sit in the database looking saved and never leave the device.
      */
-    fun saveBlocksToDb(blocks: List<Block>) {
+    fun saveBlocksToDb(blocks: List<Block>, localText: Pair<String, List<Block>>? = null) {
         if (blocks.isEmpty()) return
+        val tagGeneration = contentTagger.currentGeneration()
         val pages = blocks.map { it.pageId }.distinct()
         launchDbWrite("saveBlocks(${blocks.size})", pages) {
             appRepository.blockRepository.upsertAll(blocks)
             pages.forEach { bumpEditTimestamps(it) }
+            localText?.let { (book, authored) -> authored.groupBy { it.pageId }.forEach { (page, rows) ->
+                contentTagger.submit(book, page, ContentTagSource.Text(rows), tagGeneration)
+            } }
+        }
+    }
+
+    private suspend fun writeLocalInk(pages: List<String>, write: suspend () -> Unit) {
+        val capture = transcription.capturesLocalTags()
+        if (!capture) { write(); return }
+        val language = if (capture) transcription.preferences.options.value.language else null
+        val snapshots = database.withTransaction {
+            write()
+            if (language == null) emptyList() else pages.mapNotNull { id ->
+                database.pageDao().getById(id)?.let { page ->
+                    Triple(page, database.strokeDao().getByPage(id), contentTagger.currentGeneration())
+                }
+            }
+        }
+        if (language != null) snapshots.forEach { (page, strokes, generation) ->
+            transcription.markLocalInkSaved(page.id, page.notebookId, strokes, language, generation)
         }
     }
 
