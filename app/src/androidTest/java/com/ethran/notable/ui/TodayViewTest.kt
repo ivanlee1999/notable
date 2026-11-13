@@ -114,8 +114,10 @@ class TodayViewTest {
         compose.onAllNodesWithText("#Product").assertCountEquals(1)
         compose.onNodeWithText("#product").assertDoesNotExist()
         compose.onNodeWithText("#Product").performClick()
-        compose.onNodeWithText("first").assertExists()
-        compose.onNodeWithText("second").assertExists()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("first"))
+        compose.onNodeWithText("first").assertIsDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("second"))
+        compose.onNodeWithText("second").assertIsDisplayed()
     }
 
     @Test
@@ -157,11 +159,15 @@ class TodayViewTest {
             pageIds = listOf("${it.notebookId}-page")) }
         coEvery { journal.createEntry(any()) } returns ("new" to "new-page")
         show()
-        compose.onNodeWithText("first").assertExists()
-        compose.onNodeWithText("second").assertExists()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("first"))
+        compose.onNodeWithText("first").assertIsDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("second"))
+        compose.onNodeWithText("second").assertIsDisplayed()
         compose.onNodeWithText("old").assertDoesNotExist()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("#Product"))
         compose.onNodeWithText("#Product").performClick()
-        compose.onNodeWithText("old").assertExists()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("old"))
+        compose.onNodeWithText("old").assertIsDisplayed()
         compose.onNodeWithText("second").assertDoesNotExist()
         compose.onNodeWithText("New note").performClick()
         compose.waitUntil { opened != null }
@@ -220,6 +226,7 @@ class TodayViewTest {
         compose.onNodeWithText("Trashed entry").assertDoesNotExist()
         compose.onNodeWithText("Orphan entry").assertExists()
         compose.runOnIdle { folders.value = folders.value.map { it.copy(deletedAt = null) } }
-        compose.onNodeWithText("Trashed entry").assertExists()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Trashed entry"))
+        compose.onNodeWithText("Trashed entry").assertIsDisplayed()
     }
 }

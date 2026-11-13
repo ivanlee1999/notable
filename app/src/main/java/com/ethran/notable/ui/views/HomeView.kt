@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -43,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -305,7 +304,7 @@ fun LibraryContent(
         val columns = browserLayout.columnsFor(shelfWidth)
         val previewHeight = browserLayout.previewHeight(maxHeight - 160.dp)
         var expandedBook by rememberSaveable { mutableStateOf<String?>(null) }
-        val previewState = rememberSaveableStateHolder()
+        val previewPages = remember { mutableStateMapOf<String, String>() }
         var conflictedBook by remember { mutableStateOf<Notebook?>(null) }
         conflictedBook?.let { book ->
             ConflictResolutionDialog(bookId = book.id, title = book.title,
@@ -492,7 +491,8 @@ fun LibraryContent(
                                 previewHeight = previewHeight,
                                 expandedBook = expandedBook,
                                 onExpand = { expandedBook = if (expandedBook == it) null else it },
-                                previewState = previewState,
+                                previewPages = previewPages,
+                                onPageChange = { book, page -> previewPages[book] = page },
                                 appRepository = appRepository,
                                 exportEngine = exportEngine,
                                 syncScheduler = syncScheduler,
@@ -800,7 +800,8 @@ private fun NotebookRow(
     previewHeight: Dp,
     expandedBook: String?,
     onExpand: (String) -> Unit,
-    previewState: SaveableStateHolder,
+    previewPages: Map<String, String>,
+    onPageChange: (String, String) -> Unit,
     appRepository: AppRepository,
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
@@ -817,12 +818,13 @@ private fun NotebookRow(
     ) {
         books.forEach { book ->
             Box(Modifier.weight(1f)) {
-                previewState.SaveableStateProvider(book.id) {
                     NotebookEntry(
                     book = book,
                     previewHeight = previewHeight,
                     expanded = book.id == expandedBook,
                     onExpand = { onExpand(book.id) },
+                    selectedPageId = previewPages[book.id],
+                    onPageChange = { onPageChange(book.id, it) },
                     appRepository = appRepository,
                     exportEngine = exportEngine,
                     syncScheduler = syncScheduler,
@@ -833,7 +835,6 @@ private fun NotebookRow(
                     onNavigateToEditor = onNavigateToEditor,
                     onPreviewNeeded = onPreviewNeeded,
                     )
-                }
             }
         }
         repeat(columns - books.size) { Spacer(Modifier.weight(1f)) }
@@ -847,6 +848,8 @@ private fun NotebookEntry(
     previewHeight: Dp,
     expanded: Boolean,
     onExpand: () -> Unit,
+    selectedPageId: String?,
+    onPageChange: (String) -> Unit,
     appRepository: AppRepository,
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
@@ -875,7 +878,8 @@ private fun NotebookEntry(
     }
     NotebookContentPreview(notebook = book, previewHeight = previewHeight, expanded = expanded,
         onExpand = onExpand, onEdit = open, version = editedAt.time,
-        subtitle = location, onPreviewNeeded = onPreviewNeeded, syncBadge = syncBadge, actions = options)
+        subtitle = location, onPreviewNeeded = onPreviewNeeded, syncBadge = syncBadge,
+        selectedPageId = selectedPageId, onPageChange = onPageChange, actions = options)
 
     if (isSettingsOpen) {
         NotebookConfigDialog(

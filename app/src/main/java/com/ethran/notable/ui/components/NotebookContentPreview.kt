@@ -110,15 +110,18 @@ fun NotebookContentPreview(
     subtitle: String? = null,
     onPreviewNeeded: ((String) -> Unit)? = null,
     syncBadge: SyncBadge? = null,
+    selectedPageId: String? = null,
+    onPageChange: ((String) -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
-    var selectedPage by rememberSaveable(notebook.id) {
+    var localPage by rememberSaveable(notebook.id) {
         mutableStateOf(notebook.openPageId?.takeIf { it in notebook.pageIds } ?: notebook.pageIds.firstOrNull())
     }
     var pagesMenu by remember { mutableStateOf(false) }
-    val page = selectedPage?.takeIf { it in notebook.pageIds }
+    val page = (selectedPageId ?: localPage)?.takeIf { it in notebook.pageIds }
         ?: notebook.openPageId?.takeIf { it in notebook.pageIds } ?: notebook.pageIds.firstOrNull()
     val index = notebook.pageIds.indexOf(page).coerceAtLeast(0)
+    fun selectPage(id: String) { if (onPageChange != null) onPageChange(id) else localPage = id }
     Column(modifier.fillMaxWidth().border(1.dp, Kaleido.Edge).background(Kaleido.Paper)) {
         Row(Modifier.fillMaxWidth().padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
@@ -146,11 +149,11 @@ fun NotebookContentPreview(
                         Modifier.fillMaxWidth().semantics { contentDescription = "Preview pages of ${notebook.title}" })
                     if (pagesMenu) ActionMenu(onDismiss = { pagesMenu = false }) {
                         MenuAction("Previous page", {
-                            selectedPage = notebook.pageIds[(index - 1 + notebook.pageIds.size) % notebook.pageIds.size]
+                            selectPage(notebook.pageIds[(index - 1 + notebook.pageIds.size) % notebook.pageIds.size])
                             pagesMenu = false
                         })
                         MenuAction("Next page", {
-                            selectedPage = notebook.pageIds[(index + 1) % notebook.pageIds.size]
+                            selectPage(notebook.pageIds[(index + 1) % notebook.pageIds.size])
                             pagesMenu = false
                         })
                     }

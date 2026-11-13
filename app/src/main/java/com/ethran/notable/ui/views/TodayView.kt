@@ -11,7 +11,6 @@ import androidx.compose.material.Checkbox
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -133,7 +132,7 @@ fun TodayView(
     var selectedTopic by rememberSaveable { mutableStateOf<String?>(null) }
     var editingTopics by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedNote by rememberSaveable { mutableStateOf<String?>(null) }
-    val previewState = rememberSaveableStateHolder()
+    val previewPages = remember { mutableStateMapOf<String, String>() }
     val scope = rememberCoroutineScope()
     val owner = LocalLifecycleOwner.current
     fun refreshDate() {
@@ -216,12 +215,13 @@ fun TodayView(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         row.forEach { note ->
                             Box(Modifier.weight(1f)) {
-                                previewState.SaveableStateProvider(note.entry.notebookId) {
                                     Column {
                                         NotebookContentPreview(notebook = note.notebook, previewHeight = previewHeight,
                                             expanded = expandedNote == note.entry.notebookId,
                                             onExpand = { expandedNote = if (expandedNote == note.entry.notebookId) null else note.entry.notebookId },
                                             onEdit = { page -> open(note, page) },
+                                            selectedPageId = previewPages[note.entry.notebookId],
+                                            onPageChange = { previewPages[note.entry.notebookId] = it },
                                             subtitle = if (topicsView) note.entry.date else null,
                                             actions = { SquareButton(48.dp, { editingTopics = note.entry.notebookId }) {
                                                 Text("#", color = Kaleido.Ink, modifier = Modifier.semantics {
@@ -235,7 +235,6 @@ fun TodayView(
                                             TextAction("+ Topic", { editingTopics = note.entry.notebookId })
                                         }
                                     }
-                                }
                             }
                         }
                         repeat(rowColumns - row.size) { Spacer(Modifier.weight(1f)) }
