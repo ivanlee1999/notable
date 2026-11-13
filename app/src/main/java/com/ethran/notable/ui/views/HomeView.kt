@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -35,7 +37,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
@@ -83,7 +84,11 @@ import com.ethran.notable.ui.components.Kicker
 import com.ethran.notable.ui.components.LibraryFileBar
 import com.ethran.notable.ui.components.ListRow
 import com.ethran.notable.ui.components.NotebookCoverCard
-import com.ethran.notable.ui.components.NotebookListRow
+import com.ethran.notable.ui.components.NotebookContentPreview
+import com.ethran.notable.ui.components.BrowserLayout
+import com.ethran.notable.ui.components.BrowserLayoutPicker
+import com.ethran.notable.ui.components.rememberBrowserLayout
+import com.ethran.notable.ui.components.previewRows
 import com.ethran.notable.ui.components.SectionHeader
 import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
@@ -296,8 +301,11 @@ fun LibraryContent(
         val shelfWidth = if (showSidebar) maxWidth - FILE_BAR_WIDTH - Kaleido.SectionRule else maxWidth
         val metrics = kaleidoMetrics(shelfWidth).copy(
             coverColumns = ((shelfWidth - 40.dp) / 200.dp).toInt().coerceAtLeast(1))
-        var gridChoice by rememberSaveable { mutableStateOf<Boolean?>(null) }
-        val showGrid = gridChoice ?: (shelfWidth >= 500.dp)
+        val (browserLayout, chooseLayout) = rememberBrowserLayout(shelfWidth < 600.dp)
+        val columns = browserLayout.columnsFor(shelfWidth)
+        val previewHeight = browserLayout.previewHeight(maxHeight - 160.dp)
+        var expandedBook by rememberSaveable { mutableStateOf<String?>(null) }
+        val previewState = rememberSaveableStateHolder()
         var conflictedBook by remember { mutableStateOf<Notebook?>(null) }
         conflictedBook?.let { book ->
             ConflictResolutionDialog(bookId = book.id, title = book.title,
@@ -362,8 +370,8 @@ fun LibraryContent(
                     onSortChanged = onSortChanged,
                     onCreateNewFolder = onCreateNewFolder,
                     onNavigateToTrash = onNavigateToTrash,
-                    gridView = showGrid,
-                    onGridChanged = { gridChoice = it },
+                    gridView = browserLayout != BrowserLayout.FEED,
+                    onGridChanged = { chooseLayout(if (it) BrowserLayout.LARGE else BrowserLayout.FEED) },
                     onToggleSidebar = if (canShowSidebar) ({ sidebarRequested = !sidebarRequested }) else null,
                     sidebarVisible = showSidebar,
                 )
@@ -457,12 +465,9 @@ fun LibraryContent(
 
                     item(key = "books-header") {
                         Spacer(Modifier.height(22.dp))
-                        SectionHeader(
-                            stringResource(
-                                if (uiState.isSearching) R.string.home_notebooks_found
-                                else R.string.home_notebooks
-                            )
-                        )
+                        SectionHeader(stringResource(if (uiState.isSearching)
+                            R.string.home_notebooks_found else R.string.home_notebooks),
+                            trailing = { BrowserLayoutPicker(browserLayout, chooseLayout, shelfWidth < 600.dp) })
                         Spacer(Modifier.height(14.dp))
                     }
 
@@ -479,18 +484,15 @@ fun LibraryContent(
                         }
                     }
 
-                    if (showGrid) {
-                        // Chunked into fixed-width rows rather than a nested lazy grid: the page is
-                        // one scroll region, and the covers per row is a design constant, not a
-                        // measured fit. The trailing null is the import tile, so it takes the next
-                        // free cell instead of needing a row of its own.
-                        // No trailing null any more: the import tile used to take the next free
-                        // cell, and a shelf's last row is not where a once-a-year action belongs.
-                        val rows = drawable.chunked(metrics.coverColumns)
-                        itemsIndexed(rows) { index, row ->
+                    val rows = previewRows(drawable, columns, expandedBook) { it.id }
+                    items(rows, key = { row -> row.joinToString(":") { it.id } }) { row ->
                             NotebookRow(
                                 books = row,
-                                columns = metrics.coverColumns,
+                                columns = if (row.any { it.id == expandedBook }) 1 else columns,
+                                previewHeight = previewHeight,
+                                expandedBook = expandedBook,
+                                onExpand = { expandedBook = if (expandedBook == it) null else it },
+                                previewState = previewState,
                                 appRepository = appRepository,
                                 exportEngine = exportEngine,
                                 syncScheduler = syncScheduler,
@@ -501,24 +503,7 @@ fun LibraryContent(
                                 onNavigateToEditor = openNotebook,
                                 onPreviewNeeded = onPreviewNeeded,
                             )
-                            if (index != rows.lastIndex) Spacer(Modifier.height(18.dp))
-                        }
-                    } else {
-                        items(drawable, key = { "book-${it.id}" }) { book ->
-                            NotebookEntry(
-                                book = book,
-                                compactHit = metrics.hit,
-                                appRepository = appRepository,
-                                exportEngine = exportEngine,
-                                syncScheduler = syncScheduler,
-                                syncBadge = uiState.syncBadges[book.id],
-                                editedAt = maxOf(book.updatedAt, uiState.lastEdited[book.id] ?: book.updatedAt),
-                                location = locationFor(book.parentFolderId),
-                                onNavigateToPages = openPages,
-                                onNavigateToEditor = openNotebook,
-                                onPreviewNeeded = onPreviewNeeded,
-                            )
-                        }
+                            Spacer(Modifier.height(14.dp))
                     }
                 }
 
@@ -807,14 +792,15 @@ private fun FolderRow(
     }
 }
 
-/**
- * One row of the cover grid. A null entry is the import tile; short rows keep their empty
- * cells so covers stay column-aligned down the page.
- */
+/** A row in the single scrolling browser. Expanded notes receive a full-width row. */
 @Composable
 private fun NotebookRow(
     books: List<Notebook>,
     columns: Int,
+    previewHeight: Dp,
+    expandedBook: String?,
+    onExpand: (String) -> Unit,
+    previewState: SaveableStateHolder,
     appRepository: AppRepository,
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
@@ -831,9 +817,12 @@ private fun NotebookRow(
     ) {
         books.forEach { book ->
             Box(Modifier.weight(1f)) {
-                NotebookEntry(
+                previewState.SaveableStateProvider(book.id) {
+                    NotebookEntry(
                     book = book,
-                    compactHit = null,
+                    previewHeight = previewHeight,
+                    expanded = book.id == expandedBook,
+                    onExpand = { onExpand(book.id) },
                     appRepository = appRepository,
                     exportEngine = exportEngine,
                     syncScheduler = syncScheduler,
@@ -843,21 +832,21 @@ private fun NotebookRow(
                     onNavigateToPages = onNavigateToPages,
                     onNavigateToEditor = onNavigateToEditor,
                     onPreviewNeeded = onPreviewNeeded,
-                )
+                    )
+                }
             }
         }
         repeat(columns - books.size) { Spacer(Modifier.weight(1f)) }
     }
 }
 
-/**
- * A notebook plus the dialogs it can open. [compactHit] null selects the cover variant; a
- * value selects the one-handed row at that hit target.
- */
+/** Content plus the existing notebook actions and details dialog. */
 @Composable
 private fun NotebookEntry(
     book: Notebook,
-    compactHit: Dp?,
+    previewHeight: Dp,
+    expanded: Boolean,
+    onExpand: () -> Unit,
     appRepository: AppRepository,
     exportEngine: ExportEngine,
     syncScheduler: SyncScheduler,
@@ -870,8 +859,7 @@ private fun NotebookEntry(
 ) {
     var isMoreOpen by remember(book.id) { mutableStateOf(false) }
     var isSettingsOpen by remember(book.id) { mutableStateOf(false) }
-    val open = {
-        val page = book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
+    val open: (String?) -> Unit = { page ->
         if (page == null) onNavigateToPages(book.id) else onNavigateToEditor(page, book.id)
     }
     val options: @Composable () -> Unit = {
@@ -885,22 +873,9 @@ private fun NotebookEntry(
             }
         }
     }
-    if (compactHit == null) {
-        Column {
-            NotebookCoverCard(notebook = book, onOpen = open,
-                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
-                syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded)
-            Box(Modifier.align(Alignment.End)) { options() }
-        }
-    } else {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            NotebookListRow(notebook = book, hit = compactHit, onOpen = open,
-                onOpenSettings = { isMoreOpen = true }, editedAt = editedAt, location = location,
-                syncBadge = syncBadge, onPreviewNeeded = onPreviewNeeded,
-                modifier = Modifier.weight(1f))
-            options()
-        }
-    }
+    NotebookContentPreview(notebook = book, previewHeight = previewHeight, expanded = expanded,
+        onExpand = onExpand, onEdit = open, version = editedAt.time,
+        subtitle = location, onPreviewNeeded = onPreviewNeeded, syncBadge = syncBadge, actions = options)
 
     if (isSettingsOpen) {
         NotebookConfigDialog(

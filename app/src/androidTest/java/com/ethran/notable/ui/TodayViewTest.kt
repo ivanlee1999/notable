@@ -58,6 +58,49 @@ class TodayViewTest {
     }
 
     @Test
+    fun selectedPreviewPageSurvivesLazyRowExpansionAndDensityChanges() {
+        val today = LocalDate.now().toString()
+        entries.value = listOf(JournalEntry("first", today, 1), JournalEntry("second", today, 2))
+        books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
+            pageIds = listOf("${it.notebookId}-p1", "${it.notebookId}-p2")) }
+        show()
+        fun layout(label: String) {
+            compose.onNodeWithContentDescription("Preview size").performClick()
+            compose.onNode(hasText(label, substring = true) and hasAnyAncestor(isPopup())).performClick()
+        }
+        layout("2 × 2 · Large")
+        compose.onNodeWithContentDescription("Preview pages of first").performClick()
+        compose.onNodeWithText("Next page").performClick()
+        compose.onNodeWithText("2/2 ▾").assertExists()
+        compose.onNodeWithContentDescription("Expand first in place").performClick()
+        compose.onNodeWithContentDescription("Collapse first").assertExists()
+        layout("Reading feed")
+        layout("2 × 3 · Medium")
+        compose.onNodeWithContentDescription("Collapse first").performScrollTo().performClick()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("first"))
+        compose.onNodeWithText("2/2 ▾").assertExists()
+        assertEquals(null, opened)
+        compose.onNodeWithContentDescription("Edit first").performScrollTo().performClick()
+        assertEquals("first-p2" to "first", opened)
+    }
+
+    @Test
+    fun browsingAndExpandingDoesNotOpenTheEditorUntilEditIsTapped() {
+        val today = LocalDate.now().toString()
+        entries.value = (0..11).map { JournalEntry("entry-$it", today, it.toLong()) }
+        books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
+            pageIds = listOf("${it.notebookId}-page")) }
+        show()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("entry-0"))
+        assertEquals(null, opened)
+        compose.onNodeWithContentDescription("Expand entry-0 in place").performClick()
+        assertEquals(null, opened)
+        compose.onNodeWithContentDescription("Edit entry-0").performScrollTo().performClick()
+        assertEquals("entry-0-page" to "entry-0", opened)
+        coVerify(exactly = 0) { journal.createEntry(any()) }
+    }
+
+    @Test
     fun syncedTopicSpellingsShareOneTopicAcrossNotes() {
         val today = LocalDate.now().toString()
         entries.value = listOf(

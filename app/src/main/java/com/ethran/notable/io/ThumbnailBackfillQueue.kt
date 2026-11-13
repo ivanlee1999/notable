@@ -34,6 +34,8 @@ class ThumbnailBackfillQueue @Inject constructor(
 
     private val mutex = Mutex()
     private val queuedPageIds = linkedSetOf<String>()
+    private var processingPageId: String? = null
+    private val requestedAgain = mutableMapOf<String, PreviewSaveMode>()
 
     private var isCycleActive = false
     private var cycleTotal = 0
@@ -69,6 +71,10 @@ class ThumbnailBackfillQueue @Inject constructor(
                     if (pageId.isBlank()) continue
                     if (queuedPageIds.add(pageId)) {
                         added += pageId
+                    } else if (processingPageId == pageId) {
+                        // The renderer may already hold the previous page snapshot. Coalesce
+                        // changes during that render into one more freshness check afterwards.
+                        requestedAgain[pageId] = mode
                     }
                 }
 
@@ -99,6 +105,7 @@ class ThumbnailBackfillQueue @Inject constructor(
 
     private suspend fun processOne(pageId: String, mode: PreviewSaveMode) {
         var generated = false
+        mutex.withLock { processingPageId = pageId }
         try {
             generated = thumbnailGenerator.ensureThumbnail(pageId, mode) ==
                 ThumbnailEnsureResult.GENERATED
@@ -107,7 +114,10 @@ class ThumbnailBackfillQueue @Inject constructor(
             log.e("Thumbnail generation failed for pageId=$pageId", t)
         } finally {
             mutex.withLock {
-                queuedPageIds.remove(pageId)
+                processingPageId = null
+                val again = requestedAgain.remove(pageId)
+                if (again != null && queue.trySend(pageId to again).isSuccess) cycleTotal++
+                else queuedPageIds.remove(pageId)
                 cycleDone += 1
                 if (generated) cycleGenerated += 1
 

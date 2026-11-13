@@ -6,7 +6,7 @@ import com.ethran.notable.data.db.PageRepository
 import com.ethran.notable.di.IoDispatcher
 import com.ethran.notable.editor.utils.PreviewSaveMode
 import com.ethran.notable.editor.utils.THUMBNAIL_WIDTH
-import com.ethran.notable.editor.utils.getThumbnailFile
+import com.ethran.notable.editor.utils.getContentPreviewFile
 import com.ethran.notable.editor.utils.savePageThumbnail
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -33,6 +33,8 @@ enum class ThumbnailEnsureResult {
 @InstallIn(SingletonComponent::class)
 interface ThumbnailGeneratorEntryPoint {
     fun thumbnailGenerator(): ThumbnailGenerator
+    fun thumbnailBackfillQueue(): ThumbnailBackfillQueue
+    fun pageRepository(): PageRepository
 }
 
 /**
@@ -118,7 +120,10 @@ class ThumbnailGenerator @Inject constructor(
             )
         )
         bitmap.useAndRecycle { rendered ->
-            savePageThumbnail(context, rendered, page.id, mode)
+            check(savePageThumbnail(context, rendered, page.id, mode,
+                targetFile = getContentPreviewFile(context, page.id), sourceClock = page.updatedAt.time)) {
+                "Could not save content preview"
+            }
         }
         log.d("Thumbnail generated for pageId=${page.id}")
         return ThumbnailEnsureResult.GENERATED
@@ -133,7 +138,7 @@ class ThumbnailGenerator @Inject constructor(
      * asks on every mount, it would re-render every visible cover on every visit to the Library.
      */
     private suspend fun isThumbnailStale(page: Page): Boolean = withContext(ioDispatcher) {
-        val thumbFile = getThumbnailFile(context, page.id)
+        val thumbFile = getContentPreviewFile(context, page.id)
         if (!thumbFile.exists()) return@withContext true
 
         return@withContext thumbFile.lastModified() < page.updatedAt.time

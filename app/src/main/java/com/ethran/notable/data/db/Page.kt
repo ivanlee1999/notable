@@ -141,6 +141,9 @@ interface PageDao {
     @Query("SELECT * FROM page WHERE id = (:pageId)")
     suspend fun getById(pageId: String): Page?
 
+    @Query("SELECT updatedAt FROM page WHERE id = :pageId")
+    fun observeUpdatedAt(pageId: String): Flow<Long?>
+
     @Transaction
     @Query("SELECT * FROM page WHERE id =:pageId")
     suspend fun getPageWithDataById(pageId: String): PageWithData?
@@ -299,6 +302,8 @@ class PageRepository @Inject constructor(
 
     /** The newest page clock per notebook — the library's "Last edited" order reads this. */
     fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>> = db.lastEditedByNotebookFlow()
+
+    fun observeUpdatedAt(pageId: String): Flow<Long?> = db.observeUpdatedAt(pageId)
 
     /** One notebook's newest page clock, or null with no pages here — §6.4's liveness signal. */
     suspend fun newestUpdatedAtInNotebook(notebookId: String): Date? =

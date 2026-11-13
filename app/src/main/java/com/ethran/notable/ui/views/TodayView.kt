@@ -11,6 +11,7 @@ import androidx.compose.material.Checkbox
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -33,7 +34,11 @@ import com.ethran.notable.data.asciiLower
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.navigation.NavigationDestination
-import com.ethran.notable.ui.components.NotebookListRow
+import com.ethran.notable.ui.components.NotebookContentPreview
+import com.ethran.notable.ui.components.BrowserLayoutPicker
+import com.ethran.notable.ui.components.rememberBrowserLayout
+import com.ethran.notable.ui.components.previewRows
+import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.components.RowRule
 import com.ethran.notable.ui.components.TextAction
 import com.ethran.notable.ui.dialogs.ActionButton
@@ -127,6 +132,8 @@ fun TodayView(
     var topicsView by rememberSaveable { mutableStateOf(false) }
     var selectedTopic by rememberSaveable { mutableStateOf<String?>(null) }
     var editingTopics by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedNote by rememberSaveable { mutableStateOf<String?>(null) }
+    val previewState = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val owner = LocalLifecycleOwner.current
     fun refreshDate() {
@@ -148,14 +155,20 @@ fun TodayView(
         topicsView -> emptyList()
         else -> notes.filter { it.entry.date == selectedDate }
     }
-    fun open(note: JournalNote) {
+    fun open(note: JournalNote, selectedPage: String?) {
         val book = note.notebook
-        val page = book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
+        val page = selectedPage?.takeIf { it in book.pageIds }
+            ?: book.openPageId?.takeIf { it in book.pageIds } ?: book.pageIds.firstOrNull()
         if (page == null) onPages(book.id)
         else onOpen(page, book.id)
     }
 
-    Column(Modifier.fillMaxSize().background(Kaleido.Paper)) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxWidth < 600.dp
+        val (layout, chooseLayout) = rememberBrowserLayout(compact)
+        val columns = layout.columnsFor(maxWidth)
+        val previewHeight = layout.previewHeight(maxHeight - 200.dp)
+        Column(Modifier.fillMaxSize().background(Kaleido.Paper)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
@@ -181,6 +194,7 @@ fun TodayView(
                     Modifier.semantics { contentDescription = "Next day" })
             }
             if (topicsView && selectedTopic != null) TextAction("All topics", { selectedTopic = null })
+            if (!topicsView || selectedTopic != null) BrowserLayoutPicker(layout, chooseLayout, compact)
             error?.let { message -> Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(message, Modifier.weight(1f), color = Kaleido.Ink)
                 if (!dataReady) TextAction("Retry", viewModel::retry)
@@ -196,16 +210,35 @@ fun TodayView(
                 }
                 if (topics.isEmpty()) item { Text("No topics yet", color = Kaleido.Muted) }
             } else {
-                items(shown, key = { it.entry.notebookId }) { note ->
-                    Column {
-                        NotebookListRow(note.notebook, 48.dp, { open(note) }, { editingTopics = note.entry.notebookId },
-                            location = if (topicsView) note.entry.date else null)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            note.entry.topics.forEach { topic ->
-                                TextAction("#$topic", { topicsView = true; selectedTopic = topic })
+                val rows = previewRows(shown, columns, expandedNote) { it.entry.notebookId }
+                items(rows, key = { row -> row.joinToString(":") { it.entry.notebookId } }) { row ->
+                    val rowColumns = if (row.any { it.entry.notebookId == expandedNote }) 1 else columns
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        row.forEach { note ->
+                            Box(Modifier.weight(1f)) {
+                                previewState.SaveableStateProvider(note.entry.notebookId) {
+                                    Column {
+                                        NotebookContentPreview(notebook = note.notebook, previewHeight = previewHeight,
+                                            expanded = expandedNote == note.entry.notebookId,
+                                            onExpand = { expandedNote = if (expandedNote == note.entry.notebookId) null else note.entry.notebookId },
+                                            onEdit = { page -> open(note, page) },
+                                            subtitle = if (topicsView) note.entry.date else null,
+                                            actions = { SquareButton(48.dp, { editingTopics = note.entry.notebookId }) {
+                                                Text("#", color = Kaleido.Ink, modifier = Modifier.semantics {
+                                                    contentDescription = "Edit topics of ${note.notebook.title}"
+                                                })
+                                            } })
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            note.entry.topics.forEach { topic ->
+                                                TextAction("#$topic", { topicsView = true; selectedTopic = topic })
+                                            }
+                                            TextAction("+ Topic", { editingTopics = note.entry.notebookId })
+                                        }
+                                    }
+                                }
                             }
-                            TextAction("+ Topic", { editingTopics = note.entry.notebookId })
                         }
+                        repeat(rowColumns - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
                 if (shown.isEmpty()) item { Text("No notes", color = Kaleido.Muted) }
@@ -217,6 +250,7 @@ fun TodayView(
                 Modifier.weight(1f), filled = !topicsView)
             TextAction("Topics", { topicsView = true; selectedTopic = null }, Modifier.weight(1f), filled = topicsView)
             TextAction("Library", onLibrary, Modifier.weight(1f))
+        }
         }
     }
     notes.firstOrNull { it.entry.notebookId == editingTopics }?.let { note ->

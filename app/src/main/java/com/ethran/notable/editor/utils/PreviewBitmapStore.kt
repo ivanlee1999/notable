@@ -87,6 +87,10 @@ private fun optimizeBitmapForStorage(
 fun getThumbnailFile(context: Context, pageID: String): File =
     File(context.filesDir, "pages/previews/thumbs/$pageID.webp")
 
+/** Whole-page browser previews stay separate from the editor's last-viewport thumbnails. */
+fun getContentPreviewFile(context: Context, pageID: String): File =
+    File(context.filesDir, "pages/previews/content/$pageID.webp")
+
 private fun isEqApprox(a: Float, b: Float): Boolean = abs(a - b) <= EQUALITY_THRESHOLD
 
 private fun checkZoomAndScroll(scroll: Offset?, zoom: Float?): Boolean {
@@ -344,16 +348,18 @@ private fun decodeBitmapFromFile(file: File): Bitmap? {
  * Persist a thumbnail for a page.
  */
 fun savePageThumbnail(
-    context: Context, bitmap: Bitmap, pageID: String, mode: PreviewSaveMode = PreviewSaveMode.REGULAR
-) {
+    context: Context, bitmap: Bitmap, pageID: String, mode: PreviewSaveMode = PreviewSaveMode.REGULAR,
+    targetFile: File = getThumbnailFile(context, pageID), sourceClock: Long? = null,
+): Boolean {
     ensureNotMainThread("savePageThumbnail")
-    val finalFile = getThumbnailFile(context, pageID)
+    val finalFile = targetFile
     finalFile.parentFile?.mkdirs()
     val tempFile = File(finalFile.parentFile, "${finalFile.name}.tmp")
 
     val ratio = bitmap.height.toFloat() / bitmap.width.toFloat()
     val scaledBitmap = bitmap.scale(THUMBNAIL_WIDTH, (THUMBNAIL_WIDTH * ratio).toInt(), false)
     val optimized = optimizeBitmapForStorage(scaledBitmap, mode, isThumbnail = true)
+    var saved = false
 
     try {
         tempFile.outputStream().buffered().use { os ->
@@ -361,12 +367,15 @@ fun savePageThumbnail(
             if (!success) {
                 log.e("savePageThumbnail: Failed to compress bitmap")
                 tempFile.delete()
-                return
+                return false
             }
         }
         if (tempFile.exists() && tempFile.length() > 0) {
-            tempFile.renameTo(finalFile)
-            log.d("savePageThumbnail: thumbnail saved for $pageID")
+            // Stamp the snapshot clock before the atomic rename: neither an overlapping edit
+            // nor a failed save may turn an older image into a seemingly current preview.
+            if (sourceClock != null) check(tempFile.setLastModified(sourceClock))
+            saved = tempFile.renameTo(finalFile)
+            if (saved) log.d("savePageThumbnail: thumbnail saved for $pageID")
         } else {
             log.e("savePageThumbnail: temp file missing or empty, aborting rename")
             tempFile.delete()
@@ -378,7 +387,9 @@ fun savePageThumbnail(
     } finally {
         if (optimized.bitmap != scaledBitmap) optimized.bitmap.recycle()
         if (scaledBitmap != bitmap) scaledBitmap.recycle()
+        tempFile.delete()
     }
+    return saved
 }
 
 
