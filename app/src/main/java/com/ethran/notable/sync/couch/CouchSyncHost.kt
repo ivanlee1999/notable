@@ -42,6 +42,7 @@ class CouchSyncHost @Inject constructor(
     private val kvProxy: KvProxy,
     private val kvDao: KvDao,
     private val backgroundFileWatcher: BackgroundFileWatcher,
+    private val organization: JournalOrganizationSync,
     @param:ApplicationScope private val scope: CoroutineScope,
 ) : CouchSyncBackend {
 
@@ -149,11 +150,19 @@ class CouchSyncHost @Inject constructor(
 
     override suspend fun isEnabled(): Boolean = stack() != null
 
-    override suspend fun flush(): CouchSyncEngine.FlushReport =
-        stack()?.engine?.flush() ?: CouchSyncEngine.FlushReport()
+    override suspend fun flush(): CouchSyncEngine.FlushReport {
+        val current = stack() ?: return CouchSyncEngine.FlushReport()
+        val report = current.engine.flush()
+        organization.sync(upload = true)
+        return report
+    }
 
-    override suspend fun pull(longpoll: Boolean): CouchSyncEngine.PullReport =
-        stack()?.engine?.pull(longpoll) ?: CouchSyncEngine.PullReport()
+    override suspend fun pull(longpoll: Boolean): CouchSyncEngine.PullReport {
+        val current = stack() ?: return CouchSyncEngine.PullReport()
+        val report = current.engine.pull(longpoll)
+        organization.sync(upload = false)
+        return report
+    }
 
     /**
      * Queues the page — and only the page. An ink save no longer moves anything on the notebook
@@ -242,7 +251,7 @@ class CouchSyncHost @Inject constructor(
     override suspend fun pendingCount(): Int {
         val current = stack() ?: return 0
         val queued = runCatching { current.store.pendingOutboxIds() }.getOrNull().orEmpty()
-        return (queued + current.engine.currentState.dirty).toSet().size
+        return (queued + current.engine.currentState.dirty).toSet().size + organization.pendingCount()
     }
 
     // endregion
@@ -348,6 +357,7 @@ class CouchSyncHost @Inject constructor(
             return@withLock null
         }
 
+        organization.start()
         val store = RoomCouchStore(
             appRepository = appRepository,
             kvDao = kvDao,

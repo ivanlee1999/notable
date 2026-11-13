@@ -165,6 +165,28 @@ class CouchDbClient(
 
     // region Documents
 
+    /** A complete, validated snapshot of a small sidecar namespace. Never treats a bad row as absence. */
+    suspend fun allRaw(prefix: String): List<Stored> {
+        val response = send(CouchRequest(method = "GET", path = path("_all_docs"), query = listOf(
+            CouchQueryItem("include_docs", "true"),
+            CouchQueryItem("startkey", JsonPrimitive(prefix).toString()),
+            CouchQueryItem("endkey", JsonPrimitive(prefix + "\ufff0").toString()),
+        )))
+        if (response.status != HTTP_OK) throw errorFor(response, path("_all_docs"))
+        val rows = jsonObject(response.body, "_all_docs")["rows"] as? JsonArray
+            ?: throw CouchError.MalformedResponse("_all_docs carried no rows")
+        return rows.map { row ->
+            val document = (row as? JsonObject)?.get("doc") as? JsonObject
+                ?: throw CouchError.MalformedResponse("_all_docs carried an unreadable document")
+            val id = document["_id"]?.jsonPrimitive?.contentOrNullSafe
+                ?: throw CouchError.MalformedResponse("_all_docs document carried no id")
+            val rev = document["_rev"]?.jsonPrimitive?.contentOrNullSafe
+                ?: throw CouchError.MalformedResponse("_all_docs document carried no revision")
+            if (!id.startsWith(prefix)) throw CouchError.MalformedResponse("Unexpected _all_docs id")
+            Stored(id, rev, document["_deleted"]?.jsonPrimitive?.booleanOrNull ?: false, document)
+        }
+    }
+
     /**
      * A stored document: its revision plus the raw body. [deleted] marks a tombstone, which
      * CouchDB still reports a revision for and which the merge treats as a real fact — not the

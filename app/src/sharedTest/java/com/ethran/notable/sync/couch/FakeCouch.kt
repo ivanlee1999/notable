@@ -104,6 +104,18 @@ class FakeCouchTransport : CouchTransport {
         val tail = components.drop(1).joinToString("/")
 
         if (tail == "_changes") return changes(request)
+        if (tail == "_all_docs" && request.method == "GET") {
+            val start = request.query.firstOrNull { it.name == "startkey" }?.value
+                ?.let { couchJson.parseToJsonElement(it).jsonPrimitive.content }.orEmpty()
+            val end = request.query.firstOrNull { it.name == "endkey" }?.value
+                ?.let { couchJson.parseToJsonElement(it).jsonPrimitive.content } ?: "\uffff"
+            val rows = buildJsonArray {
+                docs.filter { (id, doc) -> !doc.deleted && id >= start && id <= end }.forEach { (id, doc) ->
+                    add(buildJsonObject { put("doc", materialize(id, doc)) })
+                }
+            }
+            return CouchResponse(status = 200, body = encode(buildJsonObject { put("rows", rows) }))
+        }
         failingDocumentIds[tail]?.let {
             return CouchResponse(
                 status = it,

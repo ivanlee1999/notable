@@ -58,6 +58,24 @@ class TodayViewTest {
     }
 
     @Test
+    fun syncedTopicSpellingsShareOneTopicAcrossNotes() {
+        val today = LocalDate.now().toString()
+        entries.value = listOf(
+            JournalEntry("first", today, 1, listOf("Product")),
+            JournalEntry("second", today, 2, listOf("product")),
+        )
+        books.value = entries.value.map { Notebook(id = it.notebookId, title = it.notebookId,
+            pageIds = listOf("${it.notebookId}-page")) }
+        show()
+        compose.onNodeWithText("Topics").performClick()
+        compose.onAllNodesWithText("#Product").assertCountEquals(1)
+        compose.onNodeWithText("#product").assertDoesNotExist()
+        compose.onNodeWithText("#Product").performClick()
+        compose.onNodeWithText("first").assertExists()
+        compose.onNodeWithText("second").assertExists()
+    }
+
+    @Test
     fun successfulCreationRetryClearsThePreviousError() {
         var attempts = 0
         coEvery { journal.createEntry(any()) } answers {

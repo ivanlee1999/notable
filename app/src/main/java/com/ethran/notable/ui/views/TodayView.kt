@@ -29,6 +29,7 @@ import androidx.lifecycle.viewModelScope
 import com.ethran.notable.data.AppRepository
 import com.ethran.notable.data.JournalEntry
 import com.ethran.notable.data.JournalRepository
+import com.ethran.notable.data.asciiLower
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.editor.utils.autoEInkAnimationOnScroll
 import com.ethran.notable.navigation.NavigationDestination
@@ -139,9 +140,11 @@ fun TodayView(
         }
     }
 
-    val topics = notes.flatMap { it.entry.topics }.distinct().sortedWith(String.CASE_INSENSITIVE_ORDER)
+    val topics = notes.flatMap { it.entry.topics }.sorted().distinctBy(::asciiLower)
+        .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    val selectedKey = selectedTopic?.let(::asciiLower)
     val shown = when {
-        topicsView && selectedTopic != null -> notes.filter { selectedTopic in it.entry.topics }
+        topicsView && selectedKey != null -> notes.filter { note -> note.entry.topics.any { asciiLower(it) == selectedKey } }
         topicsView -> emptyList()
         else -> notes.filter { it.entry.date == selectedDate }
     }
@@ -232,7 +235,7 @@ private fun TopicsDialog(note: JournalNote, topics: List<String>, busy: Boolean,
             .verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Topics", fontSize = 20.sp, color = Kaleido.Ink)
             topics.forEach { topic ->
-                val checked = topic in note.entry.topics
+                val checked = note.entry.topics.any { asciiLower(it) == asciiLower(topic) }
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .toggleable(value = checked, enabled = !busy, role = Role.Checkbox) { onTopic(topic, it) },
                     verticalAlignment = Alignment.CenterVertically) {
