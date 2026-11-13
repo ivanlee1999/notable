@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.time.LocalDate
+import java.text.Normalizer
 import java.util.UUID
 import javax.inject.Inject
 
@@ -28,20 +29,23 @@ private const val ORGANIZATION_PREFIX = "journal.organization."
 private const val WRITER_KEY = "journal.writer"
 private const val COUNTER_KEY = "journal.counter"
 
-internal fun asciiLower(value: String): String = value.map { if (it in 'A'..'Z') it + 32 else it }.joinToString("")
+internal fun asciiLower(value: String): String = Normalizer.normalize(
+    value.map { if (it in 'A'..'Z') it + 32 else it }.joinToString(""), Normalizer.Form.NFC)
 private fun Char.isTopicSpace() = this == ' ' || this in '\t'..'\r'
 private fun trimTopic(value: String) = value.trim { it.isTopicSpace() }
 private val topicSpaces = Regex("[ \\t\\n\\r\\u000B\\u000C]+")
+private fun canonicalTopicName(value: String) = Normalizer.normalize(
+    trimTopic(value).replace(topicSpaces, " "), Normalizer.Form.NFC)
 
 internal fun topicName(value: String): String =
-    trimTopic(trimTopic(value).removePrefix("#")).replace(topicSpaces, " ")
+    canonicalTopicName(trimTopic(value).removePrefix("#"))
 
 internal fun topicKey(value: String): String = asciiLower(topicName(value))
 
 internal fun normalizeTopics(values: List<String>, known: List<String> = emptyList()): List<String> {
     val names = linkedMapOf<String, String>()
-    known.forEach { if (it.isNotEmpty()) names.putIfAbsent(asciiLower(it), it) }
-    return values.map { names[asciiLower(trimTopic(it).replace(topicSpaces, " "))] ?: topicName(it) }
+    known.map(::canonicalTopicName).forEach { if (it.isNotEmpty()) names.putIfAbsent(asciiLower(it), it) }
+    return values.map { names[asciiLower(canonicalTopicName(it))] ?: topicName(it) }
         .filter { it.isNotEmpty() }.distinctBy(::asciiLower)
         .map { names[asciiLower(it)] ?: it }
 }
@@ -94,15 +98,15 @@ private fun validDate(value: String) {
 }
 
 private fun validateOrganization(entry: OrganizationEntry) {
-    require(entry.notebookId.isNotEmpty()) { "Missing journal note identity" }
+    require(Regex("[A-Za-z0-9._-]+").matches(entry.notebookId)) { "Invalid journal note identity" }
     require(entry.createdAt in 0..MAX_ORGANIZATION_NUMBER) { "Invalid journal capture time" }
     entry.date?.let(::validDate)
     entry.topics.forEach { (key, topic) ->
-        require(topic.name.isNotEmpty() && trimTopic(topic.name).replace(topicSpaces, " ") == topic.name) {
+        require(topic.name.isNotEmpty() && canonicalTopicName(topic.name) == topic.name) {
             "Invalid topic name"
         }
         require(key == asciiLower(topic.name)) { "Invalid topic identity" }
-        require(topic.writer.isNotEmpty() && topic.counter in 0..MAX_ORGANIZATION_NUMBER) { "Invalid topic revision" }
+        require(Regex("[A-Za-z0-9._-]+").matches(topic.writer) && topic.counter in 0..MAX_ORGANIZATION_NUMBER) { "Invalid topic revision" }
     }
 }
 
@@ -212,7 +216,7 @@ class JournalOrganizationStore @Inject constructor(private val db: AppDatabase) 
         }.associateBy { it.notebookId }.toMutableMap()
         observeCounter(canonical.values.flatMap { it.topics.values }.maxOfOrNull { it.counter } ?: 0)
         legacy.filter { it.notebookId !in canonical }.forEach { entry ->
-            val names = entry.topics.distinctBy(::asciiLower)
+            val names = entry.topics.map(::canonicalTopicName).distinctBy(::asciiLower)
             val migrated = OrganizationEntry(entry.notebookId, entry.date, entry.createdAt, names.associate { name ->
                 asciiLower(name) to TopicRevision(name, true, 0, "legacy")
             })

@@ -64,31 +64,44 @@ class JournalOrganizationSync @Inject constructor(
         }
     }
 
-    suspend fun pendingCount(): Int {
+    suspend fun pendingCount(): Int = pendingIds().size
+
+    suspend fun pendingIds(): List<String> {
         val config = settings.getSyncSettings()
-        if (!config.couchActive || config.downloadOnly) return 0
+        if (!config.couchActive || config.downloadOnly) return emptyList()
         val known = acknowledgements(config)
-        return store.all().count { known[it.notebookId] != encodeOrganization(it) }
+        return store.all().filter { known[it.notebookId] != encodeOrganization(it) }.map { "journal:${it.notebookId}" }
     }
 
     suspend fun sync(upload: Boolean) = mutex.withLock {
         val config = settings.getSyncSettings()
         if (!config.couchActive) return@withLock
         try {
+            suspend fun checkActive() {
+                val current = settings.getSyncSettings()
+                if (!current.couchActive || current.couchUrl != config.couchUrl ||
+                    current.couchDatabase != config.couchDatabase || current.couchUsername != config.couchUsername ||
+                    current.couchPassword != config.couchPassword || current.downloadOnly != config.downloadOnly ||
+                    current.uploadOnly != config.uploadOnly) throw CancellationException("Organization sync configuration changed")
+            }
             val client = CouchDbClient(OkHttpCouchTransport(
                 baseUrl = config.couchUrl,
                 username = config.couchUsername.ifBlank { null },
                 password = config.couchPassword.ifBlank { null },
                 client = http,
             ), database = config.couchDatabase + "_organization")
-            val observed = OrganizationSyncEngine(client, store::all, store::merge).sync(
+            val observed = OrganizationSyncEngine(client, store::all, { incoming ->
+                checkActive()
+                store.merge(incoming)
+            }, ::checkActive).sync(
                 upload = upload && !config.downloadOnly,
                 download = !config.uploadOnly,
             )
-            if (observed.isNotEmpty()) {
+            checkActive()
+            if (!config.uploadOnly || observed.isNotEmpty()) {
                 val known = acknowledgements(config)
                 // Acknowledge only the versions actually seen by the server, never a newer local edit.
-                kv.set(Kv(stateKey(config), JsonObject(known + observed).toString()))
+                kv.set(Kv(stateKey(config), organizationAcknowledgements(known, observed, !config.uploadOnly).toString()))
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -110,3 +123,7 @@ class JournalOrganizationSync @Inject constructor(
         return "journal.ack.$hash"
     }
 }
+
+internal fun organizationAcknowledgements(
+    known: JsonObject, observed: Map<String, JsonObject>, completeSnapshot: Boolean,
+): JsonObject = JsonObject(if (completeSnapshot) observed else known + observed)

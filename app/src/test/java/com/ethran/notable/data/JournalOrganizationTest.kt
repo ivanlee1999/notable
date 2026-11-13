@@ -50,12 +50,12 @@ class JournalOrganizationTest {
 
     @Test
     fun revisionTiesUseUtf8WriterThenRemovalThenName() {
-        val a = OrganizationEntry("note", null, 1, mapOf("product" to TopicRevision("Product", true, 1, "\uE000")))
-        val b = a.copy(topics = mapOf("product" to TopicRevision("PRODUCT", false, 1, "\uD800\uDC00")))
+        val a = OrganizationEntry("note", null, 1, mapOf("product" to TopicRevision("Product", true, 1, "writer-a")))
+        val b = a.copy(topics = mapOf("product" to TopicRevision("PRODUCT", false, 1, "writer-b")))
         assertFalse(mergeOrganization(a, b).topics.getValue("product").present)
-        val sameStamp = a.copy(topics = mapOf("product" to TopicRevision("PRODUCT", false, 1, "\uE000")))
+        val sameStamp = a.copy(topics = mapOf("product" to TopicRevision("PRODUCT", false, 1, "writer-a")))
         assertFalse(mergeOrganization(a, sameStamp).topics.getValue("product").present)
-        val nameTie = a.copy(topics = mapOf("product" to TopicRevision("product", true, 1, "\uE000")))
+        val nameTie = a.copy(topics = mapOf("product" to TopicRevision("product", true, 1, "writer-a")))
         assertEquals("product", mergeOrganization(a, nameTie).topics.getValue("product").name)
     }
 
@@ -72,6 +72,14 @@ class JournalOrganizationTest {
             valid + ("createdAt" to JsonPrimitive(-1)),
             valid + ("createdAt" to JsonPrimitive("1")),
             valid + ("date" to JsonPrimitive("2026-02-30")),
+            valid - "date",
+            valid + ("notebookId" to JsonPrimitive("café")) + ("_id" to JsonPrimitive("journal:café")),
+            valid + ("topics" to buildJsonObject { put("e\u0301", buildJsonObject {
+                put("name", "e\u0301"); put("present", true); put("counter", 1); put("writer", "a")
+            }) }),
+            valid + ("topics" to buildJsonObject { put("product", buildJsonObject {
+                put("name", "Product"); put("present", true); put("counter", 1); put("writer", "é")
+            }) }),
             valid + ("topics" to buildJsonObject { put("wrong", valid.getValue("topics").jsonObject.getValue("product")) }),
         )
         invalid.forEach { raw -> assertTrue(runCatching { decodeOrganization(JsonObject(raw)) }.isFailure) }

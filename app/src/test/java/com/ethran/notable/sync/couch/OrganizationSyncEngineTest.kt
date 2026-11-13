@@ -14,6 +14,64 @@ class OrganizationSyncEngineTest {
     private fun topic(name: String, counter: Long, present: Boolean = true) =
         TopicRevision(name, present, counter, "writer")
 
+    @Test fun sameEndpointServerResetDoesNotKeepFalseAcknowledgements() = runBlocking {
+        var activeServer = server
+        val transport = object : CouchTransport {
+            override fun send(request: CouchRequest) = activeServer.send(request)
+        }
+        val local = Local(entry(mapOf("product" to topic("Product", 1))))
+        val engine = local.engine(CouchDbClient(transport, "notes_organization"))
+        var acknowledged = organizationAcknowledgements(JsonObject(emptyMap()), engine.sync(true, true), true)
+        assertEquals(encodeOrganization(local.current), acknowledged["note"])
+        activeServer = FakeCouchTransport()
+        acknowledged = organizationAcknowledgements(acknowledged, engine.sync(false, true), true)
+        assertNotEquals(encodeOrganization(local.current), acknowledged["note"])
+        assertEquals(setOf("product"), local.current.topics.keys)
+        engine.sync(true, true)
+        assertNotNull(CouchDbClient(activeServer, "notes_organization").getRaw("journal:note"))
+    }
+
+    @Test fun organizationFailureKeepsInkSuccessAndRequestsRetry() {
+        val ink = CouchSyncEngine.FlushReport(pushed = listOf("page:ink"))
+        val error = java.io.IOException("Organization unavailable", CouchError.Transport("offline"))
+        val report = organizationFlushReport(ink, listOf("journal:note"), error)
+        assertEquals(ink.pushed, report.pushed)
+        assertTrue(report.stillDirty.contains("journal:note"))
+        assertTrue(report.failures.isNotEmpty())
+        assertTrue(report.hasRetriableFailure)
+        val rateLimited = organizationFlushReport(ink, listOf("journal:note"),
+            java.io.IOException("Try later", CouchError.Server(429, "/notes_organization", retryAfterMs = 30_000)))
+        assertEquals(30_000L, rateLimited.retryAfterMs)
+    }
+
+    @Test fun editDuringUploadRemainsVisibleInPendingReport() {
+        val report = organizationFlushReport(CouchSyncEngine.FlushReport(pushed = listOf("page:ink")),
+            listOf("journal:note"), null)
+        assertEquals(listOf("journal:note"), report.stillDirty)
+        assertTrue(report.failures.isEmpty())
+    }
+
+    @Test fun retiredSyncCannotApplyOrUploadAResponse() = runBlocking {
+        val remoteClient = CouchDbClient(server, "notes_organization")
+        remoteClient.put("journal:note", null, encodeOrganization(entry(mapOf("alex" to topic("Alex", 1)))), JsonObject.serializer())
+        var active = true
+        val transport = object : CouchTransport {
+            override fun send(request: CouchRequest): CouchResponse {
+                val response = server.send(request)
+                active = false
+                return response
+            }
+        }
+        var applied = false
+        val engine = OrganizationSyncEngine(CouchDbClient(transport, "notes_organization"),
+            { emptyList() }, { applied = true; it }, { if (!active) throw kotlinx.coroutines.CancellationException("Retired") })
+        try {
+            engine.sync(true, true)
+            fail("Expected retirement cancellation")
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        assertFalse(applied)
+    }
+
     private class Local(initial: OrganizationEntry) {
         val values = ConcurrentHashMap<String, OrganizationEntry>().apply { put(initial.notebookId, initial) }
         fun engine(client: CouchDbClient) = OrganizationSyncEngine(client,

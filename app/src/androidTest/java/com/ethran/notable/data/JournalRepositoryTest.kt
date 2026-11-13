@@ -159,6 +159,18 @@ class JournalRepositoryTest {
     }
 
     @Test
+    fun legacyUnicodeTopicsNormalizeWithoutChangingLiteralHashNames() = runBlocking {
+        val legacy = JournalEntry("legacy", "2026-11-11", 123, listOf("e\u0301", "é", "#Idea"))
+        db.kvDao().set(Kv("journal.entry.legacy", Json.encodeToString(legacy)))
+        val migrated = JournalOrganizationStore(db).all().single()
+        assertEquals(setOf("é", "#idea"), migrated.topics.keys)
+        assertEquals(listOf("é", "#Idea"), journal.entries.first().single().topics)
+        db.close()
+        openDatabase()
+        assertEquals(migrated, JournalOrganizationStore(db).all().single())
+    }
+
+    @Test
     fun migratesLegacyRowsAndKeepsThemReadableAfterReopen() = runBlocking {
         val legacy = JournalEntry("legacy", "2026-11-11", 123, listOf("Product", "#Idea"))
         db.kvDao().set(Kv("journal.entry.legacy", Json.encodeToString(legacy)))

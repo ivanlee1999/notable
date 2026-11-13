@@ -153,8 +153,14 @@ class CouchSyncHost @Inject constructor(
     override suspend fun flush(): CouchSyncEngine.FlushReport {
         val current = stack() ?: return CouchSyncEngine.FlushReport()
         val report = current.engine.flush()
-        organization.sync(upload = true)
-        return report
+        var failure: Exception? = null
+        try { organization.sync(upload = true) }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) { failure = error }
+        val pending = try { organization.pendingIds() }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) { failure = failure ?: error; emptyList() }
+        return organizationFlushReport(report, pending, failure)
     }
 
     override suspend fun pull(longpoll: Boolean): CouchSyncEngine.PullReport {
