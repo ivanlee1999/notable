@@ -24,6 +24,25 @@ class RailGroupsTest {
 
     private val pens = ToolbarPen.DEFAULT_PENS
 
+    @Test fun `favorites preserve exact settings and user order including duplicate pen types`() {
+        val ids = listOf("red", "blue", "ball", "red", "missing")
+        val groups = RailGroups.of(pens, ids)
+        val shown = groups.tools.filterIsInstance<PenElement>()
+        assertEquals(listOf("red", "blue", "ball"), shown.map { it.presetId })
+        assertEquals(listOf(Kaleido.Inks[1], Kaleido.Inks[8], Kaleido.Inks[0]), shown.map { it.setting.color })
+        val all = (groups.tools + groups.overflow).filterIsInstance<PenElement>().map { it.presetId }
+        assertEquals(pens.map { it.id }.toSet(), all.toSet())
+        assertEquals(all.distinct(), all)
+    }
+
+    @Test fun `moving and unpinning favorites cannot delete presets`() {
+        val order = ToolbarPen.moveFavorite(listOf("red", "blue", "ball"), "ball", -1)
+        assertEquals(listOf("red", "ball", "blue"), order)
+        assertEquals(order, ToolbarPen.moveFavorite(order, "red", -1))
+        assertEquals(pens.map { it.id }.toSet(), RailGroups.of(pens, emptyList()).overflow
+            .filterIsInstance<PenElement>().map { it.presetId }.toSet())
+    }
+
     @Test
     fun `the tool group is the four implements then the tools that take no ink`() {
         val tools = RailGroups.of(pens).tools

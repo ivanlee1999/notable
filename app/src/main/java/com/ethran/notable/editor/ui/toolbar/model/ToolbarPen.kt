@@ -135,36 +135,28 @@ data class ToolbarPen(
         val defaultPenSettings: Map<String, PenSetting> =
             DEFAULT_PENS.associate { it.id to it.setting() }
 
-        /**
-         * The four implements the rail writes with, in rail order: a plain pen, a fountain
-         * pen, a pencil and a highlighter.
-         *
-         * Fixed, so a writing tool is always in the same place under the hand — the rail is
-         * furniture, not a list. What each one *writes like* is still the user's to set; that
-         * lives in the preset behind it, not in which buttons exist.
-         */
+        /** Legacy order, retained until the user customizes favorites. */
         val RAIL_TYPES = listOf(Pen.BALLPEN, Pen.FOUNTAIN, Pen.PENCIL, Pen.MARKER)
 
-        /**
-         * The preset behind each rail implement: the user's first preset of that base type,
-         * so the colours and sizes they configured are what the button writes with, and the
-         * seed preset when they have none of that type left.
-         */
-        fun railPresets(pens: List<ToolbarPen>): List<ToolbarPen> = RAIL_TYPES.map { type ->
-            pens.firstOrNull { it.pen == type } ?: DEFAULT_PENS.first { it.pen == type }
+        /** Resolve exact favorite IDs; older settings retain their original default tools. */
+        fun railPresets(pens: List<ToolbarPen>, favoriteIds: List<String>? = null): List<ToolbarPen> =
+            if (favoriteIds == null) RAIL_TYPES.map { type ->
+                pens.firstOrNull { it.pen == type } ?: DEFAULT_PENS.first { it.pen == type }
+            } else favoriteIds.distinct().mapNotNull { id -> pens.firstOrNull { it.id == id } }
+
+        /** Unpinned presets remain available in More. */
+        fun extraPresets(pens: List<ToolbarPen>, favoriteIds: List<String>? = null): List<ToolbarPen> {
+            val onRail = railPresets(pens, favoriteIds).mapTo(mutableSetOf()) { it.id }
+            return pens.filterNot { it.id in onRail }
         }
 
-        /**
-         * Presets the four fixed implements do not already stand for — a second ballpen in
-         * another colour, a brush, a calligraphy nib.
-         *
-         * They keep a button rather than becoming unreachable: the rail is fixed, but a pen
-         * the user made is still theirs. It just sits in the overflow rather than in the
-         * group your thumb finds without looking.
-         */
-        fun extraPresets(pens: List<ToolbarPen>): List<ToolbarPen> {
-            val onRail = railPresets(pens).mapTo(mutableSetOf()) { it.id }
-            return pens.filterNot { it.id in onRail }
+        fun moveFavorite(ids: List<String>, id: String, offset: Int): List<String> {
+            val result = ids.distinct().toMutableList()
+            val index = result.indexOf(id)
+            if (index < 0) return result
+            val destination = (index + offset).coerceIn(0, result.lastIndex)
+            result.removeAt(index); result.add(destination, id)
+            return result
         }
     }
 }

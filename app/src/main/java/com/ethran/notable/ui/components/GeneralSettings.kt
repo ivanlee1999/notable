@@ -76,6 +76,7 @@ fun GeneralSettings(
             color = Kaleido.Muted,
             fontSize = 12.sp,
         )
+        HandwritingPreviewSettings()
 
         // This is the single page-navigation choice. Scrolling fits the page width and flows
         // through physical page seams; Pagination fits a whole sheet and turns it at once.

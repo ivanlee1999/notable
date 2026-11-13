@@ -1,6 +1,9 @@
 package com.ethran.notable.ui
 
 import android.content.Context
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import java.io.File
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.test.*
@@ -233,7 +236,7 @@ class TodayViewTest {
     }
 
     @Test
-    fun filteringToTodayAndReturningToTheStreamPreservesOlderEntries() {
+    fun calendarJumpsWithinTheStreamAndKeepsNeighboringDays() {
         val today = LocalDate.now().toString()
         entries.value = listOf(JournalEntry("today", today, 2),
             JournalEntry("older", LocalDate.now().minusDays(1).toString(), 1))
@@ -242,13 +245,30 @@ class TodayViewTest {
         show()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("older"))
         compose.onNodeWithText("older").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Journal date filter").performClick()
-        compose.onNode(hasText("Today") and hasAnyAncestor(isPopup())).performClick()
-        compose.onNodeWithText("older").assertDoesNotExist()
-        compose.onNodeWithText("today").assertExists()
-        compose.onNode(hasText("Journal") and hasClickAction()).performClick()
+        compose.onNodeWithContentDescription("Journal calendar").performClick()
+        compose.onNodeWithContentDescription("${LocalDate.now().minusDays(1)}, 1 entry").assertExists()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val proof = File(context.getExternalFilesDir(null), "ui-review/journal-calendar.png")
+        proof.parentFile?.mkdirs()
+        proof.outputStream().use { compose.onNode(isDialog()).captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+        compose.onNode(hasText("Today") and hasAnyAncestor(isDialog())).performClick()
+        compose.onNodeWithText("today").assertIsDisplayed()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("older"))
         compose.onNodeWithText("older").assertIsDisplayed()
+        coVerify(exactly = 0) { journal.createEntry(any(), any()) }
+    }
+
+    @Test fun choosingAnEmptyCalendarDayCreatesNoEntryAndDoesNotHideExistingNotes() {
+        val date = LocalDate.now()
+        entries.value = listOf(JournalEntry("today", date.toString(), 1))
+        books.value = listOf(Notebook(id = "today", title = "Existing note", pageIds = listOf("page")))
+        show()
+        compose.onNodeWithContentDescription("Journal calendar").performClick()
+        val empty = date.withDayOfMonth(if (date.dayOfMonth == 1) 2 else 1)
+        compose.onNodeWithContentDescription("$empty, 0 entries").performClick()
+        compose.onNodeWithText("No entries").assertIsDisplayed()
+        compose.onNode(hasText("Today") and hasClickAction()).performClick()
+        compose.onNodeWithText("Existing note").assertIsDisplayed()
         coVerify(exactly = 0) { journal.createEntry(any(), any()) }
     }
 

@@ -7,6 +7,12 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Modifier
+import androidx.compose.runtime.*
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ethran.notable.data.datastore.AppSettings
@@ -17,6 +23,7 @@ import com.ethran.notable.editor.ui.toolbar.model.ToolbarPen
 import com.ethran.notable.testing.ComposeUiSupportRule
 import com.ethran.notable.ui.theme.InkaTheme
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,6 +34,28 @@ import java.io.File
 class PenEditDialogTest {
     private val compose = createComposeRule()
     @get:Rule val composeGate = ComposeUiSupportRule(compose)
+
+    @Test
+    fun pinningAndReorderingKeepsTheOriginalPenSettings() {
+        var settings by mutableStateOf(AppSettings(version = 1))
+        val original = settings.toolbarPens
+        compose.setContent { InkaTheme {
+            Column(Modifier.height(560.dp).verticalScroll(rememberScrollState())) {
+                ToolbarSettings(settings, { settings = it })
+            }
+        } }
+        compose.onNodeWithContentDescription("Pin red").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Move red earlier").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("ball", "fountain", "pencil", "red", "marker"), settings.toolbarFavoriteIds)
+            assertEquals(original, settings.toolbarPens)
+        }
+        compose.onNodeWithContentDescription("Unpin red").performScrollTo().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf("ball", "fountain", "pencil", "marker"), settings.toolbarFavoriteIds)
+            assertEquals(original, settings.toolbarPens)
+        }
+    }
 
     @Test
     fun narrowLargeTextDialogKeepsEveryChoiceAndDoneReachable() {

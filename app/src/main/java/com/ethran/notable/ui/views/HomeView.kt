@@ -94,6 +94,7 @@ import com.ethran.notable.ui.dialogs.ConflictResolutionDialog
 import com.ethran.notable.ui.dialogs.EmptyBookWarningHandler
 import com.ethran.notable.ui.dialogs.FolderConfigDialog
 import com.ethran.notable.ui.dialogs.NamePromptDialog
+import com.ethran.notable.ui.dialogs.NoteRenameDialog
 import com.ethran.notable.ui.dialogs.NewNotebookDialog
 import com.ethran.notable.ui.dialogs.NotebookConfigDialog
 import com.ethran.notable.ui.dialogs.PdfImportChoiceDialog
@@ -857,6 +858,8 @@ private fun NotebookEntry(
 ) {
     var isMoreOpen by remember(book.id) { mutableStateOf(false) }
     var isSettingsOpen by remember(book.id) { mutableStateOf(false) }
+    var renaming by remember(book.id) { mutableStateOf(false) }
+    var renamePage by remember(book.id) { mutableStateOf<String?>(null) }
     val open: (String?) -> Unit = { page ->
         if (page == null) onNavigateToPages(book.id) else onNavigateToEditor(page, book.id)
     }
@@ -874,7 +877,10 @@ private fun NotebookEntry(
     NotebookContentPreview(notebook = book, previewHeight = previewHeight, expanded = expanded,
         onExpand = onExpand, onEdit = open, version = editedAt.time,
         subtitle = location, onPreviewNeeded = onPreviewNeeded, syncBadge = syncBadge,
+        onRename = { renamePage = null; renaming = true },
+        onRenamePage = { renamePage = it; renaming = true },
         selectedPageId = selectedPageId, onPageChange = onPageChange, actions = options)
+    if (renaming) NoteRenameDialog(book.id, renamePage, { renaming = false })
 
     if (isSettingsOpen) {
         NotebookConfigDialog(

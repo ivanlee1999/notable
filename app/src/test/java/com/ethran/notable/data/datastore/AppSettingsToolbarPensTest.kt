@@ -17,6 +17,7 @@ class AppSettingsToolbarPensTest {
     fun `settings persisted before the field decode with the default pens`() {
         val decoded = json.decodeFromString(AppSettings.serializer(), """{"version":1}""")
         assertEquals(ToolbarPen.DEFAULT_PENS, decoded.toolbarPens)
+        assertEquals(null, decoded.toolbarFavoriteIds)
     }
 
     @Test
@@ -29,12 +30,14 @@ class AppSettingsToolbarPensTest {
                 color = android.graphics.Color.MAGENTA,
                 size = 7f,
             ),
+            toolbarFavoriteIds = listOf("a1b2c3d4", "red", "ball"),
         )
         val decoded = json.decodeFromString(
             AppSettings.serializer(),
             json.encodeToString(AppSettings.serializer(), settings),
         )
         assertEquals(settings.toolbarPens, decoded.toolbarPens)
+        assertEquals(settings.toolbarFavoriteIds, decoded.toolbarFavoriteIds)
     }
 
     /**

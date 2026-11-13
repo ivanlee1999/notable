@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -67,33 +69,13 @@ import com.ethran.notable.ui.dialogs.BackgroundSelector
 import com.ethran.notable.ui.noRippleClickable
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.ui.components.TextAction
+import com.ethran.notable.ui.components.ScaledDialog
+import com.ethran.notable.ui.components.ToolbarSettings
+import com.ethran.notable.ui.viewmodels.SettingsViewModel
 import compose.icons.FeatherIcons
 import compose.icons.feathericons.MoreHorizontal
 
-/**
- * The tool rail: a fixed arrangement of groups, rendered through [ToolbarElementView].
- *
- * The rail is docked to one of the four edges — never floating, never draggable, because a
- * moving overlay costs a full-screen e-ink refresh. Docked left or right it becomes the
- * tablet arrangement: a vertical rail within thumb reach of the bezel, carrying the whole ink
- * palette for the pen currently in hand. Docked top or bottom — where a one-handed device
- * starts, see [com.ethran.notable.data.datastore.defaultToolbarPosition] — the palette has no
- * room to lie down, so the same choice becomes a single [InkSwatch] and a popover.
- *
- * Everything but history scrolls. Whatever does not fit has to be reachable by
- * scrolling rather than clipped off the end, and the group that must never be scrolled away
- * from is undo/redo. Document navigation lives in the title bar.
- *
- * The order of the groups is the rail's whole argument, and it does not vary:
- *
- *     tools │ inks │ nibs │ overflow… │ undo / redo
- *
- * The four implements, then how broad the nib is, then undo — the sequence of a single
- * stroke, left where the hand already is. A user-ordered rail could express that too, but it
- * could equally express anything else, and a rail whose buttons move is one you have to read
- * before every tap. What stays configurable is what each implement *writes like*
- * ([ToolbarPen] presets, edited in settings), which is the part that is genuinely personal.
- */
+/** Docked pen favorites, ink controls and persistent undo/redo. */
 @Composable
 fun ToolbarContent(
     uiState: ToolbarUiState,
@@ -131,7 +113,9 @@ fun ToolbarContent(
 
     // Snapshot read: setting changes (toolbarPens, toolbarPosition, …) recompose the toolbar.
     val settings = GlobalAppSettings.current
-    val groups = remember(settings.toolbarPens) { RailGroups.of(settings.toolbarPens) }
+    val groups = remember(settings.toolbarPens, settings.toolbarFavoriteIds) {
+        RailGroups.of(settings.toolbarPens, settings.toolbarFavoriteIds)
+    }
 
     @Composable
     fun renderGroup(elements: List<ToolbarElement>) {
@@ -183,9 +167,19 @@ private fun CompactPenRail(
     val position = GlobalAppSettings.current.toolbarPosition
     val vertical = position.isVertical
     var moreOpen by remember(uiState.pageId) { mutableStateOf(false) }
+    var customizeOpen by remember(uiState.pageId) { mutableStateOf(false) }
     val pens = (groups.tools + groups.overflow).filterIsInstance<PenElement>()
     val active = pens.firstOrNull { it.presetId == uiState.penPresetId } ?: pens.firstOrNull()
-    val essentials = listOfNotNull(active) + listOf(
+    val favorites = groups.tools.filterIsInstance<PenElement>().let { pinned ->
+        if (active != null && pinned.none { it.presetId == active.presetId }) pinned + active else pinned
+    }
+    val favoriteScroll = rememberScrollState()
+    val buttonPixels = with(LocalDensity.current) { BUTTON_SIZE.dp.roundToPx() }
+    LaunchedEffect(uiState.penPresetId, favorites, favoriteScroll.maxValue) {
+        val index = favorites.indexOfFirst { it.presetId == uiState.penPresetId }
+        if (index >= 0) favoriteScroll.scrollTo(index * buttonPixels)
+    }
+    val essentials = listOf(
         ToolbarElements.of(ToolbarElementId.ERASER),
         ToolbarElements.of(ToolbarElementId.SELECT),
     )
@@ -198,23 +192,27 @@ private fun CompactPenRail(
     if (vertical) Row(Modifier.fillMaxHeight().width(TOOLBAR_THICKNESS.dp).background(Kaleido.Rail)) {
         if (position == AppSettings.Position.Right) ToolbarEdgeRule(vertical = true)
         Column(Modifier.width(BUTTON_SIZE.dp).fillMaxHeight().navigationBarsPadding()) {
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { tools() }
+            Column(Modifier.weight(1f).verticalScroll(favoriteScroll)) { renderGroup(favorites) }
+            tools()
             renderGroup(groups.history)
         }
         if (position == AppSettings.Position.Left) ToolbarEdgeRule(vertical = true)
     } else Column(Modifier.fillMaxWidth().height(TOOLBAR_THICKNESS.dp).background(Kaleido.Rail)) {
         if (position == AppSettings.Position.Bottom) ToolbarEdgeRule(vertical = false)
         Row(Modifier.fillMaxWidth().height(BUTTON_SIZE.dp)) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { tools() }
+            Row(Modifier.weight(1f).horizontalScroll(favoriteScroll)) { renderGroup(favorites) }
+            tools()
             renderGroup(groups.history)
         }
         if (position == AppSettings.Position.Top) ToolbarEdgeRule(vertical = false)
     }
-    if (moreOpen) {
+    if (moreOpen || customizeOpen) {
         DisposableEffect(Unit) {
             onAction(ToolbarAction.UpdateToolOptionsOpen(true))
             onDispose { onAction(ToolbarAction.UpdateToolOptionsOpen(false)) }
         }
+    }
+    if (moreOpen) {
         val placement = toolbarPopupPlacement()
         ScaledPopup(alignment = placement.alignment, offset = placement.offset,
             properties = PopupProperties(focusable = true), onDismissRequest = { moreOpen = false }) {
@@ -224,6 +222,7 @@ private fun CompactPenRail(
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Pens", color = Kaleido.Ink)
                 Row(Modifier.horizontalScroll(rememberScrollState())) { renderGroup(pens) }
+                TextAction("Customize favorites", { moreOpen = false; customizeOpen = true })
                 Row(Modifier.horizontalScroll(rememberScrollState())) { QuickInkSwatches(uiState, onAction) }
                 Row(Modifier.horizontalScroll(rememberScrollState())) { NibGroup(uiState, onAction) }
                 Text("Annotation tools", color = Kaleido.Ink)
@@ -240,30 +239,56 @@ private fun CompactPenRail(
             }
         }
     }
+    if (customizeOpen) FavoriteSettingsDialog(onDismiss = { customizeOpen = false })
+}
+
+@Composable
+private fun FavoriteSettingsButton(onAction: (ToolbarAction) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ToolbarButton(vectorIcon = FeatherIcons.MoreHorizontal, contentDescription = "Customize favorites",
+        isSelected = open, onSelect = { open = true })
+    if (open) {
+        DisposableEffect(Unit) {
+            onAction(ToolbarAction.UpdateToolOptionsOpen(true))
+            onDispose { onAction(ToolbarAction.UpdateToolOptionsOpen(false)) }
+        }
+        FavoriteSettingsDialog(onDismiss = { open = false })
+    }
+}
+
+@Composable
+private fun FavoriteSettingsDialog(onDismiss: () -> Unit, viewModel: SettingsViewModel = hiltViewModel()) {
+    ScaledDialog(onDismissRequest = onDismiss) {
+        Column(Modifier.widthIn(max = 440.dp).heightIn(max = 560.dp).background(Kaleido.Paper)
+            .verticalScroll(rememberScrollState()).padding(12.dp)) {
+            ToolbarSettings(viewModel.settings, viewModel::updateSettings)
+            TextAction("Done", onDismiss, Modifier.fillMaxWidth())
+        }
+    }
 }
 
 /**
- * The rail's fixed groups, resolved against the user's pen presets.
+ * The rail groups, resolved against the user's ordered favorite presets.
  *
  * Held apart from the composables so the arrangement is a value a test can assert on, rather
  * than something only a rendered rail knows.
  */
 data class RailGroups(
-    /** The four implements, then the two tools that take no ink. */
+    /** Favorite pens followed by eraser, selection and text tools. */
     val tools: List<ToolbarElement>,
     /** Everything that is neither an implement nor a rail fixture; scrolls when short. */
     val overflow: List<ToolbarElement>,
     val history: List<ToolbarElement>,
 ) {
     companion object {
-        fun of(pens: List<ToolbarPen>): RailGroups = RailGroups(
-            tools = ToolbarPen.railPresets(pens).map(ToolbarElements::penElement) + listOf(
+        fun of(pens: List<ToolbarPen>, favoriteIds: List<String>? = null): RailGroups = RailGroups(
+            tools = ToolbarPen.railPresets(pens, favoriteIds).map(ToolbarElements::penElement) + listOf(
                 ToolbarElements.of(ToolbarElementId.ERASER),
                 ToolbarElements.of(ToolbarElementId.SELECT),
                 ToolbarElements.of(ToolbarElementId.TEXT),
             ),
             overflow = listOf(ToolbarElements.of(ToolbarElementId.SHAPE)) +
-                ToolbarPen.extraPresets(pens).map(ToolbarElements::penElement) +
+                ToolbarPen.extraPresets(pens, favoriteIds).map(ToolbarElements::penElement) +
                 listOf(
                     ToolbarElements.of(ToolbarElementId.IMAGE),
                     ToolbarElements.of(ToolbarElementId.PASTE),
@@ -316,6 +341,7 @@ private fun HorizontalRail(
                     .horizontalScroll(rememberScrollState())
             ) {
                 renderGroup(groups.tools)
+                FavoriteSettingsButton(onAction)
                 QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()
@@ -488,6 +514,7 @@ private fun VerticalRail(
                     .verticalScroll(rememberScrollState())
             ) {
                 renderGroup(groups.tools)
+                FavoriteSettingsButton(onAction)
                 QuickInkSwatches(uiState, onAction)
                 NibGroup(uiState = uiState, onAction = onAction)
                 ToolbarDivider()

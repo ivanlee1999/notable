@@ -61,17 +61,7 @@ import com.ethran.notable.ui.dialogs.dialogMaxHeight
 import com.ethran.notable.ui.theme.InkaTheme
 import com.ethran.notable.ui.noRippleClickable
 
-/**
- * The "Toolbar" settings panel: the pens the rail writes with.
- *
- * The rail's *arrangement* is not a setting — it is a fixed sequence of groups, so a tool is
- * always in the same place under the hand (see `RailGroups`). What is genuinely personal is
- * what each implement writes like, and that is what this screen edits: the colour and nib a
- * pen starts at, and which colours and sizes its rail strips and stroke menu offer.
- *
- * Presets are shown in the two roles the rail gives them — the four it writes with, and the
- * rest, which it keeps in its overflow.
- */
+/** Favorite buttons reference the original presets; moving one never changes its ink. */
 @Composable
 fun ToolbarSettings(
     settings: AppSettings,
@@ -79,32 +69,30 @@ fun ToolbarSettings(
     @Suppress("UNUSED_PARAMETER") pageScrollState: ScrollState = rememberScrollState(),
 ) {
     val pens = settings.toolbarPens
-    val onRail = ToolbarPen.railPresets(pens)
-    val overflow = ToolbarPen.extraPresets(pens)
+    val onRail = ToolbarPen.railPresets(pens, settings.toolbarFavoriteIds)
+    val overflow = ToolbarPen.extraPresets(pens, settings.toolbarFavoriteIds)
+    val favoriteIds = onRail.map { it.id }
+    val allPens = pens + onRail.filter { seed -> pens.none { it.id == seed.id } }
 
-    fun commit(newPens: List<ToolbarPen>) =
-        onSettingsChange(settings.copy(toolbarPens = newPens))
+    fun commit(newPens: List<ToolbarPen>) = onSettingsChange(settings.copy(toolbarPens = newPens,
+        toolbarFavoriteIds = settings.toolbarFavoriteIds?.filter { id -> newPens.any { it.id == id } }))
+    fun favorites(ids: List<String>) = onSettingsChange(settings.copy(toolbarPens = allPens,
+        toolbarFavoriteIds = ids))
 
     var addPenOpen by remember { mutableStateOf(false) }
     var editedPresetId by remember { mutableStateOf<String?>(null) }
 
     Column {
-        Text(
-            text = stringResource(R.string.toolbar_settings_rail_hint),
-            style = MaterialTheme.typography.caption,
-            color = Color.Black,
-            modifier = Modifier.padding(vertical = 4.dp)
-        )
-
-        SectionHeaderRow(stringResource(R.string.toolbar_settings_section_on_rail))
-        onRail.forEach { preset ->
+        SectionHeaderRow("Favorites")
+        onRail.forEachIndexed { index, preset ->
             PresetRow(
                 preset = preset,
-                onEdit = { editedPresetId = preset.id },
-                // The four implements are the rail; deleting one would leave a button with
-                // nothing behind it. A preset that is not the user's own (no stored preset of
-                // that type) is a seed shown for editing, and deleting it means even less.
+                onEdit = { if (pens.none { it.id == preset.id }) commit(allPens); editedPresetId = preset.id },
                 onDelete = null,
+                pinned = true,
+                onPin = { favorites(favoriteIds - preset.id) },
+                onEarlier = if (index == 0) null else ({ favorites(ToolbarPen.moveFavorite(favoriteIds, preset.id, -1)) }),
+                onLater = if (index == onRail.lastIndex) null else ({ favorites(ToolbarPen.moveFavorite(favoriteIds, preset.id, 1)) }),
             )
         }
 
@@ -115,6 +103,7 @@ fun ToolbarSettings(
                     preset = preset,
                     onEdit = { editedPresetId = preset.id },
                     onDelete = { commit(pens.filterNot { it.id == preset.id }) },
+                    onPin = { favorites(favoriteIds + preset.id) },
                 )
             }
         }
@@ -129,7 +118,8 @@ fun ToolbarSettings(
                 Text(stringResource(R.string.toolbar_settings_add_pen))
             }
             EInkButton(
-                onClick = { commit(ToolbarPen.DEFAULT_PENS) },
+                onClick = { onSettingsChange(settings.copy(toolbarPens = ToolbarPen.DEFAULT_PENS,
+                    toolbarFavoriteIds = null)) },
                 modifier = Modifier.weight(1f)
             ) {
                 Text(stringResource(R.string.toolbar_settings_reset))
@@ -147,7 +137,8 @@ fun ToolbarSettings(
                     color = if (pen == Pen.MARKER) AndroidColor.LTGRAY else AndroidColor.BLACK,
                     size = if (pen == Pen.MARKER) 40f else 5f,
                 )
-                commit(pens + preset)
+                onSettingsChange(settings.copy(toolbarPens = allPens + preset,
+                    toolbarFavoriteIds = favoriteIds + preset.id))
                 addPenOpen = false
                 editedPresetId = preset.id
             },
@@ -191,7 +182,12 @@ private fun PresetRow(
     preset: ToolbarPen,
     onEdit: () -> Unit,
     onDelete: (() -> Unit)?,
+    pinned: Boolean = false,
+    onPin: (() -> Unit)? = null,
+    onEarlier: (() -> Unit)? = null,
+    onLater: (() -> Unit)? = null,
 ) {
+    Column {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -228,6 +224,18 @@ private fun PresetRow(
                 )
             }
         }
+    }
+    if (onPin != null) Row(Modifier.fillMaxWidth().padding(start = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextAction(if (pinned) "Unpin" else "Pin", onPin,
+            Modifier.semantics { contentDescription = "${if (pinned) "Unpin" else "Pin"} ${preset.id}" })
+        if (pinned) {
+            TextAction("↑", { onEarlier?.invoke() }, enabled = onEarlier != null,
+                modifier = Modifier.semantics { contentDescription = "Move ${preset.id} earlier" })
+            TextAction("↓", { onLater?.invoke() }, enabled = onLater != null,
+                modifier = Modifier.semantics { contentDescription = "Move ${preset.id} later" })
+        }
+    }
     }
 }
 

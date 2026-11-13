@@ -1,6 +1,5 @@
 package com.ethran.notable.ui.views
 
-import android.app.DatePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
@@ -15,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -39,14 +37,14 @@ import com.ethran.notable.navigation.NavigationDestination
 import com.ethran.notable.ui.components.NotebookContentPreview
 import com.ethran.notable.ui.components.BrowserLayoutPicker
 import com.ethran.notable.ui.components.rememberBrowserLayout
-import com.ethran.notable.ui.components.previewRows
+import com.ethran.notable.ui.components.journalDays
+import com.ethran.notable.ui.components.JournalCalendar
 import com.ethran.notable.ui.components.SquareButton
 import com.ethran.notable.ui.components.RowRule
 import com.ethran.notable.ui.components.TextAction
-import com.ethran.notable.ui.components.ActionMenu
-import com.ethran.notable.ui.components.MenuAction
 import com.ethran.notable.ui.dialogs.ActionButton
 import com.ethran.notable.ui.dialogs.NamePromptDialog
+import com.ethran.notable.ui.dialogs.NoteRenameDialog
 import com.ethran.notable.ui.theme.Kaleido
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -136,12 +134,13 @@ fun TodayView(
     var topicsView by rememberSaveable { mutableStateOf(false) }
     var selectedTopic by rememberSaveable { mutableStateOf<String?>(null) }
     var editingTopics by rememberSaveable { mutableStateOf<String?>(null) }
+    var renamingNotebook by rememberSaveable { mutableStateOf<String?>(null) }
+    var renamingPage by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedNote by rememberSaveable { mutableStateOf<String?>(null) }
     var dateMenu by remember { mutableStateOf(false) }
     var browseMenu by remember { mutableStateOf(false) }
     val previewPages = remember { mutableStateMapOf<String, String>() }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     val listState = rememberLazyListState()
     val owner = LocalLifecycleOwner.current
     fun refreshDate() {
@@ -161,18 +160,20 @@ fun TodayView(
     val shown = when {
         topicsView && selectedKey != null -> notes.filter { note -> note.entry.topics.any { asciiLower(it) == selectedKey } }
         topicsView -> emptyList()
-        else -> notes.filter { it.entry.date != null && (selectedDate == null || it.entry.date == selectedDate) }
+        else -> notes.filter { it.entry.date != null }
     }.sortedWith(compareByDescending<JournalNote> { it.entry.date }.thenByDescending { it.entry.createdAt })
-    fun filterDay(date: String?) {
+    var pendingDateJump by remember { mutableStateOf<String?>(null) }
+    fun jumpToDate(date: String) {
         selectedDate = date
+        pendingDateJump = date
         topicsView = false
-        scope.launch { listState.scrollToItem(0) }
     }
     fun createNote() {
         val inherited = selectedTopic?.takeIf { topicsView }?.let(::listOf).orEmpty()
         scope.launch {
             viewModel.create(inherited)?.let { (book, page) ->
                 selectedDate = null
+                pendingDateJump = null
                 topicsView = false
                 onOpen(page, book)
             }
@@ -191,6 +192,21 @@ fun TodayView(
         val (layout, chooseLayout) = rememberBrowserLayout(compact)
         val columns = layout.columnsFor(maxWidth)
         val previewHeight = layout.previewHeight(maxHeight - 150.dp)
+        val days = journalDays(shown, columns, expandedNote, { it.entry.date }, { it.entry.notebookId },
+            selectedDate.takeUnless { topicsView })
+        val datesByKey = days.flatMap { day ->
+            listOf(day.key to day.date) + day.rows.map { "row:${it.first().entry.notebookId}" to day.date }
+        }.toMap()
+        val visibleDate by remember(days, listState) { derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key?.let { datesByKey[it] }
+        } }
+        LaunchedEffect(pendingDateJump, days, topicsView) {
+            if (topicsView) { pendingDateJump = null; return@LaunchedEffect }
+            val target = pendingDateJump ?: return@LaunchedEffect
+            val index = days.firstOrNull { it.date == target }?.index ?: return@LaunchedEffect
+            listState.scrollToItem(index)
+            pendingDateJump = null
+        }
         Column(Modifier.fillMaxSize().background(Kaleido.Paper)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -201,20 +217,13 @@ fun TodayView(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!topicsView) Box(Modifier.weight(1f)) {
-                    TextAction((selectedDate?.let { if (it == today) "Today" else LocalDate.parse(it)
-                        .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) } ?: "All entries") + " ▾",
-                        { dateMenu = true }, Modifier.fillMaxWidth().semantics { contentDescription = "Journal date filter" })
-                    if (dateMenu) ActionMenu({ dateMenu = false }) {
-                        MenuAction("All entries", { dateMenu = false; filterDay(null) }, selectedDate == null)
-                        MenuAction("Today", { dateMenu = false; filterDay(today) }, selectedDate == today)
-                        MenuAction("Choose date", {
-                            dateMenu = false
-                            val date = LocalDate.parse(selectedDate ?: today)
-                            DatePickerDialog(context, { _, year, month, day ->
-                                filterDay(LocalDate.of(year, month + 1, day).toString())
-                            }, date.year, date.monthValue - 1, date.dayOfMonth).show()
-                        })
-                    }
+                    val date = visibleDate ?: selectedDate ?: today
+                    TextAction((if (date == today) "Today" else LocalDate.parse(date)
+                        .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))) + " ▾",
+                        { dateMenu = true }, Modifier.fillMaxWidth().semantics { contentDescription = "Journal calendar" })
+                    if (dateMenu) JournalCalendar(LocalDate.parse(date), LocalDate.parse(today),
+                        notes.mapNotNull { it.entry.date }.groupingBy { it }.eachCount(),
+                        { chosen -> dateMenu = false; jumpToDate(chosen.toString()) }, { dateMenu = false })
                 }
                 if (topicsView && selectedTopic != null) TextAction("All tags", { selectedTopic = null }, Modifier.weight(1f))
                 if (!topicsView || selectedTopic != null) BrowserLayoutPicker(layout, chooseLayout, compact)
@@ -234,8 +243,9 @@ fun TodayView(
                 }
                 if (topics.isEmpty()) item { Text("No tags yet", color = Kaleido.Muted) }
             } else {
-                shown.groupBy { it.entry.date }.forEach { (date, dayNotes) ->
-                item(key = "day:${date ?: "library"}") {
+                days.forEach { day ->
+                val date = day.date
+                item(key = day.key) {
                     Text(when (date) {
                         today -> "Today"
                         LocalDate.parse(today).minusDays(1).toString() -> "Yesterday"
@@ -243,8 +253,8 @@ fun TodayView(
                         else -> LocalDate.parse(date).format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
                     }, color = Kaleido.Muted, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                 }
-                val rows = previewRows(dayNotes, columns, expandedNote) { it.entry.notebookId }
-                items(rows, key = { row -> row.joinToString(":") { it.entry.notebookId } }) { row ->
+                if (day.rows.isEmpty()) item(key = "empty:$date") { Text("No entries", color = Kaleido.Muted) }
+                items(day.rows, key = { row -> "row:${row.first().entry.notebookId}" }) { row ->
                     val rowColumns = if (row.any { it.entry.notebookId == expandedNote }) 1 else columns
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         row.forEach { note ->
@@ -256,6 +266,8 @@ fun TodayView(
                                             onEdit = { page -> open(note, page) },
                                             selectedPageId = previewPages[note.entry.notebookId],
                                             onPageChange = { previewPages[note.entry.notebookId] = it },
+                                            onRename = { renamingPage = null; renamingNotebook = note.entry.notebookId },
+                                            onRenamePage = { renamingPage = it; renamingNotebook = note.entry.notebookId },
                                             subtitle = if (topicsView) note.entry.date else null,
                                             actions = { SquareButton(48.dp, { editingTopics = note.entry.notebookId }) {
                                                 Text("#", color = Kaleido.Ink, modifier = Modifier.semantics {
@@ -275,12 +287,12 @@ fun TodayView(
                     }
                 }
                 }
-                if (shown.isEmpty()) item { Text("No notes", color = Kaleido.Muted) }
+                if (days.isEmpty()) item { Text("No notes", color = Kaleido.Muted) }
             }
         }
         RowRule()
         Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextAction("Journal", { filterDay(null) },
+            TextAction("Today", { jumpToDate(today) },
                 Modifier.weight(1f))
             TextAction(if (busy) "…" else "Write", ::createNote, Modifier.weight(1f), filled = true, enabled = !busy && dataReady)
             TextAction("Browse", { browseMenu = true }, Modifier.weight(1f))
@@ -300,6 +312,7 @@ fun TodayView(
         TopicsDialog(note, topics, busy, { name, selected -> viewModel.topic(note, name, selected) },
             { editingTopics = null })
     }
+    renamingNotebook?.let { id -> NoteRenameDialog(id, renamingPage, { renamingNotebook = null }) }
 }
 
 @Composable

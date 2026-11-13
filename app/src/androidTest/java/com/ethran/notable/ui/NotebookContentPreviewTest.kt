@@ -75,6 +75,28 @@ class NotebookContentPreviewTest {
         compose.onNodeWithText("1/2 ▾").assertExists()
     }
 
+    @Test fun previewSwipesChangePagesWhileVerticalDragsLeaveThePageAlone() {
+        var edited: String? = null
+        compose.setContent {
+            CompositionLocalProvider(LocalInspectionMode provides true) {
+                InkaTheme { NotebookContentPreview(Notebook(id = "book", title = "Meeting",
+                    pageIds = listOf("p1", "p2", "p3")), 180.dp, false, {}, { edited = it }, Modifier.width(320.dp)) }
+            }
+        }
+        val preview = compose.onNodeWithContentDescription("Meeting ink preview")
+        preview.performTouchInput { swipeLeft() }
+        compose.onNodeWithText("2/3 ▾").assertExists()
+        preview.performTouchInput { swipeUp() }
+        compose.onNodeWithText("2/3 ▾").assertExists()
+        preview.performTouchInput { swipeRight() }
+        compose.onNodeWithText("1/3 ▾").assertExists()
+        preview.performTouchInput { swipeRight() }
+        compose.onNodeWithText("1/3 ▾").assertExists()
+        assertEquals(null, edited)
+        preview.performClick()
+        assertEquals("p1", edited)
+    }
+
     @Test fun previewDensityIsSharedAndPersistedWithoutChangingNotes() {
         compose.setContent {
             InkaTheme {
