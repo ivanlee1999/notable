@@ -107,8 +107,11 @@ class ThumbnailBackfillQueue @Inject constructor(
         var generated = false
         mutex.withLock { processingPageId = pageId }
         try {
-            generated = thumbnailGenerator.ensureThumbnail(pageId, mode) ==
-                ThumbnailEnsureResult.GENERATED
+            val result = thumbnailGenerator.ensureThumbnail(pageId, mode)
+            generated = result == ThumbnailEnsureResult.GENERATED
+            if (result == ThumbnailEnsureResult.SUPERSEDED) {
+                mutex.withLock { requestedAgain.putIfAbsent(pageId, mode) }
+            }
         } catch (t: Throwable) {
             // Log the throwable (not just t.message) so the throw site is visible in ShipBook.
             log.e("Thumbnail generation failed for pageId=$pageId", t)

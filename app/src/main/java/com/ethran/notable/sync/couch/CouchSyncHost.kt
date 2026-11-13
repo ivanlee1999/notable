@@ -6,6 +6,8 @@ import com.ethran.notable.data.db.KvDao
 import com.ethran.notable.data.db.KvProxy
 import com.ethran.notable.di.ApplicationScope
 import com.ethran.notable.editor.canvas.CanvasEventBus
+import com.ethran.notable.io.ThumbnailGenerator
+import com.ethran.notable.io.ThumbnailBackfillQueue
 import com.ethran.notable.sync.COUCH_SYNC_STATE_KEY
 import com.ethran.notable.sync.DEFAULT_DEVICE_ID
 import com.ethran.notable.sync.SyncBackend
@@ -43,10 +45,17 @@ class CouchSyncHost @Inject constructor(
     private val kvDao: KvDao,
     private val backgroundFileWatcher: BackgroundFileWatcher,
     private val organization: JournalOrganizationSync,
+    private val thumbnailGenerator: ThumbnailGenerator,
+    private val thumbnailBackfillQueue: ThumbnailBackfillQueue,
     @param:ApplicationScope private val scope: CoroutineScope,
 ) : CouchSyncBackend {
 
     private val log = ShipBook.getLogger("CouchSyncHost")
+
+    private fun pagesApplied(pageIds: Set<String>) {
+        thumbnailBackfillQueue.enqueue(thumbnailGenerator.invalidate(pageIds).toList())
+        scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
+    }
 
     private class Stack(
         val settingsKey: String,
@@ -276,9 +285,7 @@ class CouchSyncHost @Inject constructor(
             deviceId = kvProxy.getSyncSettings().deviceId.ifBlank { DEFAULT_DEVICE_ID },
             // The same wiring the synced store gets: a division rewrites pages that the canvas
             // or the page cache may be holding, exactly like a pull applying a peer's edit.
-            onPagesApplied = { pageIds ->
-                scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
-            },
+            onPagesApplied = ::pagesApplied,
         )
         return store.splitOversizedPages(notebookId)
     }
@@ -374,9 +381,7 @@ class CouchSyncHost @Inject constructor(
             // Launched rather than offered: the store applies documents from a blocking loop that
             // cannot suspend, and `tryEmit` would abandon the notification whenever a bulk pull
             // outran the collector — leaving exactly the stale page this reports.
-            onPagesApplied = { pageIds ->
-                scope.launch { CanvasEventBus.pagesChangedInDb.emit(pageIds) }
-            },
+            onPagesApplied = ::pagesApplied,
             // A page's rows say which background file to draw; only the file itself says what is
             // in it. A PDF that lands after the pages naming it therefore needs its own word —
             // see [BackgroundFileWatcher.noteChanged].

@@ -1242,10 +1242,13 @@ class RoomCouchStore(
             }
         }
         if (written.isEmpty()) return emptySet()
-        return appRepository.imageRepository.getPageUris()
+        val imagePages = appRepository.imageRepository.getPageUris()
             .filter { row -> CouchImageFiles.fileFor(row.uri)?.absolutePath in written }
             .map { it.pageId }
             .toSet()
+        // Like placed pictures, a PDF/background can arrive after its page was rendered.
+        // Report those pages even though installing the bytes does not advance their clocks.
+        return imagePages + appRepository.pageRepository.getPageIdsWithBackgrounds(written.toList())
     }
 
     // endregion

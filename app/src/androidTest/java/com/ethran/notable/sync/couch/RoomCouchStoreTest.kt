@@ -442,6 +442,31 @@ class RoomCouchStoreTest {
     private val pdfBytes = "%PDF-1.7\nlecture notes\n".toByteArray()
     private val pdfAssetId get() = CouchAssetId.forBytes(pdfBytes)
 
+    @Test
+    fun arrivingBackgroundBytesNotifyOnlyFileBackedReferencingPagesWithoutChangingTheirClocks() {
+        val applied = mutableListOf<Set<String>>()
+        val notifying = RoomCouchStore(repository, db.kvDao(), deviceId = "boox",
+            imagesFolder = { images }, backgroundsFolder = { backgrounds },
+            onPagesApplied = { applied += it })
+        val pdfPath = CouchBackgroundFiles.localPathFor(pdfAssetId, "pdf0", backgrounds)!!
+        notifying.apply(CouchDocId.page("pdf"), CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)
+            .copy(background = pdfAssetId, backgroundType = "pdf0")))
+        notifying.apply(CouchDocId.page("background-image"), CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)
+            .copy(background = pdfAssetId, backgroundType = "image")))
+        notifying.apply(CouchDocId.page("native"), CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)
+            .copy(background = pdfPath, backgroundType = "native")))
+        notifying.apply(CouchDocId.page("unrelated"), CouchDocBody.Page(page(emptyList(), notebookId = "nb1", updatedAt = 5)
+            .copy(background = File(backgrounds, "unrelated.pdf").absolutePath, backgroundType = "pdf0")))
+        val before = runBlocking { repository.pageRepository.getById("pdf")!!.updatedAt }
+        applied.clear()
+
+        notifying.apply(pdfAssetId, CouchDocBody.Asset(CouchAsset.of(pdfBytes, at = stamp(6), updatedBy = "boox")))
+
+        assertEquals(listOf(setOf("pdf", "background-image")), applied)
+        assertEquals(before, runBlocking { repository.pageRepository.getById("pdf")!!.updatedAt })
+        assertEquals(before, runBlocking { repository.pageRepository.getById("background-image")!!.updatedAt })
+    }
+
     /**
      * The page an imported book produces: drawn on one page of a document kept next to the
      * database, and named by the path the importer wrote.

@@ -350,6 +350,7 @@ private fun decodeBitmapFromFile(file: File): Bitmap? {
 fun savePageThumbnail(
     context: Context, bitmap: Bitmap, pageID: String, mode: PreviewSaveMode = PreviewSaveMode.REGULAR,
     targetFile: File = getThumbnailFile(context, pageID), sourceClock: Long? = null,
+    commit: (File, File) -> Boolean = { temporary, destination -> temporary.renameTo(destination) },
 ): Boolean {
     ensureNotMainThread("savePageThumbnail")
     val finalFile = targetFile
@@ -374,7 +375,7 @@ fun savePageThumbnail(
             // Stamp the snapshot clock before the atomic rename: neither an overlapping edit
             // nor a failed save may turn an older image into a seemingly current preview.
             if (sourceClock != null) check(tempFile.setLastModified(sourceClock))
-            saved = tempFile.renameTo(finalFile)
+            saved = commit(tempFile, finalFile)
             if (saved) log.d("savePageThumbnail: thumbnail saved for $pageID")
         } else {
             log.e("savePageThumbnail: temp file missing or empty, aborting rename")

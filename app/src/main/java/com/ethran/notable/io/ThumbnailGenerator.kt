@@ -17,8 +17,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,7 +24,8 @@ import javax.inject.Singleton
 enum class ThumbnailEnsureResult {
     GENERATED,
     UP_TO_DATE,
-    PAGE_NOT_FOUND
+    PAGE_NOT_FOUND,
+    SUPERSEDED,
 }
 
 @EntryPoint
@@ -40,9 +39,8 @@ interface ThumbnailGeneratorEntryPoint {
 /**
  * Responsible for generating and caching thumbnails for pages.
  *
- * Uses a [Mutex] and [CompletableDeferred] to prevent redundant concurrent generation
- * of the same thumbnail. Staleness is determined by comparing page modification time
- * and scroll position against stored metadata.
+ * A single lock fences invalidation against final publication. Concurrent requests share
+ * one render; source clocks and explicit sync invalidation keep the derived cache current.
  */
 @Singleton
 class ThumbnailGenerator @Inject constructor(
@@ -52,8 +50,10 @@ class ThumbnailGenerator @Inject constructor(
     @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher
 ) {
     private val log = ShipBook.getLogger("ThumbnailGenerator")
-    private val inFlightLock = Mutex()
+    private val cacheLock = Any()
     private val inFlight = mutableMapOf<String, CompletableDeferred<ThumbnailEnsureResult>>()
+    private val generations = mutableMapOf<String, Long>()
+    private val invalidated = mutableSetOf<String>()
 
     private val _thumbnailUpdated = MutableSharedFlow<String>(extraBufferCapacity = 64)
 
@@ -61,6 +61,20 @@ class ThumbnailGenerator @Inject constructor(
      * Flow of page IDs whose thumbnails have been updated (generated or refreshed).
      */
     val thumbnailUpdated = _thumbnailUpdated.asSharedFlow()
+
+    /** Content can merge or an asset can arrive without advancing the page's maximum clock. */
+    fun invalidate(pageIds: Collection<String>): Set<String> = synchronized(cacheLock) {
+        pageIds.filterTo(linkedSetOf()) { id ->
+            val file = getContentPreviewFile(context, id)
+            val warm = file.exists() || id in inFlight
+            if (warm) {
+                generations[id] = (generations[id] ?: 0L) + 1
+                invalidated += id
+                file.delete()
+            }
+            warm
+        }
+    }
 
 
     /**
@@ -75,42 +89,34 @@ class ThumbnailGenerator @Inject constructor(
             return ThumbnailEnsureResult.UP_TO_DATE
         }
 
-        val existing = inFlightLock.withLock { inFlight[pageId] }
-        if (existing != null) {
-            return existing.await()
-        }
-
         val marker = CompletableDeferred<ThumbnailEnsureResult>()
-        val acquired = inFlightLock.withLock {
-            inFlight.putIfAbsent(
-                pageId,
-                marker
-            ) == null // it will return null if there wasn't any value
+        val (existing, generation) = synchronized(cacheLock) {
+            inFlight.putIfAbsent(pageId, marker) to (generations[pageId] ?: 0L)
         }
-
-        if (!acquired) {
-            return inFlightLock.withLock { inFlight[pageId] }?.await()
-                ?: ThumbnailEnsureResult.UP_TO_DATE
-        }
+        if (existing != null) return existing.await()
 
         try {
-            val result = generate(page, mode)
-            if (result == ThumbnailEnsureResult.GENERATED) {
-                _thumbnailUpdated.tryEmit(pageId)
-            }
+            val result = generate(page, mode, generation)
+            if (result == ThumbnailEnsureResult.GENERATED) _thumbnailUpdated.emit(pageId)
+            clearInFlight(pageId, marker)
             marker.complete(result)
             return result
         } catch (t: Throwable) {
+            clearInFlight(pageId, marker)
             marker.completeExceptionally(t)
             throw t
         } finally {
-            inFlightLock.withLock { inFlight.remove(pageId) }
+            clearInFlight(pageId, marker)
         }
+    }
+
+    private fun clearInFlight(pageId: String, marker: CompletableDeferred<ThumbnailEnsureResult>) = synchronized(cacheLock) {
+        if (inFlight[pageId] === marker) inFlight.remove(pageId)
     }
 
 
     private suspend fun generate(
-        page: Page, mode: PreviewSaveMode
+        page: Page, mode: PreviewSaveMode, generation: Long
     ): ThumbnailEnsureResult {
         val bitmap = pageContentRenderer.renderPageBitmap(
             pageId = page.id,
@@ -119,12 +125,25 @@ class ThumbnailGenerator @Inject constructor(
                 maxHeightPx = null
             )
         )
+        var superseded = false
         bitmap.useAndRecycle { rendered ->
-            check(savePageThumbnail(context, rendered, page.id, mode,
-                targetFile = getContentPreviewFile(context, page.id), sourceClock = page.updatedAt.time)) {
+            val saved = savePageThumbnail(context, rendered, page.id, mode,
+                targetFile = getContentPreviewFile(context, page.id), sourceClock = page.updatedAt.time,
+                commit = { temporary, destination -> synchronized(cacheLock) {
+                    if ((generations[page.id] ?: 0L) != generation) {
+                        superseded = true
+                        false
+                    } else temporary.renameTo(destination).also { committed ->
+                        if (committed) {
+                            invalidated.remove(page.id)
+                        }
+                    }
+                } })
+            check(saved || superseded) {
                 "Could not save content preview"
             }
         }
+        if (superseded) return ThumbnailEnsureResult.SUPERSEDED
         log.d("Thumbnail generated for pageId=${page.id}")
         return ThumbnailEnsureResult.GENERATED
     }
@@ -138,10 +157,10 @@ class ThumbnailGenerator @Inject constructor(
      * asks on every mount, it would re-render every visible cover on every visit to the Library.
      */
     private suspend fun isThumbnailStale(page: Page): Boolean = withContext(ioDispatcher) {
-        val thumbFile = getContentPreviewFile(context, page.id)
-        if (!thumbFile.exists()) return@withContext true
-
-        return@withContext thumbFile.lastModified() < page.updatedAt.time
+        synchronized(cacheLock) {
+            val thumbFile = getContentPreviewFile(context, page.id)
+            page.id in invalidated || !thumbFile.exists() || thumbFile.lastModified() < page.updatedAt.time
+        }
     }
 
 

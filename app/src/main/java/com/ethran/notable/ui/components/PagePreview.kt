@@ -1,5 +1,6 @@
 package com.ethran.notable.ui.components
 
+import android.content.Context
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -18,11 +19,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
+import coil.request.CachePolicy
 import com.ethran.notable.editor.utils.getContentPreviewFile
 import com.ethran.notable.io.ThumbnailGeneratorEntryPoint
 import dagger.hilt.EntryPoints
 import kotlinx.coroutines.flow.filter
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.io.File
+
+/** The canonical file is already a cache; a same-clock merge must not reuse older Coil bytes. */
+internal fun contentPreviewRequest(context: Context, file: File, refresh: Long): ImageRequest =
+    ImageRequest.Builder(context).data(file)
+        .memoryCachePolicy(CachePolicy.DISABLED).diskCachePolicy(CachePolicy.DISABLED)
+        .memoryCacheKey("${file.absolutePath}:${file.lastModified()}:$refresh")
+        .diskCacheKey("${file.absolutePath}:${file.lastModified()}:$refresh")
+        .build()
 
 /**
  * Renders a preview image for a page.
@@ -93,11 +104,7 @@ fun PagePreview(
     }
 
     val painter = rememberAsyncImagePainter(
-        model = ImageRequest.Builder(context).data(imgFile)
-            // Use the refreshTrigger in the cache key to bypass Coil's cache
-            .memoryCacheKey("${imgFile.absolutePath}:${imgFile.lastModified()}:$refreshTrigger")
-            .diskCacheKey("${imgFile.absolutePath}:${imgFile.lastModified()}:$refreshTrigger")
-            .build()
+        model = contentPreviewRequest(context, imgFile, refreshTrigger)
     )
 
     Image(

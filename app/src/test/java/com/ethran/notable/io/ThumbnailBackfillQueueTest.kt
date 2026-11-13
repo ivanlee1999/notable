@@ -15,6 +15,22 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ThumbnailBackfillQueueTest {
+    @Test fun aSupersededRenderGetsOneNewCheckEvenWithoutAnotherEnqueue() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val generator = mockk<ThumbnailGenerator>()
+        var checks = 0
+        coEvery { generator.ensureThumbnail("page", any()) } answers {
+            if (++checks == 1) ThumbnailEnsureResult.SUPERSEDED else ThumbnailEnsureResult.GENERATED
+        }
+        try {
+            val queue = ThumbnailBackfillQueue(scope, dispatcher, generator, mockk<AppEventBus>(relaxed = true))
+            queue.enqueue(listOf("page"))
+            advanceUntilIdle()
+            assertEquals(2, checks)
+        } finally { scope.cancel() }
+    }
+
     @Test fun changesDuringRenderingCoalesceIntoOneFreshnessCheckAfterwards() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)

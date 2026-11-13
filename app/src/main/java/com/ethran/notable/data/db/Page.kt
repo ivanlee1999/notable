@@ -208,6 +208,9 @@ interface PageDao {
     )
     suspend fun getFileBackgrounds(): List<FileBackground>
 
+    @Query("SELECT id FROM page WHERE background IN (:paths) AND backgroundType != 'native'")
+    suspend fun getPageIdsWithBackgrounds(paths: List<String>): List<String>
+
     @Insert
     suspend fun create(page: Page): Long
 
@@ -334,6 +337,8 @@ class PageRepository @Inject constructor(
     suspend fun getFileBackgrounds(): List<FileBackground> {
         return db.getFileBackgrounds()
     }
+
+    suspend fun getPageIdsWithBackgrounds(paths: List<String>): List<String> = db.getPageIdsWithBackgrounds(paths)
 
     suspend fun getWithDataById(pageId: String): PageWithData? {
         val data = db.getPageWithDataById(pageId)
