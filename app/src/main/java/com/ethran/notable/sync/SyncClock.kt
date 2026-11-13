@@ -66,6 +66,10 @@ object SyncClock {
     /** This device's corrected clock as a [Date] — the form the Room entities store. */
     fun nowDate(): Date = Date(nowMs())
 
+    /** A locally authored revision must sort after the record it edits, even in the same tick. */
+    fun afterDate(previous: Date, now: Date = nowDate()): Date =
+        if (now.after(previous)) now else Date(Math.addExact(previous.time, 1L))
+
     /** This device's corrected clock as the ISO-8601 instant the wire format uses. */
     fun nowIso(): String = now().toString()
 

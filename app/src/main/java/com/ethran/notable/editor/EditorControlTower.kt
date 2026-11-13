@@ -153,14 +153,12 @@ class EditorControlTower(
                 height = TextBoxLayout.measuredHeight(
                     block.text.orEmpty(), width.toFloat(), metrics
                 ),
-                updatedAt = SyncClock.nowDate(),
                 deviceId = textEditState.deviceId,
             )
         } else {
             block.copy(
                 x = ((block.x ?: 0) + drag.dx).coerceAtLeast(0),
                 y = ((block.y ?: 0) + drag.dy).coerceAtLeast(0),
-                updatedAt = SyncClock.nowDate(),
                 deviceId = textEditState.deviceId,
             )
         }

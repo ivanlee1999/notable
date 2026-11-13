@@ -1,6 +1,9 @@
 package com.ethran.notable.editor.text
 
 import com.ethran.notable.data.db.Block
+import com.ethran.notable.sync.couch.CouchBlock
+import com.ethran.notable.sync.couch.CouchMerge
+import com.ethran.notable.sync.couch.CouchPage
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.Date
@@ -79,5 +82,31 @@ class FlowTextTest {
         assertEquals(listOf("before", "first-id", "second-id", "after"), FlowText.ordered(final).map { it.id })
         assertEquals(listOf("first-id", "second-id"), plan.resultIds)
         assertEquals(plan.blocks.size, plan.blocks.map { it.id }.distinct().size)
+    }
+
+    @Test fun localTextWinsSyncAfterASameTickOrBackwardClockEdit() {
+        fun page(block: Block) = CouchPage(notebookId = "book", blocks = listOf(CouchBlock(
+            id = block.id, kind = block.kind, orderKey = block.orderKey, text = block.text,
+            createdAt = block.createdAt.toInstant().toString(), updatedAt = block.updatedAt.toInstant().toString(), deviceId = block.deviceId)),
+            createdAt = "1970-01-01T00:00:00Z", updatedAt = "1970-01-01T00:00:01Z", updatedBy = "device")
+        for (prior in listOf(now, Date(now.time + 500))) {
+            val original = block("paragraph", "z").copy(updatedAt = prior, deviceId = "device")
+            val edited = FlowText.reconcile("page", listOf(original), listOf(original), "a", now, "device").blocks.single()
+            assertTrue(edited.updatedAt.after(prior))
+            assertEquals("a", CouchMerge.mergePage(page(original), page(edited)).blocks.single { it.kind == "md" }.text)
+            assertEquals("a", CouchMerge.mergePage(page(edited), page(original)).blocks.single { it.kind == "md" }.text)
+        }
+    }
+
+    @Test fun localReindexAdvancesEachChangedBoundaryWithoutRestampingUntouchedRows() {
+        val original = block("paragraph", "First", "a").copy(updatedAt = Date(500))
+        val boundary = block("audio", "", "b").copy(kind = "audio", updatedAt = Date(900))
+        val positioned = block("box", "Pinned").copy(x = 10, y = 20, updatedAt = Date(1000))
+        val plan = FlowText.reconcile("page", listOf(original, boundary, positioned), listOf(original),
+            "First\n\nSecond", now, "device", newId = { "fresh" })
+        assertTrue(plan.blocks.single { it.id == original.id }.updatedAt.after(original.updatedAt))
+        assertTrue(plan.blocks.single { it.id == boundary.id }.updatedAt.after(boundary.updatedAt))
+        assertFalse(plan.blocks.any { it.id == positioned.id })
+        assertTrue(FlowText.reconcile("page", listOf(original), listOf(original), "First", now, "device").blocks.isEmpty())
     }
 }

@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.time.Instant
+import java.util.Date
 
 /**
  * The stamp-time half of protocol §7.1: a measured skew stops being a sentence in the log and
@@ -18,6 +19,25 @@ import java.time.Instant
  * stamp is made, which is what these assert.
  */
 class SyncClockTest {
+
+    @Test fun `local revisions advance past the same millisecond and backward clock`() {
+        val previous = Date(500)
+        assertEquals(Date(501), SyncClock.afterDate(previous, Date(500)))
+        assertEquals(Date(501), SyncClock.afterDate(previous, Date(100)))
+        assertEquals(Date(500), previous)
+    }
+
+    @Test fun `local revisions keep an already later corrected clock`() {
+        assertEquals(Date(600), SyncClock.afterDate(Date(500), Date(600)))
+    }
+
+    @Test fun `undo advances past the currently held revision and its older source snapshot`() {
+        val original = Date(500)
+        val changed = SyncClock.afterDate(original, Date(500))
+        val undo = SyncClock.afterDate(maxOf(original, changed), Date(500))
+        assertEquals(Date(502), undo)
+        assertTrue(undo.after(changed))
+    }
 
     @Before
     fun clearClock() = SyncClock.reset()

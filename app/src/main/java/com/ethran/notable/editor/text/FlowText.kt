@@ -2,6 +2,7 @@ package com.ethran.notable.editor.text
 
 import com.ethran.notable.data.db.Block
 import com.ethran.notable.markdown.MarkdownBlocks
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.TextVersions
 import java.util.Date
 import java.util.UUID
@@ -64,10 +65,10 @@ object FlowText {
         val rewritten = text.mapIndexed { index, paragraph ->
             val base = assigned[index]
             val latest = base?.let { currentById[it.id] }
-            val target = latest ?: newId().let { id -> currentById[id] ?: Block(id = id, pageId = pageId, createdAt = now) }
+            val target = latest ?: newId().let { id -> currentById[id] ?: Block(id = id, pageId = pageId, createdAt = now, updatedAt = now) }
             if ((base != null && paragraph == base.text.orEmpty()) || paragraph == target.text.orEmpty()) target
             else target.copy(
-                text = paragraph, updatedAt = now, deviceId = deviceId,
+                text = paragraph, updatedAt = SyncClock.afterDate(maxOf(target.updatedAt, base?.updatedAt ?: target.updatedAt), now), deviceId = deviceId,
             )
         }
         val oldIds = original.map { it.id }.toSet()
@@ -84,7 +85,8 @@ object FlowText {
         val after = ordered.drop(first).filterNot { it.id in replacedIds }
         val reindexed = (before + rewritten + after).mapIndexed { index, block ->
             val key = (index + 1).toString().padStart(10, '0')
-            if (block.orderKey == key) block else block.copy(orderKey = key, updatedAt = now, deviceId = deviceId)
+            if (block.orderKey == key) block else block.copy(orderKey = key,
+                updatedAt = SyncClock.afterDate(block.updatedAt, now), deviceId = deviceId)
         }
         return Plan(reindexed.filter { it != currentById[it.id] }, removed, rewritten.map { it.id })
     }

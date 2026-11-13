@@ -119,7 +119,6 @@ class TextEditState(
         val written = block.copy(
             text = typed,
             height = TextBoxLayout.measuredHeight(typed, width, metrics),
-            updatedAt = SyncClock.nowDate(),
             deviceId = deviceId,
         )
         page.addOrUpdateBlocks(listOf(written))

@@ -44,14 +44,19 @@ class FlowEditorSurfaceTest {
         val source = MutableStateFlow(emptyList<Block>())
         every { repository.nextRevision() } answers { sequence.incrementAndGet() }
         every { repository.observe(any()) } returns source
-        coEvery { repository.load("page") } returns FlowDocument("page", "book", listOf(FlowPart.Text("run")),
-            mapOf("run" to FlowRun("run", emptyList(), "")), false, emptyList())
+        val canonical = AtomicReference(FlowDocument("page", "book", listOf(FlowPart.Text("run")),
+            mapOf("run" to FlowRun("run", emptyList(), "")), false, emptyList()))
+        coEvery { repository.load("page") } answers { canonical.get() }
         coEvery { repository.persist(any()) } returns Unit
         coEvery { repository.save(any()) } coAnswers {
             val draft = firstArg<FlowDraft>(); saved += draft
             if (failSave) throw IOException("disk unavailable")
             val run = draft.runs.single()
-            FlowSaveResult(mapOf("run" to listOf(Block(id = "written", pageId = "page", text = run.source))), emptySet(), emptyList())
+            val written = listOf(Block(id = "written", pageId = "page", text = run.source))
+            // Blur refreshes clean text from disk. Model that disk write instead of returning
+            // the initial empty fixture after an autosave won the race with the button tap.
+            canonical.set(canonical.get().copy(runs = mapOf("run" to FlowRun("run", written, run.source)), revision = draft.revision))
+            FlowSaveResult(mapOf("run" to written), emptySet(), emptyList())
         }
         coEvery { journal.createEntry(any(), any()) } returns ("new-book" to "new-page")
         model = FlowTextViewModel(repository, journal, mockk<PageContentRenderer>(), scope, Dispatchers.IO)
@@ -77,7 +82,10 @@ class FlowEditorSurfaceTest {
             }
         }
         compose.onNodeWithText("+ New thought").performClick()
-        compose.waitUntil(5_000) { opened.get() != null }
+        try { compose.waitUntil(5_000) { opened.get() != null } }
+        catch (failure: Throwable) {
+            throw AssertionError("New thought did not navigate: state=${model.state.value}; saved=${saved.map { it.runs.map { run -> run.source } }}", failure)
+        }
         assertEquals("new-page" to "new-book", opened.get())
         assertTrue(saved.last().runs.single().source.contains("\n"))
         assertTrue(saved.last().runs.single().source.contains("- [ ]"))

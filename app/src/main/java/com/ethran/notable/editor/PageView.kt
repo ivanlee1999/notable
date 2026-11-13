@@ -26,6 +26,7 @@ import com.ethran.notable.data.datastore.GlobalAppSettings
 import com.ethran.notable.data.db.Block
 import com.ethran.notable.data.db.Image
 import com.ethran.notable.data.db.Stroke
+import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.data.model.PageSize
 import com.ethran.notable.data.model.SimplePointF
@@ -707,17 +708,21 @@ class PageView(
     }
 
     /**
-     * Adds or replaces text boxes. One method for both because a box is upserted by id: the row a
-     * box is edited into is the row it was created as.
+     * Adds or replaces locally authored text boxes, including undo/redo snapshots. Remote and
+     * imported records are applied through the repositories and never stamped here.
      */
     fun addOrUpdateBlocks(blocksToWrite: List<Block>) {
         if (blocksToWrite.isEmpty()) return
-        val byId = blocksToWrite.associateBy { it.id }
         val existing = blocks
+        val currentById = existing.associateBy { it.id }
+        val now = SyncClock.nowDate()
+        val authored = blocksToWrite.map { block -> block.copy(updatedAt = SyncClock.afterDate(
+            maxOf(block.updatedAt, currentById[block.id]?.updatedAt ?: block.updatedAt), now)) }
+        val byId = authored.associateBy { it.id }
         val replaced = existing.map { byId[it.id] ?: it }
-        val added = blocksToWrite.filterNot { written -> existing.any { it.id == written.id } }
+        val added = authored.filterNot { written -> existing.any { it.id == written.id } }
         blocks = replaced + added
-        pageDataManager.saveBlocksToDb(blocksToWrite)
+        pageDataManager.saveBlocksToDb(authored)
         // Recomputed rather than nudged, for the reason [addImage] gives: an edit is exactly what
         // puts a box below the sheet or past its right edge, and the page has to be able to
         // scroll to where it now ends.
