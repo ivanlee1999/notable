@@ -237,7 +237,8 @@ object CouchMerge {
         // which is on top. A document orders by where its paragraphs are, and a creation instant
         // cannot say "between these two" — so a block carries its own key and the merge sorts on
         // it, bytewise like every other string here (§4).
-        val blocks = unionById(a.blocks, b.blocks, id = { it.id }) { x, y ->
+        val versions = TextVersions.recoveries(a.blocks, b.blocks, removedBlockIds)
+        val blocks = unionById(a.blocks + versions, b.blocks, id = { it.id }) { x, y ->
             preferredBlock(x, y)
         }
             .filter { it.id !in removedBlockIds }

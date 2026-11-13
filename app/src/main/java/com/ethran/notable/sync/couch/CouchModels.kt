@@ -196,8 +196,8 @@ data class CouchAudioSegment(
  * block that declares both sits at that point on the canvas, like a placed image.
  *
  * Blocks merge exactly the way [CouchImage]s do — union by id, tombstones win, whole-element
- * last-writer-wins — with one difference: they are ordered by [orderKey] rather than by creation
- * time. See `CouchMerge.mergePage`.
+ * last-writer-wins — ordered by [orderKey] rather than by creation time. Markdown source revisions
+ * also retain hidden [TextVersions] snapshots when they diverge or are removed.
  */
 @Serializable
 data class CouchBlock(
@@ -207,7 +207,7 @@ data class CouchBlock(
      */
     val id: String,
     /**
-     * `md` | `image` | `audio` | `ink` | `link`.
+     * `md` | `image` | `audio` | `ink` | `link` | `text-version`.
      *
      * A string rather than an enum, and an unrecognized value is carried verbatim and drawn as a
      * placeholder — never dropped, never coerced. This is the field that lets a fifth kind ship on
@@ -232,7 +232,7 @@ data class CouchBlock(
      */
     val orderKey: String = "",
     /**
-     * Markdown *source*, for `kind == "md"`; null otherwise.
+     * Markdown *source*, for `kind == "md"` or a retained `text-version` snapshot.
      *
      * Not a parsed tree, not rendered HTML, not a table of attributed runs. Those would oblige two
      * implementations to agree on a parser — which the conformance vectors could not pin, and which
