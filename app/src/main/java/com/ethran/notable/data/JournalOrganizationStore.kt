@@ -129,7 +129,7 @@ fun encodeOrganization(entry: OrganizationEntry): JsonObject {
 fun decodeOrganization(raw: JsonObject): OrganizationEntry {
     fun string(obj: JsonObject, key: String): String {
         val value = obj[key] as? JsonPrimitive
-        require(value?.isString == true) { "Invalid organization $key" }
+        require(value != null && value.isString) { "Invalid organization $key" }
         return value.content
     }
     fun number(obj: JsonObject, key: String): Long {
@@ -223,9 +223,10 @@ class JournalOrganizationStore @Inject constructor(private val db: AppDatabase) 
     }
 
     private suspend fun observeCounter(value: Long) {
-        val stored = dao.get(COUNTER_KEY)?.value?.toLongOrNull()
+        val row = dao.get(COUNTER_KEY)
+        val stored = row?.value?.toLongOrNull()
         check(stored == null || stored in 0..MAX_ORGANIZATION_NUMBER) { "Invalid organization clock" }
-        check(dao.get(COUNTER_KEY) == null || stored != null) { "Invalid organization clock" }
+        check(row == null || stored != null) { "Invalid organization clock" }
         if (value > (stored ?: 0)) dao.set(Kv(COUNTER_KEY, value.toString()))
     }
 
