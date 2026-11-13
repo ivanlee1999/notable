@@ -37,6 +37,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ethran.notable.navigation.NavigationDestination
+import com.ethran.notable.editor.canvas.PenInputDiagnostics
 import com.ethran.notable.ui.viewmodels.DeviceSnapshot
 import com.ethran.notable.ui.viewmodels.StrokeStyleInfo
 import com.ethran.notable.ui.viewmodels.SystemInformationViewModel
@@ -129,6 +130,7 @@ fun SystemInformationContent(
                     SectionTitle("Basic System Info")
                     InfoRow("Manufacturer", Build.MANUFACTURER)
                     InfoRow("Model", Build.MODEL)
+                    InfoRow("Firmware", Build.DISPLAY)
                     InfoRow("Build Type", Build.TYPE)
                     InfoRow("SDK", Build.VERSION.SDK_INT.toString())
                     InfoRow("Actual Device Class", info.actualDeviceClass)
@@ -167,6 +169,11 @@ fun SystemInformationContent(
 
                     // 3) Writing info (Input/Pen + Stroke Styles)
                     SectionTitle("Writing Info")
+                    val penInput = PenInputDiagnostics.snapshot()
+                    InfoRow("Input backend", penInput.backend)
+                    InfoRow("Native callbacks observed", penInput.rawCallbacks.toString())
+                    InfoRow("Compatibility strokes", penInput.frameworkStrokes.toString())
+                    InfoRow("Last Android event age (ms)", penInput.latestEventAgeMs?.toString())
                     // Input / Pen
                     InfoRow("Touchpad Enabled", info.touchpadEnabled.toYesNo())
                     InfoRow("Support Active Pen", info.supportActivePen.toYesNo())
