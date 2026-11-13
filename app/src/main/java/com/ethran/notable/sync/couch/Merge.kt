@@ -302,8 +302,15 @@ object CouchMerge {
         val mx = millis(x.updatedAt)
         val my = millis(y.updatedAt)
         if (mx != my) return if (mx > my) x else y
-        return if (byteCompare(blockTiebreak(x), blockTiebreak(y)) >= 0) x else y
+        val keyOrder = byteCompare(blockTiebreak(x), blockTiebreak(y))
+        if (keyOrder != 0) return if (keyOrder > 0) x else y
+        return if (byteCompare(blockPresence(x), blockPresence(y)) >= 0) x else y
     }
+
+    // Only resolves formerly equal keys; existing source ordering stays unchanged.
+    private fun blockPresence(b: CouchBlock): String = listOf(
+        b.startedAt, b.imageAssetId, b.targetNotebookId, b.targetPageId, b.text,
+    ).joinToString("") { if (it == null) "0" else "1" }
 
     /**
      * Total order over every field of a stroke. Floats go in as their IEEE-754 bit patterns:
@@ -339,7 +346,7 @@ object CouchMerge {
      * or `asset:<hex>`-shaped, timestamps are ISO-8601, integers are decimal, and `kind` is
      * normatively `[a-z][a-z0-9-]*`, and a link's targets are ids — so with exactly one
      * separator-bearing component, and it terminal, the map from block to key is injective and
-     * this order is genuinely total.
+     * nullable strings are distinguished by [blockPresence] when this key ties.
      */
     private fun blockTiebreak(b: CouchBlock): String = listOf(
         b.deviceId, b.createdAt, b.updatedAt, b.kind, b.orderKey,

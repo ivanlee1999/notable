@@ -30,6 +30,15 @@ class TextVersionsTest {
         assertEquals(listOf(two), CouchMerge.mergePage(page(listOf(one)), page(listOf(two))).blocks)
     }
 
+    @Test fun absentAndEmptySourcesHaveADeterministicWinner() {
+        val absent = page(listOf(block(null, 1)))
+        val empty = page(listOf(block("", 1)))
+        val merged = CouchMerge.mergePage(absent, empty)
+        assertEquals(merged, CouchMerge.mergePage(empty, absent))
+        assertEquals("", merged.blocks.single { it.kind == "md" }.text)
+        assertEquals(merged, CouchMerge.mergePage(merged, absent))
+    }
+
     @Test fun divergentSourcesRemainExactAndHidden() {
         val a = block("caf\u00e9\n\nA", 1); val b = block("cafe\u0301\n\nB", 2, "ipad")
         val result = CouchMerge.mergePage(page(listOf(a)), page(listOf(b)))

@@ -6188,6 +6188,97 @@
         "updatedAt": "2026-11-12T10:00:09Z",
         "updatedBy": "boox"
       }
+    },
+    {
+      "name": "page-text-version-null-empty-tied-source",
+      "kind": "page",
+      "why": "Absent and empty Markdown sources at the same clock have a deterministic winner; the empty source remains recoverable.",
+      "a": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox"
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "b": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      },
+      "expected": {
+        "type": "page",
+        "schema": 1,
+        "notebookId": "nb-1",
+        "background": "blank",
+        "backgroundType": "native",
+        "strokes": [],
+        "deletedStrokes": [],
+        "images": [],
+        "deletedImages": [],
+        "blocks": [
+          {
+            "id": "p-source",
+            "kind": "md",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          },
+          {
+            "id": "text-version:p-source:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "kind": "text-version",
+            "orderKey": "a",
+            "createdAt": "2026-11-12T10:00:00Z",
+            "updatedAt": "2026-11-12T10:00:09Z",
+            "deviceId": "boox",
+            "text": ""
+          }
+        ],
+        "deletedBlocks": [],
+        "createdAt": "2026-11-12T10:00:00Z",
+        "updatedAt": "2026-11-12T10:00:09Z",
+        "updatedBy": "boox"
+      }
     }
   ]
 }
