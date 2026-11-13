@@ -3,8 +3,6 @@ package com.ethran.notable.data
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
-import com.ethran.notable.APP_SETTINGS_KEY
-import com.ethran.notable.data.datastore.AppSettings
 import com.ethran.notable.io.createFileFromContentUri
 import com.ethran.notable.io.isImageUri
 import com.ethran.notable.io.saveImageFromContentUri
@@ -124,15 +122,9 @@ suspend fun deletePage(
     couchSync.notePageDeleted(page.notebookId)
 
     // remove from quick nav
-    val proxy = appRepository.kvProxy
-    val settings = proxy.get(APP_SETTINGS_KEY, AppSettings.serializer())
-    if (settings != null && settings.quickNavPages.contains(pageId)) {
-        proxy.setKv(
-            APP_SETTINGS_KEY,
-            settings.copy(quickNavPages = settings.quickNavPages - pageId),
-            AppSettings.serializer()
-        )
-    }
+    appRepository.kvProxy.enqueueAppSettings { current ->
+        current.copy(quickNavPages = current.quickNavPages - pageId)
+    }.await()
     coroutineScope {
         launch {
             val imgFileThumb = File(filesDir, "pages/previews/thumbs/$pageId")

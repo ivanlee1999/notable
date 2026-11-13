@@ -73,7 +73,7 @@ class PageCreationRaceTest {
             trashRepository = trashRepositoryFor(db),
             kvProxy = KvProxy(
                 KvRepository(db.kvDao(), ApplicationProvider.getApplicationContext()),
-                CryptoHelper()
+                CryptoHelper(), kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
             ),
             db = db,
         )

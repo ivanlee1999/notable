@@ -21,6 +21,10 @@ import com.ethran.notable.utils.hasFilePermission
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import com.ethran.notable.di.ApplicationScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -107,7 +111,8 @@ class KvRepository @Inject constructor(
 @Singleton
 class KvProxy @Inject constructor(
     private val kvRepository: KvRepository,
-    private val cryptoHelper: CryptoHelper
+    private val cryptoHelper: CryptoHelper,
+    @param:ApplicationScope private val applicationScope: CoroutineScope,
 ) {
     private val log = ShipBook.getLogger("KvProxy")
     private val json = Json {
@@ -153,10 +158,28 @@ class KvProxy @Inject constructor(
         kvRepository.set(Kv(key, jsonValue))
     }
 
-    suspend fun setAppSettings(value: AppSettings) {
-        setKv(APP_SETTINGS_KEY, value, AppSettings.serializer())
-        GlobalAppSettings.update(value)
+    private val appSettingsLock = Any()
+    private var appSettingsTail: Deferred<Unit>? = null
+
+    /** Background housekeeping transforms the latest optimistic snapshot atomically. */
+    fun enqueueAppSettings(transform: (AppSettings) -> AppSettings): Deferred<Unit> = synchronized(appSettingsLock) {
+        enqueueAppSettings(transform(GlobalAppSettings.current))
     }
+
+    /** Claim tap order before dispatch. Old disk completions never republish an older snapshot. */
+    fun enqueueAppSettings(value: AppSettings): Deferred<Unit> = synchronized(appSettingsLock) {
+        GlobalAppSettings.update(value)
+        val previous = appSettingsTail
+        applicationScope.async(Dispatchers.IO) {
+            previous?.join() // A failed earlier write must not prevent the next snapshot saving.
+            setKv(APP_SETTINGS_KEY, value, AppSettings.serializer())
+        }.also { write ->
+            appSettingsTail = write
+            write.invokeOnCompletion { failure -> if (failure != null) log.e("Could not persist app settings", failure) }
+        }
+    }
+
+    suspend fun setAppSettings(value: AppSettings) = enqueueAppSettings(value).await()
 
 
     // Helper functions that handle sync settings, as it needs to be decrypted and encrypted

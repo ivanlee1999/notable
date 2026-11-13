@@ -143,10 +143,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateSettings(newSettings: AppSettings) {
-        GlobalAppSettings.update(newSettings)
-        viewModelScope.launch(Dispatchers.IO) {
-            kvProxy.setAppSettings(newSettings)
-        }
+        kvProxy.enqueueAppSettings(newSettings)
     }
 
     // ----------------- //

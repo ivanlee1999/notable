@@ -87,7 +87,7 @@ class CouchOutboxTest {
         couchDeletionRepository = CouchDeletionRepository(db.couchDeletionDao()),
         couchOutboxRepository = CouchOutboxRepository(db.couchOutboxDao()),
         trashRepository = trashRepositoryFor(db),
-        kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper()),
+        kvProxy = KvProxy(KvRepository(db.kvDao(), context), CryptoHelper(), kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)),
         db = db,
     )
 

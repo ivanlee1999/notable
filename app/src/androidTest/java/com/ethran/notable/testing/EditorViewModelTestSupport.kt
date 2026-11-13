@@ -62,7 +62,7 @@ internal fun createEditorViewModelForTest(
     val folderRepository = FolderRepository(db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
 
     val kvRepository = KvRepository(db.kvDao(), context)
-    val kvProxy = KvProxy(kvRepository, CryptoHelper())
+    val kvProxy = KvProxy(kvRepository, CryptoHelper(), lifecycle.applicationScope())
 
     val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
     val pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao())
@@ -191,6 +191,10 @@ private fun SelectionState.delegate(fieldName: String): Any? {
 /** Own the test's asynchronous work for exactly as long as its Room database is open. */
 internal class EditorTestLifecycle {
     private val jobs = mutableListOf<Job>()
+
+    fun applicationScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also {
+        jobs += it.coroutineContext[Job]!!
+    }
 
     fun track(viewModel: EditorViewModel, applicationScope: CoroutineScope) {
         jobs += viewModel.viewModelScope.coroutineContext[Job]!!

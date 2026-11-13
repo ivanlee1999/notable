@@ -326,9 +326,7 @@ class LibraryViewModel @Inject constructor(
             librarySortOrder = order.name,
             librarySortDescending = descending,
         )
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(updated)
-        }
+        appRepository.kvProxy.enqueueAppSettings(updated)
     }
 
     /**
@@ -340,8 +338,9 @@ class LibraryViewModel @Inject constructor(
      */
     fun setTelemetryConsent(consent: AppSettings.TelemetryConsent) {
         val updated = GlobalAppSettings.current.copy(telemetryConsent = consent)
+        val saving = appRepository.kvProxy.enqueueAppSettings(updated)
         viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(updated)
+            saving.await()
             (context.applicationContext as? Application)?.let {
                 Telemetry.startIfConsented(it, consent)
             }

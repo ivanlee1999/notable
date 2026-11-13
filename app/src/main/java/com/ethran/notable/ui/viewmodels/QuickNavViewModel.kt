@@ -237,8 +237,7 @@ class QuickNavViewModel(
         val currentState = _uiState.value
         val pageId = currentState.currentPageId ?: return
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val settings = GlobalAppSettings.current
+        val settings = GlobalAppSettings.current
             val currentFavorites = settings.quickNavPages
             val isFav = currentFavorites.contains(pageId)
 
@@ -248,15 +247,16 @@ class QuickNavViewModel(
                 currentFavorites + pageId
             }
 
-            // Save to DB
-            kv.setAppSettings(settings.copy(quickNavPages = newFavorites))
+        val saving = kv.enqueueAppSettings(settings.copy(quickNavPages = newFavorites))
 
             // Update UI State locally immediately
             _uiState.update { it.copy(isCurrentPagePinned = !isFav) }
 
+        viewModelScope.launch(Dispatchers.IO) {
+            saving.await()
             // Re-fetch the rich page objects for the ShowPagesRow
             val updatedPinnedPages = appRepository.pageRepository.getByIds(newFavorites)
-            _uiState.update { it.copy(pinnedPages = updatedPinnedPages) }
+            _uiState.update { if (GlobalAppSettings.current.quickNavPages == newFavorites) it.copy(pinnedPages = updatedPinnedPages) else it }
         }
     }
 

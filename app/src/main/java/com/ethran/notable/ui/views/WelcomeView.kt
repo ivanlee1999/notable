@@ -130,9 +130,7 @@ fun WelcomeView(
         onFilePermissionRequest = { requestPermissions() },
         onRefreshModeRequest = { setRecommendedMode() },
         onContinue = {
-            scope.launch(Dispatchers.IO) {
-                viewModel.removeWelcome()
-            }
+            viewModel.removeWelcome()
             goToLibrary()
         }
     )

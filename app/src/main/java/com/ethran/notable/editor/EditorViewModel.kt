@@ -461,11 +461,8 @@ class EditorViewModel @Inject constructor(
      */
     private fun handleEraserWidthChange(width: NibWidth) {
         val updated = GlobalAppSettings.current.copy(eraserWidth = width.key)
-        GlobalAppSettings.update(updated)
+        appRepository.kvProxy.enqueueAppSettings(updated)
         updateDrawingState()
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(updated)
-        }
     }
 
     private fun handleShapeChange(shape: Shape) {
@@ -489,12 +486,9 @@ class EditorViewModel @Inject constructor(
                 else it
             }
         )
-        GlobalAppSettings.update(updated)
+        appRepository.kvProxy.enqueueAppSettings(updated)
         _toolbarState.update {
             it.copy(penSettings = it.penSettings + (presetId to setting))
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(updated)
         }
     }
 
@@ -511,19 +505,11 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun updateCanvasLocked(locked: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(
-                GlobalAppSettings.current.copy(canvasLocked = locked)
-            )
-        }
+        appRepository.kvProxy.enqueueAppSettings(GlobalAppSettings.current.copy(canvasLocked = locked))
     }
 
     private fun updateScribbleToErase(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.kvProxy.setAppSettings(
-                GlobalAppSettings.current.copy(scribbleToEraseEnabled = enabled)
-            )
-        }
+        appRepository.kvProxy.enqueueAppSettings(GlobalAppSettings.current.copy(scribbleToEraseEnabled = enabled))
     }
 
     private fun handleImagePicked(uri: Uri) {

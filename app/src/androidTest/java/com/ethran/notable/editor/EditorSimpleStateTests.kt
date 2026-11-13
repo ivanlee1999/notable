@@ -217,7 +217,7 @@ class EditorSimpleStateTests {
         val folderRepository = FolderRepository(db.folderDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
 
         val kvRepository = KvRepository(db.kvDao(), context)
-        val kvProxy = KvProxy(kvRepository, CryptoHelper())
+        val kvProxy = KvProxy(kvRepository, CryptoHelper(), lifecycle.applicationScope())
 
         val notebookSyncStateRepository = NotebookSyncStateRepository(db.notebookSyncStateDao())
         val pageSyncStateRepository = PageSyncStateRepository(db.pageSyncStateDao())
