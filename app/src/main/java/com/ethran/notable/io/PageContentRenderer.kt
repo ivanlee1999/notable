@@ -22,6 +22,8 @@ import com.ethran.notable.data.model.sheet
 import com.ethran.notable.editor.drawing.drawBg
 import com.ethran.notable.editor.drawing.drawImage
 import com.ethran.notable.editor.text.TextBoxLayout
+import com.ethran.notable.editor.text.FlowText
+import com.ethran.notable.editor.text.FlowTextLayout
 import com.ethran.notable.editor.drawing.StrokeRenderers
 import com.ethran.notable.utils.ensureNotMainThread
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -74,10 +76,24 @@ class PageContentRenderer @Inject constructor(
     suspend fun renderPageBitmap(pageId: String, target: RenderTarget): Bitmap {
         ensureNotMainThread("PageContentRenderer")
         val data = loadPageContent(pageId) ?: throw IllegalArgumentException("Page with id $pageId not found")
+        // The browsing surface lays flow text out natively, so its derived bitmap is only the
+        // preserved canvas. Full raster/PDF export includes both in their document order.
+        return renderContent(if (target is RenderTarget.Thumbnail) data.copy(
+            blocks = data.blocks.filterNot(FlowText::isFlow)) else data, target)
+    }
 
+    /** Preserved paper for the flowing editor; excludes the text that editor lays out natively. */
+    suspend fun renderCanvasBitmap(pageId: String, width: Int): Bitmap {
+        ensureNotMainThread("PageContentRenderer")
+        val data = loadPageContent(pageId) ?: throw IllegalArgumentException("Page with id $pageId not found")
+        return renderContent(data.copy(blocks = data.blocks.filterNot(FlowText::isFlow)), RenderTarget.Thumbnail(width))
+    }
+
+    private suspend fun renderContent(data: PageWithData, target: RenderTarget): Bitmap {
         return withContext(Dispatchers.Default) {
             val (contentWidth, contentHeight) = computeContentDimensions(data)
-            val size = resolveRenderSize(contentWidth, contentHeight, target, data.page.sheet())
+            val size = resolveRenderSize(contentWidth, contentHeight, target, data.page.sheet(),
+                FlowText.ordered(data.blocks).any { it.kind == "md" })
 
             Log.d("PageContentRenderer", "size: ${size.width}, ${size.height}, ${size.scale}")
             createBitmap(size.width, size.height).also { bitmap ->
@@ -163,11 +179,13 @@ class PageContentRenderer @Inject constructor(
             // out blank and a thumbnail says the page is empty.
             TextBoxLayout.textBoxes(data.blocks).forEach { TextBoxLayout.draw(canvas, it, -scroll) }
             data.strokes.forEach { StrokeRenderers.current.drawStroke(canvas, it, -scroll) }
+            FlowTextLayout.draw(canvas, data, -scroll)
         }
     }
 
     // Returns (width, height)
     fun computeContentDimensions(data: PageWithData): Pair<Int, Int> {
+        if (FlowText.ordered(data.blocks).any { it.kind == "md" }) return FlowTextLayout.dimensions(data)
         // The page's own sheet is the floor, not the screen: an export has to contain the page,
         // not whatever device happens to be running the export.
         val sheet = data.page.sheet()
@@ -200,6 +218,7 @@ class PageContentRenderer @Inject constructor(
         contentHeight: Int,
         target: RenderTarget,
         sheet: PageSize,
+        flowing: Boolean = false,
     ): RenderSize {
         return when (target) {
             RenderTarget.Full -> {
@@ -225,7 +244,8 @@ class PageContentRenderer @Inject constructor(
             }
             is RenderTarget.Thumbnail -> {
                 // The sheet's aspect, so a thumbnail is page-shaped rather than device-shaped.
-                val screenRatio = sheet.height.toFloat() / sheet.width.toFloat()
+                val screenRatio = if (flowing) contentHeight.toFloat() / contentWidth.toFloat()
+                    else sheet.height.toFloat() / sheet.width.toFloat()
 
                 val width: Int
                 val height: Int

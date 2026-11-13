@@ -247,7 +247,8 @@ class XoppFile @Inject constructor(
             // other program. The markdown source is written verbatim — the markup is the user's
             // own characters, and a renderer's idea of them is not something to bake into an
             // export nobody can undo.
-            for (block in TextBoxLayout.textBoxes(pageWithData.blocks)) {
+            for (block in TextBoxLayout.textBoxes(pageWithData.blocks) +
+                com.ethran.notable.editor.text.FlowTextLayout.positioned(pageWithData)) {
                 val text = block.text
                 if (text.isNullOrEmpty()) continue
                 val metrics = TextBoxMetrics.STANDARD

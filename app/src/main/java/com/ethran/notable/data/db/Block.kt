@@ -15,6 +15,7 @@ import com.ethran.notable.sync.couch.couchJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.flow.Flow
 import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
@@ -149,6 +150,9 @@ data class BlockPayload(
 
 @Dao
 interface BlockDao {
+    @Query("SELECT * FROM Block WHERE pageId = :pageId ORDER BY orderKey, id")
+    fun observeByPage(pageId: String): Flow<List<Block>>
+
     /** A page's blocks in flow order. `orderKey` then `id`, matching the merge's sort. */
     @Query("SELECT * FROM Block WHERE pageId = :pageId ORDER BY orderKey, id")
     suspend fun getByPage(pageId: String): List<Block>
@@ -226,6 +230,7 @@ interface DeletedBlockDao {
 class BlockRepository @Inject constructor(
     private val db: BlockDao
 ) {
+    fun observeByPage(pageId: String): Flow<List<Block>> = db.observeByPage(pageId)
     suspend fun getByPage(pageId: String): List<Block> = db.getByPage(pageId)
 
     suspend fun upsertAll(blocks: List<Block>) {

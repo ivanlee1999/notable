@@ -5,6 +5,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -15,6 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.dp
+import com.ethran.notable.editor.text.FlowText
+import com.ethran.notable.editor.text.FlowMarkdownView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import coil.compose.rememberAsyncImagePainter
@@ -78,6 +86,12 @@ fun PagePreview(
     val thumbnailGenerator = entryPoint.thumbnailGenerator()
     val pageClock = remember(pageId, entryPoint) { entryPoint.pageRepository().observeUpdatedAt(pageId) }
     val pageVersion by pageClock.collectAsStateWithLifecycle(initialValue = null)
+    val blockFlow = remember(pageId, entryPoint) { entryPoint.blockRepository().observeByPage(pageId) }
+    val blocks by blockFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val canvasFlow = remember(pageId, entryPoint) { entryPoint.pageRepository().observeCanvasContent(pageId) }
+    val canvasContent by canvasFlow.collectAsStateWithLifecycle(initialValue = true)
+    val flow = FlowText.ordered(blocks).filter { it.kind in setOf("md", "link", "image", "audio") }
+    val containsCanvas = canvasContent || blocks.any { it.x != null && it.y != null }
 
     // Key to force Coil to reload the image when the thumbnail changes
     var refreshTrigger by remember(pageId) { mutableLongStateOf(0L) }
@@ -97,8 +111,9 @@ fun PagePreview(
     // asks for can finish and report itself. Observe this page's clock, not its notebook's newest
     // page: an older page can change without moving that maximum. Do not key on refreshTrigger,
     // which would let generation ask for itself again when a peer's clock is in the future.
-    LaunchedEffect(pageId, version, pageVersion) {
+    LaunchedEffect(pageId, version, pageVersion, containsCanvas, flow.isNotEmpty()) {
         if (pageVersion == null) return@LaunchedEffect
+        if (flow.isNotEmpty() && !containsCanvas) return@LaunchedEffect
         if (onPreviewNeeded != null) onPreviewNeeded(pageId)
         else entryPoint.thumbnailBackfillQueue().enqueue(listOf(pageId))
     }
@@ -106,6 +121,21 @@ fun PagePreview(
     val painter = rememberAsyncImagePainter(
         model = contentPreviewRequest(context, imgFile, refreshTrigger)
     )
+
+    if (flow.isNotEmpty()) {
+        Column(modifier.clipToBounds().background(background)) {
+            if (containsCanvas) {
+                val size = painter.intrinsicSize
+                val ratio = if (size.width > 0 && size.height > 0 && size.width.isFinite() && size.height.isFinite())
+                    size.width / size.height else .75f
+                Image(painter, contentDescription = null, contentScale = ContentScale.FillWidth,
+                    alignment = Alignment.TopStart, modifier = Modifier.fillMaxWidth().then(
+                        if (expandToContent) Modifier.aspectRatio(ratio) else Modifier.height(150.dp)))
+            }
+            FlowMarkdownView(flow, Modifier.fillMaxWidth().padding(12.dp))
+        }
+        return
+    }
 
     Image(
         painter = painter,

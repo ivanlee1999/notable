@@ -135,6 +135,10 @@ data class PageWithData(
 // DAO
 @Dao
 interface PageDao {
+    @Query("""SELECT EXISTS(SELECT 1 FROM Stroke WHERE pageId = :pageId)
+        OR EXISTS(SELECT 1 FROM Image WHERE pageId = :pageId)
+        OR EXISTS(SELECT 1 FROM Page WHERE id = :pageId AND backgroundType != 'native')""")
+    fun observeCanvasContent(pageId: String): Flow<Boolean>
     @Query("SELECT * FROM page WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<Page>
 
@@ -307,6 +311,7 @@ class PageRepository @Inject constructor(
     fun lastEditedByNotebookFlow(): Flow<List<NotebookLastEdited>> = db.lastEditedByNotebookFlow()
 
     fun observeUpdatedAt(pageId: String): Flow<Long?> = db.observeUpdatedAt(pageId)
+    fun observeCanvasContent(pageId: String): Flow<Boolean> = db.observeCanvasContent(pageId)
 
     /** One notebook's newest page clock, or null with no pages here — §6.4's liveness signal. */
     suspend fun newestUpdatedAtInNotebook(notebookId: String): Date? =
