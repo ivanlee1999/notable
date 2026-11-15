@@ -432,6 +432,7 @@ class OnyxInputHandler(
             }
 
             Mode.Line -> {
+                val capture = page.markInkCaptureCollected()
                 coroutineScope.launch(Dispatchers.Main.immediate) {
                     CanvasEventBus.drawingInProgress.withLock {
                         val lock = System.currentTimeMillis()
@@ -471,10 +472,11 @@ class OnyxInputHandler(
                         }
                     }
 
-                }
+                }.invokeOnCompletion { page.finishInkCaptureCollected(capture) }
             }
 
             Mode.Draw -> {
+                val capture = page.markInkCaptureCollected()
                 coroutineScope.launch(Dispatchers.Main.immediate) {
                     CanvasEventBus.drawingInProgress.withLock {
                         val lock = System.currentTimeMillis()
@@ -552,7 +554,7 @@ class OnyxInputHandler(
                     coroutineScope.launch(Dispatchers.Default) {
                         CanvasEventBus.commitHistorySignal.emit(Unit)
                     }
-                }
+                }.invokeOnCompletion { page.finishInkCaptureCollected(capture) }
             }
         }
     }

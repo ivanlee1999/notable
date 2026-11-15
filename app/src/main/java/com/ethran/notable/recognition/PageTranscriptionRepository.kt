@@ -75,6 +75,7 @@ class PageTranscriptionRepository @Inject constructor(
     @param:IoDispatcher private val io: CoroutineDispatcher,
     private val contentTagger: com.ethran.notable.data.ContentTagger,
     private val automaticTags: com.ethran.notable.data.AutomaticTagPreferences,
+    private val cloud: CloudTranscriptionRepository? = null,
 ) {
     private val directory = File(context.cacheDir, "handwriting-text")
     private val queue = Channel<String>(Channel.UNLIMITED)
@@ -121,9 +122,16 @@ class PageTranscriptionRepository @Inject constructor(
     } }
 
     /** Only a tiny contact marker runs on pen callbacks; recognition waits off that path. */
-    fun penContact(owner: Any, down: Boolean) {
+    fun penContact(owner: Any, down: Boolean, pageId: String? = null) {
+        cloud?.fence?.contact(owner, pageId, down)
         penContacts.update { if (down) it + owner else it - owner }
     }
+
+    fun stageInk(owner: Any): Map<String, Long> = cloud?.fence?.stage(owner).orEmpty()
+    fun unstageInk(tokens: Map<String, Long>) { cloud?.fence?.unstaged(tokens) }
+
+    fun localWriteQueued(pageIds: Collection<String>): Map<String, Long> = cloud?.fence?.changed(pageIds).orEmpty()
+    fun localWriteSaved(tokens: Map<String, Long>) { cloud?.fence?.saved(tokens) }
 
     fun capturesLocalTags(): Boolean = automaticTags.enabled.value && preferences.options.value.automatic
 
@@ -154,7 +162,9 @@ class PageTranscriptionRepository @Inject constructor(
             val cached = read(pageId)?.takeIf { it.fingerprint == fingerprint }
             if (source.isNotEmpty() && cached == null && options.automatic && canAttempt(pageId, fingerprint)) request(pageId)
             HandwritingPreview(cached?.text?.takeIf { it.isNotBlank() }, options.textPreview)
-        } }.distinctUntilChanged()
+        } }.combine(cloud?.observe(pageId) ?: flowOf(null)) { local, remote ->
+            local.copy(text = remote ?: local.text)
+        }.distinctUntilChanged()
 
     private suspend fun process(pageId: String): Boolean {
         val options = preferences.options.value
@@ -176,7 +186,8 @@ class PageTranscriptionRepository @Inject constructor(
                 val contact = launch { penContacts.first { it.isNotEmpty() }; recognition.cancel() }
                 try { recognition.await() } finally { contact.cancel() }
             }
-            if (preferences.options.value != options || handwritingFingerprint(strokes.getByPage(pageId), options.language) != fingerprint)
+            if (!preferences.options.value.automatic || preferences.options.value.language != options.language ||
+                handwritingFingerprint(strokes.getByPage(pageId), options.language) != fingerprint)
                 return true
             synchronized(fileLock) {
                 directory.mkdirs()

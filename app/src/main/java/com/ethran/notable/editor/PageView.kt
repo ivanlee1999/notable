@@ -202,9 +202,12 @@ class PageView(
 
     internal val inkHandoffGuard = com.ethran.notable.editor.canvas.InkHandoffGuard()
 
+    fun markInkCaptureCollected(): Map<String, Long> = pageDataManager.stageInk(this)
+    fun finishInkCaptureCollected(tokens: Map<String, Long>) = pageDataManager.unstageInk(tokens)
+
     /** Pen down: hold the view the firmware is about to paint this stroke onto. */
     fun beginInkCapture() {
-        pageDataManager.penContact(this, true)
+        pageDataManager.penContact(this, true, currentPageId)
         inkHandoffGuard.begin()
         strokeViewport = currentViewport
     }

@@ -45,6 +45,19 @@ fun HandwritingPreviewSettings() {
             Text("Automatically read handwriting", color = Kaleido.Ink)
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(options.cloudTranscripts, { preferences.update(options.copy(cloudTranscripts = it)) },
+                modifier = Modifier.semantics { contentDescription = "Use server transcripts" })
+            Text("Use server transcripts", color = Kaleido.Ink)
+        }
+        if (options.cloudTranscripts) {
+            Text("Reads existing transcripts from your CouchDB server. Local handwriting stays unchanged.", color = Kaleido.Ink)
+            Text("Transcript database", color = Kaleido.Ink)
+            BasicTextField(options.transcriptDatabase, { preferences.update(options.copy(transcriptDatabase = it.trim())) },
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(12.dp)
+                    .semantics { contentDescription = "Transcript database" },
+                singleLine = true, textStyle = TextStyle(color = Kaleido.Ink))
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Handwriting previews", Modifier.weight(1f), color = Kaleido.Ink)
             TextAction(if (options.textPreview) "Text ▾" else "Ink ▾", { preferences.update(options.copy(textPreview = !options.textPreview)) },
                 Modifier.semantics { contentDescription = "Handwriting preview mode" })

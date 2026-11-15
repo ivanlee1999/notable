@@ -178,7 +178,10 @@ class PageDataManager @Inject constructor(
     private val contentTagger: ContentTagger,
     private val database: com.ethran.notable.data.db.AppDatabase,
 ) {
-    fun penContact(owner: Any, down: Boolean) = transcription.penContact(owner, down)
+    fun stageInk(owner: Any): Map<String, Long> = transcription.stageInk(owner)
+    fun unstageInk(tokens: Map<String, Long>) = transcription.unstageInk(tokens)
+
+    fun penContact(owner: Any, down: Boolean, pageId: String? = null) = transcription.penContact(owner, down, pageId)
     val log = ShipBook.getLogger("PageDataManager")
     private val dataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -1505,11 +1508,15 @@ class PageDataManager @Inject constructor(
      */
     private fun launchDbWrite(op: String, pageIds: Collection<String>, block: suspend () -> Unit) {
         val pages = pageIds.distinct()
+        val transcriptTokens = transcription.localWriteQueued(pages)
         val job: Job
         synchronized(writeChainLock) {
             val predecessors = pages.mapNotNull { writeChainTails[it] }
             job = dataScope.launch {
-                runDbWrite(op, pages, predecessors, block)
+                runDbWrite(op, pages, predecessors) {
+                    block()
+                    transcription.localWriteSaved(transcriptTokens)
+                }
             }
             for (page in pages) writeChainTails[page] = job
         }
