@@ -69,6 +69,25 @@ class PageTranscriptionTest {
         coVerify(exactly = 0) { strokes.deleteAll(any()) }
     }
 
+    @Test fun expiredServerMarkdownFallsBackToLocalTextWithoutCarryingItsFormatOrTagging() = runBlocking {
+        withTimeout(6_000) { state.first { it.text == "Recognized source" } }
+        preferences.update(preferences.options.value.copy(automatic = false))
+        val remote = MutableStateFlow<TranscriptionContent?>(TranscriptionContent("# Server heading", "markdown"))
+        val cloud = mockk<CloudTranscriptionRepository>()
+        every { cloud.observe(page) } returns remote
+        val paired = PageTranscriptionRepository(context, strokes, recognizer, preferences, scope,
+            Dispatchers.IO, tagger, automaticTags, cloud)
+        val pairedState = MutableStateFlow(HandwritingPreview())
+        scope.launch { paired.observe(page).collect { pairedState.value = it } }
+        val formatted = withTimeout(6_000) { pairedState.first { it.text == "# Server heading" } }
+        assertEquals("markdown", formatted.format)
+        remote.value = null
+        val local = withTimeout(6_000) { pairedState.first { it.text == "Recognized source" } }
+        assertNull(local.format)
+        verify(exactly = 0) { tagger.submit(any(), any(), any(), any()) }
+        assertEquals(listOf(ink), source.value)
+    }
+
     @Test fun sameClockInkChangesRejectTheOldRecognitionResult() = runBlocking {
         val started = CompletableDeferred<Unit>(); val finish = CompletableDeferred<String>()
         var calls = 0

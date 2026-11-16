@@ -129,7 +129,7 @@ object MarkdownText {
      * literal — an unmatched `*` is a bullet somebody typed mid-sentence, not the start of
      * emphasis that runs to the end of the paragraph.
      */
-    private fun parseInline(line: String): List<Span> {
+    internal fun parseInline(line: String): List<Span> {
         val spans = mutableListOf<Span>()
         val pending = StringBuilder()
         val traits = SpanTraits.NONE

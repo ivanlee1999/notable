@@ -21,6 +21,7 @@ import javax.inject.Singleton
 internal data class CloudPageText(
     val pageId: String, val notebookId: String, val text: String,
     val sourceRev: String = "", val sourceFingerprint: String = "", val pipelineVersion: String = "",
+    val format: String? = null,
 )
 
 /** The server hash is opaque. This second identity compares Android's decoded ink, not hash formats. */
@@ -43,7 +44,9 @@ internal fun canonicalInkFingerprint(pageId: String, page: CouchPage): String? =
         pageHeight = page.pageHeight, layout = page.layout), source)
 }.getOrNull()
 
-internal data class CloudTranscript(val text: String, val inkFingerprint: String)
+data class TranscriptionContent(val text: String, val format: String? = null)
+
+internal data class CloudTranscript(val text: String, val inkFingerprint: String, val format: String? = null)
 
 /** GET-only companion-database reader. Never creates databases or submits recognition work. */
 @Singleton
@@ -62,7 +65,9 @@ class CloudTranscriptClient internal constructor(private val transport: (SyncSet
                 .takeUnless { it["_deleted"]?.jsonPrimitive?.booleanOrNull == true }
         }
         val record = get(database, "pagetext:$pageId") ?: return null
-        val text = couchJson.decodeFromJsonElement<CloudPageText>(record)
+        val rawFormat = record["format"]
+        val safeRecord = if (rawFormat is JsonPrimitive && rawFormat.isString) record else JsonObject(record - "format")
+        val text = couchJson.decodeFromJsonElement<CloudPageText>(safeRecord)
         if (text.pageId != pageId || text.notebookId != notebookId || text.sourceRev != revision ||
             !text.sourceFingerprint.matches(Regex("sha256:[a-f0-9]{64}")) ||
             !text.pipelineVersion.matches(Regex("scribe-v2:[a-f0-9]{64}")) || text.text.isBlank()) return null
@@ -70,7 +75,7 @@ class CloudTranscriptClient internal constructor(private val transport: (SyncSet
         if (canonical["_rev"]?.jsonPrimitive?.content != revision) return null
         val page = couchJson.decodeFromJsonElement<CouchPage>(canonical)
         if (page.type != "page" || page.schema != COUCH_SCHEMA_VERSION || page.notebookId != notebookId) return null
-        return canonicalInkFingerprint(pageId, page)?.let { CloudTranscript(text.text, it) }
+        return canonicalInkFingerprint(pageId, page)?.let { CloudTranscript(text.text, it, text.format) }
     }
 
     private companion object { val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).build() }

@@ -32,7 +32,7 @@ class CloudTranscriptionRepository @Inject constructor(
     private data class Source(val settings: SyncSettings, val options: HandwritingOptions,
         val notebookId: String, val revision: String, val fingerprint: String, val generation: Long)
 
-    private data class Display(val text: String, val source: Source)
+    private data class Display(val content: TranscriptionContent, val source: Source)
 
     private suspend fun source(pageId: String): Source? {
         val options = preferences.options.value
@@ -64,7 +64,7 @@ class CloudTranscriptionRepository @Inject constructor(
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    fun observe(pageId: String): Flow<String?> {
+    fun observe(pageId: String): Flow<TranscriptionContent?> {
         val changes = db.invalidationTracker.createFlow("Page", "Stroke", "Notebook", "Folder", "Kv", "couch_outbox", "couch_deletion")
         return channelFlow<Display?> {
             val generation = AtomicLong()
@@ -84,7 +84,7 @@ class CloudTranscriptionRepository @Inject constructor(
                         val text = try {
                             val result = client.fetch(current.settings, current.options.transcriptDatabase, pageId,
                                 current.notebookId, current.revision)
-                            result?.text?.takeIf { result.inkFingerprint == current.fingerprint && source(pageId) == current }
+                            result?.let { TranscriptionContent(it.text, it.format) }?.takeIf { result.inkFingerprint == current.fingerprint && source(pageId) == current }
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { null }
                         if (isActive && generation.get() == token) send(text?.let { Display(it, current) })
@@ -94,7 +94,7 @@ class CloudTranscriptionRepository @Inject constructor(
             }
         }
             .combine(preferences.options) { display, options -> display.takeIf { it?.source?.options == options && options.cloudTranscripts && options.textPreview } }
-            .combine(fence.changes) { display, _ -> display?.text?.takeIf { fence.state(pageId).let { it.settled && it.generation == display.source.generation } } }
+            .combine(fence.changes) { display, _ -> display?.content?.takeIf { fence.state(pageId).let { it.settled && it.generation == display.source.generation } } }
             .distinctUntilChanged().flowOn(io)
     }
 }

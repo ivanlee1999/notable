@@ -49,7 +49,7 @@ class CloudTranscriptionRepositoryTest {
         left = 0f, right = 10f, pointsData = Base64.getEncoder().encodeToString(encodeStrokePoints(stroke.points)))
     private val canonical = CouchPage(notebookId = page.notebookId, pageWidth = 600, pageHeight = 800,
         strokes = listOf(wire), createdAt = wire.createdAt)
-    private val remote = CloudPageText(page.id, page.notebookId, "#remote untouched", "2-page",
+    @Volatile private var remote = CloudPageText(page.id, page.notebookId, "#remote untouched", "2-page",
         "sha256:" + "a".repeat(64), "scribe-v2:" + "b".repeat(64))
 
     @Before fun setUp() = runBlocking {
@@ -82,7 +82,7 @@ class CloudTranscriptionRepositoryTest {
         db.kvDao().set(Kv(couchStateKey(config.get().couchUrl, config.get().couchDatabase),
             couchJson.encodeToString(CouchSyncState(revs = mapOf("page:${page.id}" to revision), dirty = dirty))))
     }
-    private fun observe() { scope.launch { repository.observe(page.id).collect { values.send(it) } } }
+    private fun observe() { scope.launch { repository.observe(page.id).collect { values.send(it?.text) } } }
     private suspend fun next(predicate: (String?) -> Boolean): String? = withTimeout(6_000) {
         var value = values.receive()
         while (!predicate(value)) value = values.receive()
@@ -101,6 +101,23 @@ class CloudTranscriptionRepositoryTest {
         assertEquals("original tags", db.kvDao().get("journal.organization.cloud-book")?.value)
         db.strokeDao().update(stroke.copy(points = listOf(StrokePoint(0f, 0f), StrokePoint(9f, 10f))))
         next { it == null }; assertNoRemoteForInterval()
+    }
+    @Test fun markdownFormatAndExactSourceTravelTogetherAndDisappearOnEraseWithoutCanonicalWrites() = runBlocking {
+        remote = remote.copy(text = "# Read-only heading\n- [x] Original", format = "markdown")
+        val beforeTyped = db.blockDao().getByPage(page.id)
+        val contents = Channel<TranscriptionContent?>(Channel.UNLIMITED)
+        scope.launch { repository.observe(page.id).collect { contents.send(it) } }
+        val result = withTimeout(6000) {
+            var next = contents.receive()
+            while (next == null) next = contents.receive()
+            next
+        }
+        assertEquals(remote.text, result.text); assertEquals("markdown", result.format)
+        db.strokeDao().deleteAll(listOf(stroke.id))
+        withTimeout(6000) { while (contents.receive() != null) { } }
+        assertNull(withTimeoutOrNull(400) { while (true) { val next = contents.receive(); if (next != null) return@withTimeoutOrNull next } })
+        assertEquals(beforeTyped, db.blockDao().getByPage(page.id))
+        assertEquals("original tags", db.kvDao().get("journal.organization.cloud-book")?.value)
     }
     @Test fun penDownHidesImmediatelyAndOlderWriteCannotReenableDuringNewStroke() = runBlocking {
         observe(); next { it != null }

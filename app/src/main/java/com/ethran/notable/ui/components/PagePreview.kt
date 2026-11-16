@@ -2,8 +2,6 @@ package com.ethran.notable.ui.components
 
 import android.content.Context
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.Text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,9 +22,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import com.ethran.notable.recognition.HandwritingPreview
 import com.ethran.notable.ui.theme.Kaleido
 import com.ethran.notable.editor.text.FlowText
@@ -138,10 +133,7 @@ fun PagePreview(
 
             if (recognized != null) {
                 Column(modifier.clipToBounds().background(background)) {
-                    SelectionContainer(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(recognized, color = Kaleido.Ink, fontSize = 17.sp, lineHeight = 26.sp,
-                            modifier = Modifier.semantics { contentDescription = "Recognized handwriting" })
-                    }
+                    TranscriptionText(recognized, transcription.format, Modifier.fillMaxWidth().padding(12.dp))
                     // Photos, imported paper and placed annotations retain their original preview.
                     if (preserveCanvas) Image(painter, null, contentScale = ContentScale.FillWidth,
                         alignment = Alignment.TopStart, modifier = Modifier.fillMaxWidth().height(150.dp))

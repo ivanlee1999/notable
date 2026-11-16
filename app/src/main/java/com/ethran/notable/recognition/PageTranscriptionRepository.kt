@@ -62,7 +62,7 @@ internal fun handwritingFingerprint(strokes: List<Stroke>, language: String): St
 @Serializable
 internal data class CachedTranscription(val fingerprint: String, val text: String)
 
-data class HandwritingPreview(val text: String? = null, val textMode: Boolean = false)
+data class HandwritingPreview(val text: String? = null, val textMode: Boolean = false, val format: String? = null)
 
 /** Cache is derived locally; only eligible local edits submit metadata to the guarded tagger. */
 @Singleton
@@ -163,7 +163,7 @@ class PageTranscriptionRepository @Inject constructor(
             if (source.isNotEmpty() && cached == null && options.automatic && canAttempt(pageId, fingerprint)) request(pageId)
             HandwritingPreview(cached?.text?.takeIf { it.isNotBlank() }, options.textPreview)
         } }.combine(cloud?.observe(pageId) ?: flowOf(null)) { local, remote ->
-            local.copy(text = remote ?: local.text)
+            local.copy(text = remote?.text ?: local.text, format = remote?.format)
         }.distinctUntilChanged()
 
     private suspend fun process(pageId: String): Boolean {

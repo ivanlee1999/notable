@@ -21,11 +21,15 @@ class CloudTranscriptClientTest {
     private val page = CouchPage(notebookId = "b", pageWidth = 600, pageHeight = 800, strokes = listOf(wire), createdAt = wire.createdAt)
     private val record = CloudPageText("p", "b", "#Work server text", "2-page", "sha256:" + "a".repeat(64), "scribe-v2:" + "b".repeat(64))
     private val requests = mutableListOf<CouchRequest>()
-    private fun client(text: CloudPageText = record, canonical: CouchPage = page, rev: String = "2-page", status: Int = 200) =
+    private fun client(text: CloudPageText = record, canonical: CouchPage = page, rev: String = "2-page", status: Int = 200, formatOverride: JsonElement? = null) =
         CloudTranscriptClient { _ -> object : CouchTransport {
             override fun send(request: CouchRequest): CouchResponse {
                 requests += request
-                val body = if (request.path == "/notes_text/pagetext:p") couchJson.encodeToString(text)
+                val body = if (request.path == "/notes_text/pagetext:p") {
+                    val fields = couchJson.encodeToJsonElement(text).jsonObject.toMutableMap()
+                    formatOverride?.let { fields["format"] = it }
+                    JsonObject(fields).toString()
+                }
                 else JsonObject(couchJson.encodeToJsonElement(canonical).jsonObject + ("_rev" to JsonPrimitive(rev))).toString()
                 return CouchResponse(status, body = body.toByteArray())
             }
@@ -38,6 +42,14 @@ class CloudTranscriptClientTest {
         assertEquals(transcriptInkFingerprint(Page(id = "p", notebookId = "b", pageWidth = 600, pageHeight = 800), listOf(stroke)), result.inkFingerprint)
         assertEquals(listOf("/notes_text/pagetext:p", "/notes/page:p"), requests.map { it.path })
         assertTrue(requests.all { it.method == "GET" && it.body == null })
+    }
+    @Test fun optionalFormatSurvivesFreshProvenanceButUnknownValuesRemainLiteralCandidates() {
+        assertNull(fetch(client())!!.format)
+        assertEquals("markdown", fetch(client(record.copy(format = "markdown")))!!.format)
+        assertEquals("future-format", fetch(client(record.copy(format = "future-format")))!!.format)
+        assertNull(fetch(client(formatOverride = buildJsonObject { put("unknown", true) }))!!.format)
+        assertNull(fetch(client(formatOverride = JsonPrimitive(4)))!!.format)
+        assertNull(fetch(client(record.copy(format = "markdown"), rev = "3-new")))
     }
     @Test fun rejectsLegacyWrongIdentityRevisionAndPipelineWithoutReadingCanonicalPage() {
         for (invalid in listOf(record.copy(sourceRev = ""), record.copy(sourceRev = "1-old"), record.copy(pageId = "other"),
