@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.62.0
+
+- Show Markdown server transcripts with headings, nested lists, read-only checkboxes,
+  and bordered tables that scroll horizontally on narrow screens.
+- Keep plain-text and unknown-format transcripts literal. Generated content cannot
+  open links, load images, or change the original ink, typed text, dates, or tags.
+
 ## 0.58.1
 
 - Stamp local text edits strictly after the version they change, keeping the newest
