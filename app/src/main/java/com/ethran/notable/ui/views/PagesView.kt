@@ -173,7 +173,7 @@ fun PagesContent(
                 SquareButton(48.dp, { onBack(state.folderList.lastOrNull()?.id) }) {
                     Icon(FeatherIcons.ArrowLeft, "Back to library", tint = Kaleido.Ink)
                 }
-                Text(state.bookTitle.ifBlank { "Notebook" }, fontSize = 24.sp,
+                Text(com.ethran.notable.ui.components.rememberNotebookTitle(state.bookId, state.bookTitle), fontSize = 24.sp,
                     fontWeight = FontWeight.Bold, color = Kaleido.Ink,
                     modifier = Modifier.weight(1f), maxLines = 2)
                 Box {

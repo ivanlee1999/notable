@@ -77,6 +77,8 @@ class JournalRepositoryTest {
     fun severalNotesOnOneDayKeepIndependentPagesAndTopics() = runBlocking {
         val first = journal.createEntry()
         val second = journal.createEntry()
+        assertEquals("", db.notebookDao().getById(first.first)?.title)
+        assertEquals("", db.notebookDao().getById(second.first)?.title)
         journal.addTopic(first.first, "Product")
         journal.addTopic(second.first, "Personal")
 

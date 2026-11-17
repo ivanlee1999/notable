@@ -31,7 +31,6 @@ import com.ethran.notable.data.model.BackgroundType
 import com.ethran.notable.sync.SyncClock
 import com.ethran.notable.sync.couch.CouchDocId
 import io.shipbook.shipbooksdk.ShipBook
-import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -42,7 +41,6 @@ private val log = ShipBook.getLogger("appRepository")
 
 // The caption the library used to print under an unnamed quick page, now the name a one-tap note
 // is born with. Locale-default so the date reads the way the rest of the device writes dates.
-private val noteDateFormat get() = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
 @Singleton
 class AppRepository @Inject constructor(
@@ -255,7 +253,7 @@ class AppRepository @Inject constructor(
 
         val copy = source.copy(
             id = UUID.randomUUID().toString(),
-            title = "${source.title} copy",
+            title = source.title.takeIf { it.isNotBlank() }?.let { "$it copy" }.orEmpty(),
             pageIds = listOf(),
             openPageId = null,
             bookmarks = emptyList(),
@@ -369,16 +367,15 @@ class AppRepository @Inject constructor(
      * offered for sync, never matched a search, and could not go to the Trash. What the button
      * makes now is an ordinary notebook, so a note jotted here is a note the iPad also has.
      *
-     * Titled with the date, which is what the library already captioned an unnamed quick page
-     * with, so a shelf of these reads the way the old strip did. The name is a placeholder for the
-     * user to replace, not an identifier — nothing looks a notebook up by title.
+     * An empty title lets the readers derive its name from content. Explicit names remain
+     * canonical, and nothing looks a notebook up by its display name.
      *
      * @return the new notebook's id and the page to open in it, or null if the write failed.
      */
     suspend fun createNewNote(parentFolderId: String? = null): Pair<String, String>? {
         val sheet = GlobalAppSettings.current.defaultPageSize
         val notebook = Notebook(
-            title = noteDateFormat.format(Date()),
+            title = "",
             parentFolderId = parentFolderId,
             defaultBackground = GlobalAppSettings.current.defaultNativeTemplate,
             defaultBackgroundType = BackgroundType.Native.key,

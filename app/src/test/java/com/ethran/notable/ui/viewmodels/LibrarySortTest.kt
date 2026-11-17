@@ -108,6 +108,16 @@ class LibrarySortTest {
     }
 
     @Test
+    fun `derived names sort without changing canonical titles`() {
+        val books = listOf(book("1", ""), book("2", "Manual"))
+        val sorted = LibrarySort.notebooks(books, LibrarySortOrder.TITLE, descending = false,
+            titles = mapOf("1" to "Zebra", "2" to "Manual"))
+        assertEquals(listOf("2", "1"), sorted.map { it.id })
+        assertEquals("", sorted.last().title)
+        assertEquals(books.first(), sorted.last())
+    }
+
+    @Test
     fun `each date order reads its own field`() {
         val books = listOf(
             book("1", "old edit new", created = 1_000, updated = 9_000),

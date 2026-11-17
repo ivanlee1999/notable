@@ -43,6 +43,12 @@ class CloudTranscriptClientTest {
         assertEquals(listOf("/notes_text/pagetext:p", "/notes/page:p"), requests.map { it.path })
         assertTrue(requests.all { it.method == "GET" && it.body == null })
     }
+    @Test fun authoritativeEmptyTextStillRequiresExactCanonicalProvenance() {
+        assertEquals("", fetch(client(record.copy(text = "")))!!.text)
+        assertNull(fetch(client(record.copy(text = "", sourceRev = "1-old"))))
+        assertNull(fetch(client(record.copy(text = ""), rev = "3-new")))
+        assertNull(fetch(client(record.copy(text = ""), status = 503)))
+    }
     @Test fun optionalFormatSurvivesFreshProvenanceButUnknownValuesRemainLiteralCandidates() {
         assertNull(fetch(client())!!.format)
         assertEquals("markdown", fetch(client(record.copy(format = "markdown")))!!.format)

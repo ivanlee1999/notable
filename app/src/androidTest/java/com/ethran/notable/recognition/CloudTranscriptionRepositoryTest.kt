@@ -1,6 +1,10 @@
 package com.ethran.notable.recognition
 
 import android.content.Context
+import android.content.ContextWrapper
+import java.io.File
+import java.io.IOException
+import java.util.UUID
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -14,6 +18,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import org.junit.After
@@ -34,6 +39,12 @@ class CloudTranscriptionRepositoryTest {
     private lateinit var preferences: HandwritingPreferences
     private lateinit var original: HandwritingOptions
     private lateinit var repository: CloudTranscriptionRepository
+    private lateinit var client: CloudTranscriptClient
+    private lateinit var settings: KvProxy
+    private val cacheDirectory = File(context.cacheDir, "title-test-${UUID.randomUUID()}")
+    private val cacheContext = object : ContextWrapper(context) { override fun getFilesDir(): File = cacheDirectory }
+    @Volatile private var offline = false
+    @Volatile private var serviceStatus = 200
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val values = Channel<String?>(Channel.UNLIMITED)
     private val config = AtomicReference(SyncSettings(syncEnabled = true, backend = SyncBackend.COUCHDB,
@@ -61,9 +72,11 @@ class CloudTranscriptionRepositoryTest {
         db.blockDao().upsertAll(listOf(Block(id = "typed", pageId = page.id, text = "original typed")))
         db.kvDao().set(Kv("journal.organization.cloud-book", "original tags"))
         checkpoint()
-        val settings = mockk<KvProxy>(); coEvery { settings.getSyncSettings() } answers { config.get() }
-        val client = CloudTranscriptClient { _ -> object : CouchTransport {
+        settings = mockk<KvProxy>(); coEvery { settings.getSyncSettings() } answers { config.get() }
+        client = CloudTranscriptClient { _ -> object : CouchTransport {
             override fun send(request: CouchRequest): CouchResponse {
+                if (offline) throw IOException("isolated offline check")
+                if (serviceStatus != 200) return CouchResponse(serviceStatus)
                 assertEquals("GET", request.method); assertNull(request.body)
                 synchronized(paths) { paths += request.path }
                 if (request.path.contains("pagetext:")) {
@@ -75,12 +88,12 @@ class CloudTranscriptionRepositoryTest {
                 return CouchResponse(200, body = body.toString().toByteArray())
             }
         } }
-        repository = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO)
+        repository = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO, cacheContext)
     }
-    @After fun tearDown() { gate.get()?.countDown(); scope.cancel(); preferences.update(original); db.close() }
-    private suspend fun checkpoint(dirty: Set<String> = emptySet(), revision: String = "2-page") {
+    @After fun tearDown() { gate.get()?.countDown(); scope.cancel(); preferences.update(original); db.close(); cacheDirectory.deleteRecursively() }
+    private suspend fun checkpoint(dirty: Set<String> = emptySet(), revision: String = "2-page", generation: String? = "title-generation-1") {
         db.kvDao().set(Kv(couchStateKey(config.get().couchUrl, config.get().couchDatabase),
-            couchJson.encodeToString(CouchSyncState(revs = mapOf("page:${page.id}" to revision), dirty = dirty))))
+            couchJson.encodeToString(CouchSyncState(revs = mapOf("page:${page.id}" to revision), dirty = dirty, databaseGeneration = generation))))
     }
     private fun observe() { scope.launch { repository.observe(page.id).collect { values.send(it?.text) } } }
     private suspend fun next(predicate: (String?) -> Boolean): String? = withTimeout(6_000) {
@@ -174,4 +187,72 @@ class CloudTranscriptionRepositoryTest {
         db.notebookDao().update(db.notebookDao().getById(page.notebookId)!!.copy(deletedAt = Date(2000)))
         checkpoint(); assertNoRemoteForInterval(); assertTrue(synchronized(paths) { paths.isEmpty() })
     }
+    @Test fun cloudTitleSurvivesOfflineRepositoryRestartInInkPreviewWithoutCachingTranscriptOrCredentials() = runBlocking {
+        remote = remote.copy(text = "# Project plan\n- [x] Confidential body", format = "markdown")
+        preferences.update(preferences.options.value.copy(textPreview = false))
+        assertEquals("Project plan", withTimeout(6000) { repository.observeTitle(page.id).first { it != null } })
+        val cache = cacheDirectory.resolve("recognition-titles").listFiles()!!.single().readText()
+        assertTrue(cache.contains("Project plan")); assertFalse(cache.contains("Confidential body"))
+        assertFalse(cache.contains("secret")); assertFalse(cache.contains("sync.invalid"))
+        offline = true
+        repository = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO, cacheContext)
+        assertEquals("Project plan", withTimeout(6000) { repository.observeTitle(page.id).first { it != null } })
+        assertEquals("original typed", db.blockDao().getByPage(page.id).single().text)
+        assertEquals("original tags", db.kvDao().get("journal.organization.cloud-book")?.value)
+        assertEquals(listOf(stroke), db.strokeDao().getByPage(page.id))
+    }
+
+    @Test fun restoredTitleRejectsGenerationProfileDirtyRevisionAndInkChanges() = runBlocking {
+        remote = remote.copy(text = "# Project plan", format = "markdown")
+        assertEquals("Project plan", withTimeout(6000) { repository.observeTitle(page.id).first { it != null } })
+        offline = true
+        suspend fun rejected() {
+            val restarted = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO, cacheContext)
+            assertNull(withTimeoutOrNull(400) { restarted.observeTitle(page.id).first { it != null } })
+        }
+        checkpoint(generation = "different-generation"); rejected()
+        checkpoint(generation = null); rejected()
+        checkpoint(dirty = setOf("page:${page.id}")); rejected()
+        checkpoint(revision = "3-page"); rejected()
+        checkpoint(); config.set(config.get().copy(couchUsername = "another-user")); rejected()
+        config.set(config.get().copy(couchUsername = "user"))
+        db.strokeDao().update(stroke.copy(points = listOf(StrokePoint(1f, 0f)))); rejected()
+        db.strokeDao().deleteAll(listOf(stroke.id)); rejected()
+    }
+
+    @Test fun authoritativeEmptyRerecognitionClearsTitleWithoutChangingSource() = runBlocking {
+        remote = remote.copy(text = "# Project plan", format = "markdown")
+        assertEquals("Project plan", withTimeout(6000) { repository.observeTitle(page.id).first { it != null } })
+        val before = db.strokeDao().getByPage(page.id)
+        remote = remote.copy(text = "")
+        val restarted = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO, cacheContext)
+        val collected = Channel<String?>(Channel.UNLIMITED)
+        val job = scope.launch { restarted.observeTitle(page.id).collect { collected.send(it) } }
+        withTimeout(6000) {
+            while (collected.receive() != "Project plan") { }
+            while (collected.receive() != null) { }
+        }
+        job.cancelAndJoin()
+        assertTrue(cacheDirectory.resolve("recognition-titles").listFiles().orEmpty().isEmpty())
+        offline = true
+        assertNull(withTimeoutOrNull(400) { restarted.observeTitle(page.id).first { it != null } })
+        assertEquals(before, db.strokeDao().getByPage(page.id))
+        assertEquals("original tags", db.kvDao().get("journal.organization.cloud-book")?.value)
+    }
+
+    @Test fun serviceUnavailableDoesNotDestroyAnExactlyBoundOfflineTitle() = runBlocking {
+        remote = remote.copy(text = "# Project plan", format = "markdown")
+        assertEquals("Project plan", withTimeout(6000) { repository.observeTitle(page.id).first { it != null } })
+        serviceStatus = 503
+        val restarted = CloudTranscriptionRepository(db, settings, preferences, client, CloudTranscriptFence(), Dispatchers.IO, cacheContext)
+        val collected = mutableListOf<String?>()
+        val job = scope.launch { restarted.observeTitle(page.id).collect { synchronized(collected) { collected += it } } }
+        withTimeout(6000) { while (synchronized(collected) { "Project plan" !in collected }) delay(20) }
+        delay(300)
+        assertEquals("Project plan", synchronized(collected) { collected.last() })
+        job.cancelAndJoin()
+        offline = true
+        assertEquals("Project plan", withTimeout(6000) { restarted.observeTitle(page.id).first { it != null } })
+    }
+
 }

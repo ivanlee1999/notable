@@ -163,7 +163,9 @@ class PageTranscriptionRepository @Inject constructor(
             if (source.isNotEmpty() && cached == null && options.automatic && canAttempt(pageId, fingerprint)) request(pageId)
             HandwritingPreview(cached?.text?.takeIf { it.isNotBlank() }, options.textPreview)
         } }.combine(cloud?.observe(pageId) ?: flowOf(null)) { local, remote ->
-            local.copy(text = remote?.text ?: local.text, format = remote?.format)
+            if (remote == null) local else local.copy(
+                text = remote.text.takeIf { it.isNotBlank() },
+                format = remote.format.takeIf { remote.text.isNotBlank() })
         }.distinctUntilChanged()
 
     private suspend fun process(pageId: String): Boolean {

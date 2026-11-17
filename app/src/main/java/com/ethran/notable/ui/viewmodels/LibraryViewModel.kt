@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Date
@@ -121,6 +122,7 @@ private data class LibraryDatabaseState(
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     val appRepository: AppRepository,
+    private val noteTitles: com.ethran.notable.recognition.NoteTitles,
     private val appEventBus: AppEventBus,
     val importEngine: ImportEngine,
     val exportEngine: ExportEngine,
@@ -174,13 +176,14 @@ class LibraryViewModel @Inject constructor(
         folderRepository.getAllVisibleFlow(), bookRepository.getAllFlow()
     ) { folders, books -> LibraryTree(folders, books) }
 
-    private val _searchResultsFlow = combine(_query, _treeFlow) { query, all ->
-        if (query.isBlank()) null
-        else SearchResults(
-            folders = all.folders.filter { LibrarySort.matches(it.title, query) },
-            books = all.books.filter { LibrarySort.matches(it.title, query) },
-        )
-    }
+    private val _searchResultsFlow = combine(_query, _treeFlow) { query, all -> query to all }
+        .flatMapLatest { (query, all) ->
+            if (query.isBlank()) flowOf(null)
+            else noteTitles.names(all.books).map { names -> SearchResults(
+                folders = all.folders.filter { LibrarySort.matches(it.title, query) },
+                books = all.books.filter { LibrarySort.matches(names[it.id] ?: it.title, query) },
+            ) }
+        }
 
     private val _trashedCountFlow = combine(
         folderRepository.getTrashed().asFlow(), bookRepository.getTrashed().asFlow()

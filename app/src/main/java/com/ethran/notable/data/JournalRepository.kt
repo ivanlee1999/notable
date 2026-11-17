@@ -11,8 +11,6 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import com.ethran.notable.data.db.Notebook
@@ -81,10 +79,6 @@ class JournalRepository @Inject constructor(
         val now = Instant.now()
         val zone = ZoneId.systemDefault()
         val ids = appRepository.createNewNote(parentFolderId) ?: error("Unable to create note")
-        val book = appRepository.bookRepository.getById(ids.first) ?: error("Note is missing")
-        appRepository.bookRepository.update(book.copy(
-            title = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.getDefault()).format(now.atZone(zone))
-        ))
         organization.capture(ids.first, journalDate(now.toEpochMilli(), zone), now.toEpochMilli(), initialTopics)
         ids
     }

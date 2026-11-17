@@ -113,7 +113,7 @@ fun NewNotebookDialog(
 
     fun commit() {
         val title = name.text.trim()
-        if (title.isEmpty()) onDismiss() else onConfirm(title, pageSize.size, template, templateType)
+        onConfirm(title, pageSize.size, template, templateType)
     }
 
     Dialog(onDismissRequest = onDismiss) {

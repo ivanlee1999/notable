@@ -81,6 +81,9 @@ class PageTranscriptionTest {
         scope.launch { paired.observe(page).collect { pairedState.value = it } }
         val formatted = withTimeout(6_000) { pairedState.first { it.text == "# Server heading" } }
         assertEquals("markdown", formatted.format)
+        remote.value = TranscriptionContent("", "markdown")
+        val empty = withTimeout(6_000) { pairedState.first { it.text == null } }
+        assertNull(empty.format) // Valid empty cloud output suppresses older local OCR.
         remote.value = null
         val local = withTimeout(6_000) { pairedState.first { it.text == "Recognized source" } }
         assertNull(local.format)

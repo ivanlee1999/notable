@@ -241,7 +241,7 @@ private fun TrashContent(
                     items(uiState.notebooks, key = { "book-${it.id}" }) { book ->
                         TrashRow(
                             hit = metrics.hit,
-                            label = book.title,
+                            label = com.ethran.notable.ui.components.rememberNotebookTitle(book),
                             deletedAtMillis = book.deletedAt?.time,
                             secondary = pluralStringResource(
                                 R.plurals.trash_notebook_pages,
@@ -250,7 +250,7 @@ private fun TrashContent(
                             onRestore = { onRestoreNotebook(book.id) },
                             onPurge = { onPurgeNotebook(book.id) },
                             purgeMessage = stringResource(
-                                R.string.trash_purge_notebook_message, book.title
+                                R.string.trash_purge_notebook_message, com.ethran.notable.ui.components.rememberNotebookTitle(book)
                             ),
                             leading = {
                                 Box(

@@ -96,7 +96,7 @@ fun ShowPagesRow(
                     // repeated down the row — the date is the thing that actually tells two
                     // otherwise identical thumbnails apart.
                     Text(
-                        text = page.title?.takeIf { it.isNotBlank() }
+                        text = rememberPageTitle(page.id, page.notebookId, page.title)
                             ?: DateFormat.format("dd MMM yyyy", page.createdAt).toString(),
                         fontSize = 11.sp,
                         maxLines = 1,

@@ -375,7 +375,7 @@ fun EditorView(
         InkaTheme {
             if (flowOpen) {
                 FlowEditorSurface(flowModel, if (flowState.document?.pageId == toolbarState.pageId)
-                    toolbarState.notebookTitle.orEmpty() else "Unsaved text",
+                    com.ethran.notable.ui.components.rememberNotebookTitle(toolbarState.notebookId, toolbarState.notebookTitle) else "Unsaved text",
                     onBack = { onExitRequested(); viewModel.onToolbarAction(ToolbarAction.NavigateToLibrary) },
                     onInk = { flowDecisionPage = toolbarState.pageId; flowOpen = false; toolbarState.pageId?.let(flowModel::open) },
                     onTags = if (flowState.document?.pageId == toolbarState.pageId) ({ openTopics() }) else null,

@@ -62,6 +62,8 @@ fun EditorTitleBar(
     onRename: (() -> Unit)? = null,
     onRenamePage: (() -> Unit)? = null,
 ) {
+    val notebookTitle = com.ethran.notable.ui.components.rememberNotebookTitle(uiState.notebookId, uiState.notebookTitle)
+    val pageTitle = com.ethran.notable.ui.components.rememberPageTitle(uiState.pageId, uiState.notebookId, uiState.pageTitle)
     val metrics = kaleidoMetrics(LocalConfiguration.current.screenWidthDp.dp)
 
     // The row and the hairline below it together come to editorTitleBarHeight — the band the
@@ -94,7 +96,7 @@ fun EditorTitleBar(
                 Modifier.weight(1f).height(48.dp)
                     .semantics(mergeDescendants = true) {
                         contentDescription = if (onRename != null) "Rename notebook" else "Switch notebook or page"
-                        stateDescription = uiState.notebookTitle.orEmpty()
+                        stateDescription = notebookTitle
                     }
                     .noRippleClickable(onRename ?: onSwitchNotebook),
                 verticalAlignment = Alignment.CenterVertically,
@@ -102,7 +104,7 @@ fun EditorTitleBar(
             ) {
                 Column(Modifier.weight(1f)) {
                 Text(
-                    text = uiState.notebookTitle.orEmpty(),
+                    text = notebookTitle,
                     fontSize = metrics.bodySize,
                     fontWeight = FontWeight.Medium,
                     color = Kaleido.Ink,
@@ -110,7 +112,7 @@ fun EditorTitleBar(
                     overflow = TextOverflow.Ellipsis,
                 )
                 onRenamePage?.let { rename ->
-                    Text(uiState.pageTitle?.takeIf { it.isNotBlank() } ?: "Page ${uiState.currentPageNumber + 1}",
+                    Text(pageTitle ?: "Page ${uiState.currentPageNumber + 1}",
                         fontSize = 11.sp, color = Kaleido.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth().noRippleClickable(rename).semantics { contentDescription = "Rename page" })
                 }

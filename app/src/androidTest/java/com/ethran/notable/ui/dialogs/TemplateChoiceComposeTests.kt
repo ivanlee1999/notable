@@ -99,6 +99,19 @@ class TemplateChoiceComposeTests {
         assertEquals(Triple("Daily", "lined", BackgroundType.Native.key), confirmed)
     }
 
+    @Test
+    fun aBlankNotebookNameCreatesAnAutomaticNameRatherThanAPlaceholder() {
+        var confirmed: String? = null
+        composeRule.setContent {
+            NewNotebookDialog(initialName = "", initialPageSize = PageSizePreset.DEFAULT.size,
+                initialTemplate = "blank", onConfirm = { name, _, _, _ -> confirmed = name },
+                onDismiss = {}, libraryTemplates = emptyList())
+        }
+        composeRule.onNodeWithText("Create").assertIsDisplayed().performClick()
+        composeRule.waitForIdle()
+        assertEquals("", confirmed)
+    }
+
     // endregion
 
     // region Choosing where a template goes

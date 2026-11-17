@@ -312,6 +312,7 @@ fun TodayView(
                     val rowColumns = if (row.any { it.entry.notebookId == expandedNote }) 1 else columns
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         row.forEach { note ->
+                            val title = com.ethran.notable.ui.components.rememberNotebookTitle(note.notebook)
                             Box(Modifier.weight(1f)) {
                                     Column {
                                         NotebookContentPreview(notebook = note.notebook, previewHeight = previewHeight,
@@ -325,7 +326,7 @@ fun TodayView(
                                             subtitle = if (topicsView) note.entry.date else null,
                                             actions = { Box {
                                                 TextAction("•••", { noteMenu = note.entry.notebookId }, Modifier.size(48.dp)
-                                                    .semantics { contentDescription = "Note actions for ${note.notebook.title}" }, enabled = !busy)
+                                                    .semantics { contentDescription = "Note actions for ${title}" }, enabled = !busy)
                                                 if (noteMenu == note.entry.notebookId) ActionMenu({ noteMenu = null }) {
                                                     MenuAction("Edit tags", { noteMenu = null; editingTopics = note.entry.notebookId })
                                                     MenuAction("Move to Trash", { noteMenu = null; trashTarget = note.entry.notebookId })
@@ -393,7 +394,7 @@ fun TodayView(
     }
     notes.firstOrNull { it.entry.notebookId == trashTarget }?.let { note ->
         ShowConfirmationDialog("Move to Trash?", content = {
-            Text("${note.notebook.title}" +
+            Text(com.ethran.notable.ui.components.rememberNotebookTitle(note.notebook) +
                 (if (note.notebook.pageIds.size > 1) " and all ${note.notebook.pageIds.size} pages" else "") +
                 " can be restored from Trash.")
             error?.let { Text(it) }

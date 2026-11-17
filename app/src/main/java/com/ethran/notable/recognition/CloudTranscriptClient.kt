@@ -70,7 +70,7 @@ class CloudTranscriptClient internal constructor(private val transport: (SyncSet
         val text = couchJson.decodeFromJsonElement<CloudPageText>(safeRecord)
         if (text.pageId != pageId || text.notebookId != notebookId || text.sourceRev != revision ||
             !text.sourceFingerprint.matches(Regex("sha256:[a-f0-9]{64}")) ||
-            !text.pipelineVersion.matches(Regex("scribe-v2:[a-f0-9]{64}")) || text.text.isBlank()) return null
+            !text.pipelineVersion.matches(Regex("scribe-v2:[a-f0-9]{64}"))) return null
         val canonical = get(settings.couchDatabase, "page:$pageId") ?: return null
         if (canonical["_rev"]?.jsonPrimitive?.content != revision) return null
         val page = couchJson.decodeFromJsonElement<CouchPage>(canonical)

@@ -48,7 +48,7 @@ object LibrarySort {
      */
     fun notebooks(
         books: List<Notebook>, order: LibrarySortOrder, descending: Boolean,
-        lastEdited: Map<String, Date> = emptyMap()
+        lastEdited: Map<String, Date> = emptyMap(), titles: Map<String, String> = emptyMap()
     ): List<Notebook> {
         val sorted = when (order) {
             LibrarySortOrder.UPDATED -> books.sortedWith(
@@ -60,7 +60,7 @@ object LibrarySort {
             // The id breaks ties so two notebooks with the same name do not swap places between
             // launches.
             LibrarySortOrder.TITLE ->
-                books.sortedWith(byTitle<Notebook>({ it.title }, { it.id }))
+                books.sortedWith(byTitle<Notebook>({ titles[it.id] ?: it.title }, { it.id }))
         }
         return if (descending) sorted.reversed() else sorted
     }

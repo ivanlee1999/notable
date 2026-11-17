@@ -140,6 +140,7 @@ fun NotebookContentPreview(
     onRenamePage: ((String) -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
+    val title = rememberNotebookTitle(notebook)
     var localPage by rememberSaveable(notebook.id) {
         mutableStateOf(notebook.openPageId?.takeIf { it in notebook.pageIds } ?: notebook.pageIds.firstOrNull())
     }
@@ -155,9 +156,9 @@ fun NotebookContentPreview(
         Row(Modifier.fillMaxWidth().padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).heightIn(min = 48.dp)
                 .then(if (onRename != null) Modifier.clickable(onClick = onRename)
-                    .semantics { contentDescription = "Rename ${notebook.title}" } else Modifier)
+                    .semantics { contentDescription = "Rename ${title}" } else Modifier)
                 .padding(vertical = 8.dp), verticalArrangement = Arrangement.Center) {
-                Text(notebook.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis,
                     fontSize = 14.sp, color = Kaleido.Ink)
                 subtitle?.let { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     fontSize = 12.sp, color = Kaleido.Muted) }
@@ -195,7 +196,7 @@ fun NotebookContentPreview(
                     }
                 }
                 .clipToBounds().semantics {
-                    contentDescription = "${notebook.title} ink preview"
+                    contentDescription = "${title} ink preview"
                     onClick { onEdit(page); true }
                 },
             contentScale = ContentScale.FillWidth, alignment = Alignment.TopStart,
@@ -205,13 +206,13 @@ fun NotebookContentPreview(
         val cardWidth = maxWidth
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             if (notebook.pageIds.size > 1 && cardWidth >= 264.dp) SquareButton(48.dp, { turn(-1) }) {
-                Icon(FeatherIcons.ChevronLeft, "Previous page of ${notebook.title}", tint = Kaleido.Ink)
+                Icon(FeatherIcons.ChevronLeft, "Previous page of ${title}", tint = Kaleido.Ink)
             }
             if (page != null) {
                 Box(Modifier.weight(1f)) {
                     SquareButton(48.dp, { pagesMenu = true }, Modifier.fillMaxWidth()
                         .semantics {
-                            contentDescription = "Preview pages of ${notebook.title}"
+                            contentDescription = "Preview pages of ${title}"
                             customActions = listOf(CustomAccessibilityAction("Previous page") { turn(-1) },
                                 CustomAccessibilityAction("Next page") { turn(1) })
                         }) { Text("${index + 1}/${notebook.pageIds.size} ▾", color = Kaleido.Ink,
@@ -226,14 +227,14 @@ fun NotebookContentPreview(
             } else Text("No pages", fontSize = 12.sp,
                 color = Kaleido.Muted, modifier = Modifier.weight(1f).padding(start = 8.dp))
             if (notebook.pageIds.size > 1 && cardWidth >= 264.dp) SquareButton(48.dp, { turn(1) }) {
-                Icon(FeatherIcons.ChevronRight, "Next page of ${notebook.title}", tint = Kaleido.Ink)
+                Icon(FeatherIcons.ChevronRight, "Next page of ${title}", tint = Kaleido.Ink)
             }
             if (cardWidth >= 156.dp) SquareButton(48.dp, onExpand) {
                 Icon(if (expanded) FeatherIcons.Minimize2 else FeatherIcons.Maximize2,
-                    if (expanded) "Collapse ${notebook.title}" else "Expand ${notebook.title} in place", tint = Kaleido.Ink)
+                    if (expanded) "Collapse ${title}" else "Expand ${title} in place", tint = Kaleido.Ink)
             }
             SquareButton(48.dp, { onEdit(page) }) {
-                Icon(FeatherIcons.Edit2, "Edit ${notebook.title}", tint = Kaleido.Ink)
+                Icon(FeatherIcons.Edit2, "Edit ${title}", tint = Kaleido.Ink)
             }
         }
         }

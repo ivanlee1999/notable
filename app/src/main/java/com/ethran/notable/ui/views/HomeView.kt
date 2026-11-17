@@ -153,7 +153,7 @@ fun Library(
     var pendingNewNotebook by remember { mutableStateOf(false) }
 
     val defaultFolderName = stringResource(R.string.home_new_folder)
-    val defaultNotebookName = stringResource(R.string.home_new_notebook)
+    val defaultNotebookName = ""
 
     if (pendingNewFolder) {
         NamePromptDialog(
@@ -308,7 +308,7 @@ fun LibraryContent(
         val previewPages = remember { mutableStateMapOf<String, String>() }
         var conflictedBook by remember { mutableStateOf<Notebook?>(null) }
         conflictedBook?.let { book ->
-            ConflictResolutionDialog(bookId = book.id, title = book.title,
+            ConflictResolutionDialog(bookId = book.id, title = com.ethran.notable.ui.components.rememberNotebookTitle(book),
                 onClose = { conflictedBook = null })
         }
         val openPages: (String) -> Unit = { bookId ->
@@ -331,11 +331,12 @@ fun LibraryContent(
         val sortedFolders = remember(uiState.folders, sortOrder, settings.librarySortDescending) {
             LibrarySort.folders(uiState.folders, sortOrder, settings.librarySortDescending)
         }
+        val titleNames = com.ethran.notable.ui.components.rememberNotebookNames(uiState.books, sortOrder == LibrarySortOrder.TITLE)
         val sortedBooks = remember(
-            uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited
+            uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited, titleNames
         ) {
             LibrarySort.notebooks(
-                uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited
+                uiState.books, sortOrder, settings.librarySortDescending, uiState.lastEdited, titleNames
             )
         }
 
@@ -856,6 +857,7 @@ private fun NotebookEntry(
     onNavigateToEditor: (String, String) -> Unit,
     onPreviewNeeded: (String) -> Unit,
 ) {
+    val title = com.ethran.notable.ui.components.rememberNotebookTitle(book)
     var isMoreOpen by remember(book.id) { mutableStateOf(false) }
     var isSettingsOpen by remember(book.id) { mutableStateOf(false) }
     var renaming by remember(book.id) { mutableStateOf(false) }
@@ -866,7 +868,7 @@ private fun NotebookEntry(
     val options: @Composable () -> Unit = {
         Box {
             SquareButton(48.dp, { isMoreOpen = true }) {
-                Icon(FeatherIcons.MoreVertical, "${book.title} options", tint = Kaleido.Ink)
+                Icon(FeatherIcons.MoreVertical, "${title} options", tint = Kaleido.Ink)
             }
             if (isMoreOpen) ActionMenu(onDismiss = { isMoreOpen = false }) {
                 MenuAction("Pages", { isMoreOpen = false; onNavigateToPages(book.id) })

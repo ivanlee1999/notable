@@ -513,7 +513,7 @@ internal fun NotebookSwitcherList(
                         Box(Modifier.width(4.dp).fillMaxHeight().background(Kaleido.Ink))
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(book.title, fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
+                        Text(rememberNotebookTitle(book), fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
                             color = Kaleido.Ink, fontSize = 15.sp,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                         val page = book.pageIds.indexOf(book.resumePageId()).coerceAtLeast(0) + 1

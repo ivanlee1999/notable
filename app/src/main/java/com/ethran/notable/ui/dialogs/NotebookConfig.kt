@@ -73,6 +73,7 @@ import com.ethran.notable.ui.SnackConf
 import com.ethran.notable.ui.SnackState
 import com.ethran.notable.ui.components.BreadCrumb
 import com.ethran.notable.ui.components.PagePreview
+import com.ethran.notable.ui.components.rememberNotebookTitle
 import com.ethran.notable.ui.components.getFolderList
 import io.shipbook.shipbooksdk.ShipBook
 import kotlinx.coroutines.CancellationException
@@ -115,6 +116,7 @@ fun NotebookConfigDialog(
     }
 
     if (book == null) return
+    val displayTitle = rememberNotebookTitle(book!!)
 
     var isRenaming by remember { mutableStateOf(false) }
     val formattedCreatedAt = remember { DateFormat.format("dd MMM yyyy HH:mm", book!!.createdAt) }
@@ -167,7 +169,7 @@ fun NotebookConfigDialog(
     if (showDeleteDialog) {
         ShowSimpleConfirmationDialog(
             title = "Move to Trash?",
-            message = "\"${book!!.title}\" (${book!!.pageIds.size} page" +
+            message = "\"${displayTitle}\" (${book!!.pageIds.size} page" +
                 "${if (book!!.pageIds.size == 1) "" else "s"}) leaves the library on your other " +
                 "devices too, and stays recoverable from the Trash until you empty it.",
             onConfirm = {
@@ -218,7 +220,7 @@ fun NotebookConfigDialog(
 
         ShowFolderSelectionDialog(
             appRepository = appRepository,
-            notebookName = book!!.title,
+            notebookName = displayTitle,
             initialFolderId = book!!.parentFolderId,
             onCancel = { showMoveDialog = false },
             onConfirm = { selectedFolder ->
@@ -308,7 +310,7 @@ fun NotebookConfigDialog(
                             fontSize = 16.sp
                         )
                         Text(
-                            text = book!!.title,
+                            text = displayTitle,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Light,
                             fontSize = 24.sp,
@@ -370,7 +372,7 @@ fun NotebookConfigDialog(
                         // `book` is observed live, so the linked path follows a rename as soon as
                         // it is committed — the same thing the dialog's old editable `bookTitle`
                         // state gave this row before naming moved into its own prompt.
-                        bookTitle = book!!.title,
+                        bookTitle = displayTitle,
                         defaultPath = defaultPath,
                         onLinkChanged = { newUri ->
                             val updated = book!!.copy(linkedExternalUri = newUri)

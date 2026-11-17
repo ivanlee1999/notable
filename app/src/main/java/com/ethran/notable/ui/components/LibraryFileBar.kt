@@ -139,7 +139,7 @@ fun LibraryFileBar(
                 }
                 items(recent, key = { "recent:${it.id}" }) { book ->
                     Text(
-                        book.title, fontSize = 14.sp, color = Kaleido.Ink,
+                        rememberNotebookTitle(book), fontSize = 14.sp, color = Kaleido.Ink,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth()
                             .noRippleClickable { book.resumePageId()?.let { onOpenNotebook(it, book.id) } }

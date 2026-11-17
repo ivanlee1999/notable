@@ -205,6 +205,17 @@ class CouchOutboxTest {
     }
 
     @Test
+    fun notebook_copy_keeps_unnamed_sources_automatic_and_named_sources_explicit() = runBlocking {
+        val (bookId, _) = seedNotebook()
+        for (title in listOf("", "Manual")) {
+            repository.bookRepository.update(repository.bookRepository.getById(bookId)!!.copy(title = title))
+            val duplicate = repository.bookRepository.getById(repository.duplicateNotebook(bookId)!!)!!
+            assertEquals(if (title.isEmpty()) "" else "Manual copy", duplicate.title)
+            assertEquals(title, repository.bookRepository.getById(bookId)!!.title)
+        }
+    }
+
+    @Test
     fun interrupted_notebook_copy_rolls_back_all_rows_and_outbox_entries() = runBlocking {
         val (bookId, first) = seedNotebook()
         val second = repository.newPageInBook(bookId, index = 1)!!
@@ -372,6 +383,7 @@ class CouchOutboxTest {
         val (notebookId, pageId) = repository.createNewNote()!!
 
         val notebook = repository.bookRepository.getById(notebookId)!!
+        assertEquals("", notebook.title)
         assertEquals(listOf(pageId), notebook.pageIds)
         assertEquals(pageId, notebook.openPageId)
         assertEquals(notebookId, repository.pageRepository.getById(pageId)!!.notebookId)

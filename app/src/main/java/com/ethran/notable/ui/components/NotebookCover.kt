@@ -82,7 +82,7 @@ fun NotebookCoverCard(
                 .aspectRatio(3f / 4f)
         )
         Text(
-            text = notebook.title,
+            text = rememberNotebookTitle(notebook),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = Kaleido.Ink,
@@ -116,7 +116,7 @@ fun NotebookListRow(
 ) {
     ListRow(
         hit = hit + 22.dp, // the 46dp chip needs more room than a plain row
-        label = notebook.title,
+        label = rememberNotebookTitle(notebook),
         secondary = listOfNotNull(location, "${notebook.pageIds.size} pages · ${editedLabel(editedAt)}")
             .joinToString("\n"),
         secondaryMaxLines = if (location != null) 3 else 1,
