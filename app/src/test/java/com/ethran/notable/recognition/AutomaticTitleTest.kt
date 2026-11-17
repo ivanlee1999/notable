@@ -15,7 +15,10 @@ class AutomaticTitleTest {
             "[?]" to null, "..." to null, "=" to null, "+" to null,
             "| item | kg |" to "item | kg", "# Heading ###" to "Heading",
             "> - ## Heading" to "Heading", "![Cover](url)\nActual note" to "Actual note",
-            "> ![Cover](url)\nActual note" to "Actual note", "①" to "①",
+            "> ![Cover](url)\nActual note" to "Actual note", "①" to null, "① Heading" to "Heading",
+            "![icon](url) Actual title" to "icon Actual title",
+            "![icon](url) Actual ![end](url)" to "icon Actual end",
+            "![[icon]] Actual title" to "icon Actual title",
             "\\# literal" to "# literal", "See [[Roadmap|next steps]]" to "See next steps",
         )
         cases.forEach { (source, expected) -> assertEquals(source, expected, automaticTitle(source)) }
