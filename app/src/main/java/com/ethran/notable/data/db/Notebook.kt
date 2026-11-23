@@ -192,7 +192,10 @@ class BookRepository @Inject constructor(
     fun observeAllIncludingTrash(): Flow<List<Notebook>> = notebookDao.observeAllIncludingTrash()
 
     /** @return the id of the notebook's first page, so a caller can open straight onto it. */
-    suspend fun create(notebook: Notebook): String {
+    suspend fun create(notebook: Notebook): String = checkNotNull(createWithFirstPage(notebook).openPageId)
+
+    /** The authored snapshot for consumers that need to check whether the title is still current. */
+    internal suspend fun createWithFirstPage(notebook: Notebook): Notebook {
         val page = Page(
             notebookId = notebook.id,
             background = notebook.defaultBackground,
@@ -200,18 +203,19 @@ class BookRepository @Inject constructor(
             pageWidth = notebook.defaultPageWidth,
             pageHeight = notebook.defaultPageHeight
         )
-        database.withTransaction {
+        return database.withTransaction {
             notebookDao.create(notebook)
             pageDao.create(page)
 
-            notebookDao.setPageIds(notebook.id, listOf(page.id), SyncClock.nowDate())
+            val updatedAt = SyncClock.nowDate()
+            notebookDao.setPageIds(notebook.id, listOf(page.id), updatedAt)
             notebookDao.setOpenPageId(notebook.id, page.id)
             // Both documents, not just the notebook. The initial page is created here and nothing
             // else is ever going to touch it, so queueing the manifest alone shipped a notebook
             // naming a page the server had never been offered.
             outbox.queue(listOf(CouchDocId.notebook(notebook.id), CouchDocId.page(page.id)))
+            notebook.copy(pageIds = listOf(page.id), openPageId = page.id, updatedAt = updatedAt, updatedBy = null)
         }
-        return page.id
     }
 
     suspend fun createEmpty(notebook: Notebook) {

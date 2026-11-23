@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.ethran.notable.data.db.AppDatabase
 import com.ethran.notable.data.db.Block
+import com.ethran.notable.data.db.BookRepository
+import com.ethran.notable.data.db.CouchOutboxRepository
 import com.ethran.notable.data.db.Folder
 import com.ethran.notable.data.db.Notebook
 import com.ethran.notable.data.db.Page
@@ -111,6 +113,19 @@ class ContentTaggerTest {
         db.notebookDao().update(book.copy(pageIds = listOf(page.id), parentFolderId = folder.id))
         tagger.apply(book.id, page.id, ContentTagSource.Text(listOf(block)))
         assertEquals(before, organization.all().single())
+    }
+
+    @Test fun newlyCreatedNotebookTitleMatchesTheSavedSnapshot() = runBlocking {
+        val books = BookRepository(db.notebookDao(), db.pageDao(), CouchOutboxRepository(db.couchOutboxDao()), db)
+        val saved = books.createWithFirstPage(Notebook(title = "#Launch Work"))
+        assertEquals(saved, books.getById(saved.id))
+        assertEquals(saved.pageIds.single(), saved.openPageId)
+
+        tagger.apply(saved.id, null, ContentTagSource.NotebookTitle(saved))
+
+        val entry = organization.all().single { it.notebookId == saved.id }
+        assertEquals(setOf("launch", "work"), entry.topics.keys)
+        assertTrue(entry.topics.values.all { it.present })
     }
 
     @Test fun titleClassificationUsesTheExactAuthoredSnapshot() = runBlocking {

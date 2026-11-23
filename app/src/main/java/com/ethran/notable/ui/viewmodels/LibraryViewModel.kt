@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.asFlow
 import androidx.lifecycle.viewModelScope
 import com.ethran.notable.data.AppRepository
+import com.ethran.notable.data.ContentTagSource
+import com.ethran.notable.data.ContentTagger
 import com.ethran.notable.data.PageDataManager
 import com.ethran.notable.Telemetry
 import com.ethran.notable.data.datastore.AppSettings
@@ -122,6 +124,7 @@ private data class LibraryDatabaseState(
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     val appRepository: AppRepository,
+    private val contentTagger: ContentTagger,
     private val noteTitles: com.ethran.notable.recognition.NoteTitles,
     private val appEventBus: AppEventBus,
     val importEngine: ImportEngine,
@@ -393,6 +396,7 @@ class LibraryViewModel @Inject constructor(
         // A printed template unless the dialog offered a document from the library and it was
         // taken; then this is what says whether that document is a PDF or a picture.
         templateType: String = BackgroundType.Native.key,
+        tagInitialTitle: Boolean = false,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val notebook = Notebook(
@@ -405,7 +409,11 @@ class LibraryViewModel @Inject constructor(
             )
             // `create` writes the notebook, its first page and both outbox entries in one
             // transaction, so the change is already durable and complete by the time this returns.
-            bookRepository.create(notebook)
+            val tagGeneration = contentTagger.currentGeneration()
+            val saved = bookRepository.createWithFirstPage(notebook)
+            if (tagInitialTitle) {
+                contentTagger.submit(saved.id, null, ContentTagSource.NotebookTitle(saved), tagGeneration)
+            }
             // Kept for promptness only: this starts the debounce and updates the badge, rather than
             // waiting for the next flush to notice the rows. Forgetting it would cost a delay, not
             // the notebook — which is the whole point of moving the queueing into the repository.

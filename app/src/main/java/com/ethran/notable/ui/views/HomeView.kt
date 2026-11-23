@@ -177,7 +177,8 @@ fun Library(
             initialTemplate = settings.defaultNativeTemplate,
             onConfirm = { name, pageSize, template, templateType ->
                 pendingNewNotebook = false
-                viewModel.onCreateNewNotebook(name, pageSize, template, templateType)
+                viewModel.onCreateNewNotebook(name, pageSize, template, templateType,
+                    tagInitialTitle = name != defaultNotebookName)
             },
             onDismiss = { pendingNewNotebook = false }
         )
